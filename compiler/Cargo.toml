@@ -1,0 +1,9 @@
+[package]
+name = "xenonc"
+version = "0.1.0"
+edition = "2024"
+description = "Xenon compiler (xenonc)"
+license = "MPL-2.0"
+publish = false
+
+[dependencies]
