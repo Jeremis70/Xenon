@@ -1,0 +1,54 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Watch Build",
+			"type": "shell",
+			"command": "cargo",
+			"args": [
+				"watch",
+				"-c",
+				"-w",
+				"compiler/src",
+				"-x",
+				"build"
+			],
+			"isBackground": true,
+			"problemMatcher": [],
+			"presentation": {
+				"reveal": "never",
+				"focus": false,
+				"panel": "dedicated",
+				"showReuseMessage": false,
+				"clear": false
+			}
+		},
+		{
+			"label": "Run xenonc",
+			"type": "shell",
+			"command": "cargo",
+			"args": [
+				"run",
+				"-p",
+				"xenonc"
+			],
+			"isBackground": false,
+			"group": "build"
+		},
+		{
+			"label": "Build xenonc",
+			"type": "shell",
+			"command": "cargo",
+			"args": [
+				"build",
+				"-p",
+				"xenonc"
+			],
+			"isBackground": false,
+			"problemMatcher": [
+				"$rustc"
+			],
+			"group": "build"
+		}
+	]
+}
