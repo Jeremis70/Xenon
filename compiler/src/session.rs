@@ -1,19 +1,29 @@
 use crate::config::{
     CheckConfig, CheckEmitKind, CodeModel, ColorChoice, CompileConfig, CompileEmitKind, CrateType,
-    DebugInfo, Edition, ErrorFormat, LtoMode, OptLevel, PrintKind, RelocationModel, StopAfter,
+    DebugInfo, Edition, ErrorFormat, LtoMode, OptLevel, RelocationModel, StopAfter,
 };
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub enum SessionCommand {
-    Compile,
-    Check,
+#[derive(Debug, Clone)]
+pub struct SourceFile {
+    pub path: PathBuf,
+    pub content: String,
+}
+
+fn load_source_files(paths: Vec<PathBuf>) -> Result<Vec<SourceFile>, String> {
+    paths
+        .into_iter()
+        .map(|path| {
+            let content = std::fs::read_to_string(&path)
+                .map_err(|e| format!("couldn't read {:?}: {}", path, e))?;
+            Ok(SourceFile { path, content })
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone)]
 pub struct Session {
-    pub command: SessionCommand,
-    pub source: Vec<PathBuf>,
+    pub source: Vec<SourceFile>,
     pub crate_name: Option<String>,
     pub crate_type: CrateType,
     pub edition: Edition,
@@ -24,7 +34,6 @@ pub struct Session {
     pub include_path: Vec<PathBuf>,
     pub search_path: Vec<String>,
     pub externs: Vec<String>,
-    pub print: Vec<PrintKind>,
     pub error_format: ErrorFormat,
     pub color: ColorChoice,
     pub warnings_as_errors: bool,
@@ -52,10 +61,9 @@ pub struct Session {
 }
 
 impl Session {
-    pub fn from_compile_config(config: CompileConfig) -> Self {
-        Self {
-            command: SessionCommand::Compile,
-            source: config.source,
+    pub fn from_compile_config(config: CompileConfig) -> Result<Self, String> {
+        Ok(Self {
+            source: load_source_files(config.source)?,
             crate_name: config.crate_name,
             crate_type: config.crate_type,
             edition: config.edition,
@@ -66,7 +74,6 @@ impl Session {
             include_path: config.include_path,
             search_path: config.search_path,
             externs: config.externs,
-            print: config.print,
             error_format: config.error_format,
             color: config.color,
             warnings_as_errors: config.warnings_as_errors,
@@ -91,13 +98,12 @@ impl Session {
             link_arg: config.link_arg,
             prefer_dynamic: config.prefer_dynamic,
             prefer_static: config.prefer_static,
-        }
+        })
     }
 
-    pub fn from_check_config(config: CheckConfig) -> Self {
-        Self {
-            command: SessionCommand::Check,
-            source: config.source,
+    pub fn from_check_config(config: CheckConfig) -> Result<Self, String> {
+        Ok(Self {
+            source: load_source_files(config.source)?,
             crate_name: config.crate_name,
             crate_type: config.crate_type,
             edition: config.edition,
@@ -108,7 +114,6 @@ impl Session {
             include_path: config.include_path,
             search_path: config.search_path,
             externs: config.externs,
-            print: config.print,
             error_format: config.error_format,
             color: config.color,
             warnings_as_errors: config.warnings_as_errors,
@@ -133,6 +138,6 @@ impl Session {
             link_arg: Vec::new(),
             prefer_dynamic: false,
             prefer_static: false,
-        }
+        })
     }
 }

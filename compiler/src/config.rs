@@ -54,16 +54,6 @@ pub enum CheckEmitKind {
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub enum PrintKind {
-    TargetList,
-    HostTarget,
-    Sysroot,
-    CodeModels,
-    RelocationModels,
-    CodegenOptions,
-}
-
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum CrateType {
     Bin,
     Lib,
@@ -134,7 +124,6 @@ pub struct CompileConfig {
     pub include_path: Vec<PathBuf>,
     pub search_path: Vec<String>,
     pub externs: Vec<String>,
-    pub print: Vec<PrintKind>,
     pub error_format: ErrorFormat,
     pub color: ColorChoice,
     pub warnings_as_errors: bool,
@@ -173,7 +162,6 @@ pub struct CheckConfig {
     pub include_path: Vec<PathBuf>,
     pub search_path: Vec<String>,
     pub externs: Vec<String>,
-    pub print: Vec<PrintKind>,
     pub error_format: ErrorFormat,
     pub color: ColorChoice,
     pub warnings_as_errors: bool,
@@ -262,19 +250,6 @@ impl From<cli::CheckEmitKind> for CheckEmitKind {
             cli::CheckEmitKind::Metadata => Self::Metadata,
             cli::CheckEmitKind::DepInfo => Self::DepInfo,
             cli::CheckEmitKind::Tokens => Self::Tokens,
-        }
-    }
-}
-
-impl From<cli::PrintKind> for PrintKind {
-    fn from(value: cli::PrintKind) -> Self {
-        match value {
-            cli::PrintKind::TargetList => Self::TargetList,
-            cli::PrintKind::HostTarget => Self::HostTarget,
-            cli::PrintKind::Sysroot => Self::Sysroot,
-            cli::PrintKind::CodeModels => Self::CodeModels,
-            cli::PrintKind::RelocationModels => Self::RelocationModels,
-            cli::PrintKind::CodegenOptions => Self::CodegenOptions,
         }
     }
 }
@@ -372,7 +347,6 @@ impl From<&cli::CompileArgs> for CompileConfig {
             include_path: args.session.include_path.clone(),
             search_path: args.session.search_path.clone(),
             externs: args.session.externs.clone(),
-            print: args.session.print.iter().copied().map(Into::into).collect(),
             error_format: args.diagnostics.error_format.into(),
             color: args.diagnostics.color.into(),
             warnings_as_errors: args.diagnostics.warnings_as_errors,
@@ -414,7 +388,6 @@ impl From<&cli::CheckArgs> for CheckConfig {
             include_path: args.session.include_path.clone(),
             search_path: args.session.search_path.clone(),
             externs: args.session.externs.clone(),
-            print: args.session.print.iter().copied().map(Into::into).collect(),
             error_format: args.diagnostics.error_format.into(),
             color: args.diagnostics.color.into(),
             warnings_as_errors: args.diagnostics.warnings_as_errors,

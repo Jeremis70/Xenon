@@ -1,8 +1,11 @@
-use crate::session::{Session, SessionCommand};
+use crate::lexer::lex;
+use crate::session::Session;
 
 pub fn compile(session: &Session) -> i32 {
     for source in &session.source {
-        println!("Compiling source file: {:?}", source);
+        println!("Compiling source file: {:?}", source.path);
+        let tokens = lex(&source.content);
+        println!("Tokens: {:?}", tokens);
     }
 
     println!("Stage: {:?}", session.stop_after);
@@ -17,6 +20,12 @@ pub fn compile(session: &Session) -> i32 {
     }
     if let Some(lto) = session.lto {
         println!("LTO: {:?}", lto);
+    }
+    if let Some(code_model) = session.code_model {
+        println!("Code model: {:?}", code_model);
+    }
+    if let Some(relocation_model) = session.relocation_model {
+        println!("Relocation model: {:?}", relocation_model);
     }
 
     print_common_session_data(session);
@@ -60,7 +69,9 @@ pub fn compile(session: &Session) -> i32 {
 
 pub fn check(session: &Session) -> i32 {
     for source in &session.source {
-        println!("Checking source file: {:?}", source);
+        println!("Compiling source file: {:?}", source.path);
+        let tokens = lex(&source.content);
+        println!("Tokens: {:?}", tokens);
     }
 
     println!("Stage: {:?}", session.stop_after);
@@ -103,10 +114,6 @@ fn print_common_session_data(session: &Session) {
     if !session.externs.is_empty() {
         println!("externs: {:?}", session.externs);
     }
-    if !session.print.is_empty() {
-        println!("print: {:?}", session.print);
-    }
-
     println!(
         "Diagnostics: format={:?}, color={:?}, warnings_as_errors={}, verbose={}, quiet={}",
         session.error_format,
@@ -118,17 +125,5 @@ fn print_common_session_data(session: &Session) {
 
     if !session.unstable.is_empty() {
         println!("Internal unstable flags (-Z): {:?}", session.unstable);
-    }
-
-    match session.command {
-        SessionCommand::Compile => {
-            if let Some(code_model) = session.code_model {
-                println!("Code model: {:?}", code_model);
-            }
-            if let Some(relocation_model) = session.relocation_model {
-                println!("Relocation model: {:?}", relocation_model);
-            }
-        }
-        SessionCommand::Check => {}
     }
 }
