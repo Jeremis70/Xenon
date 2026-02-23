@@ -8,3 +8,4 @@ publish = false
 
 [dependencies]
 clap = { version = "4.5.60", features = ["derive"] }
+logos = "0.16.1"
