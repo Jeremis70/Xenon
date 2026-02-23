@@ -1,6 +1,7 @@
 mod cli;
 mod config;
 mod driver;
+mod pipeline;
 mod session;
 use clap::Parser;
 
