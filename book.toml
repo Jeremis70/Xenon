@@ -1,0 +1,8 @@
+[book]
+title = "Xenon Documentation"
+authors = ["Jérémie Caron"]
+language = "en"
+src = "docs"
+
+[build]
+build-dir = "book"
