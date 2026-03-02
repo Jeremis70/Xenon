@@ -12,7 +12,7 @@ The language design/spec lives in [docs/xenon.md](docs/xenon.md).
 
 ## Status
 
-Pre-alpha. Right now `xenonc` is a stub (it just prints a message). Expect breaking changes.
+Alpha. Expect breaking changes.
 
 ## Repository layout
 
@@ -27,6 +27,8 @@ Prerequisite: a recent Rust toolchain (stable).
 	- `cargo build -p xenonc`
 - Run:
 	- `cargo run -p xenonc`
+- Compile a Xenon source file:
+	- `cargo run -- compile tests/main.xe --out-dir xenon-build/`
 
 ### Useful dev commands
 
