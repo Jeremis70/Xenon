@@ -1,3 +1,8 @@
 # Changelog
 
-No doc yet. TODO: record language and compiler changes by version, including breaking changes and migration notes.
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/),
+and this project adheres to [Semantic Versioning](https://semver.org/).
+
+## [Unreleased]
