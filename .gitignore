@@ -2,3 +2,4 @@
 /compiler/target/
 /book/
 **/*.rs.bk
+/xenon-build/

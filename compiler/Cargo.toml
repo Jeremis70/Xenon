@@ -8,5 +8,13 @@ publish = false
 
 [dependencies]
 clap = { version = "4.5.60", features = ["derive"] }
-inkwell = { version = "0.8.0", features = ["llvm21-1"] }
 logos = "0.16.1"
+
+[target.'cfg(windows)'.dependencies]
+inkwell = { version = "0.8.0", features = ["llvm21-1-force-dynamic"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+inkwell = { version = "0.8.0", features = ["llvm21-1"] }
+
+[target.'cfg(all(not(windows), not(target_os = "macos")))'.dependencies]
+inkwell = { version = "0.8.0", features = ["llvm21-1"] }
