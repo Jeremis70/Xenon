@@ -1,8 +1,9 @@
 use std::path::PathBuf;
 
-use crate::lexer::{Token, lex};
+use crate::lexer::lex;
 use crate::parser::Parser;
 use crate::session::Session;
+use crate::tokens::Token;
 
 use crate::codegen::{default_output_paths, emit_object_and_ir};
 use crate::link::link_executable;
