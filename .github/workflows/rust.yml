@@ -2,13 +2,15 @@ name: Rust CI
 
 on:
   push:
-    branches: [ "master" ]
+    branches: ["master"]
   pull_request:
-    branches: [ "master" ]
+    branches: ["master"]
 
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  RUSTFLAGS: -D warnings
+  CARGO_INCREMENTAL: 0
 
 permissions:
   contents: read
@@ -18,63 +20,77 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Dependency license policy enforcement
   licenses:
     name: License Check
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-    - name: Checkout
-      uses: actions/checkout@v6.0.2
+      - name: Checkout
+        uses: actions/checkout@v4
 
-    - name: Setup Rust
-      uses: actions-rust-lang/setup-rust-toolchain@v1
-      with:
-        toolchain: stable
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
 
-    - name: Install cargo-deny
-      run: cargo install cargo-deny --locked
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked
 
-    - name: Check licenses
-      run: cargo deny check licenses
+      - name: Check licenses
+        run: cargo deny check licenses
 
-  # Code formatting verification
   format:
     name: Format Check
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-    - name: Checkout
-      uses: actions/checkout@v6.0.2
+      - name: Checkout
+        uses: actions/checkout@v4
 
-    - name: Setup Rust
-      uses: actions-rust-lang/setup-rust-toolchain@v1
-      with:
-        toolchain: stable
-        components: rustfmt
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          components: rustfmt
 
-    - name: Check formatting
-      run: cargo fmt --all -- --check
+      - name: Check formatting
+        run: cargo fmt --all -- --check
 
-  # Linting with Clippy
   clippy:
     name: Clippy Lints
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-    - name: Checkout
-      uses: actions/checkout@v6.0.2
+      - name: Checkout
+        uses: actions/checkout@v4
 
-    - name: Setup Rust
-      uses: actions-rust-lang/setup-rust-toolchain@v1
-      with:
-        toolchain: stable
-        components: clippy
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          components: clippy
 
-    - name: Run Clippy
-      run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: Setup LLVM (Linux)
+        uses: KyleMayes/install-llvm-action@v2
+        with:
+          version: "21"
 
-  # Security audit
+      - name: Configure LLVM env (Linux)
+        shell: bash
+        run: |
+          echo "LLVM_SYS_211_PREFIX=${LLVM_PATH}" >> "$GITHUB_ENV"
+          echo "PATH=${LLVM_PATH}/bin:$PATH" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=${LLVM_PATH}/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+
+      - name: Verify llvm-config
+        shell: bash
+        run: |
+          which llvm-config
+          llvm-config --version
+
+      - name: Run Clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
   security:
     name: Security Audit
     runs-on: ubuntu-latest
@@ -83,22 +99,22 @@ jobs:
       contents: read
       checks: write
     steps:
-    - name: Checkout
-      uses: actions/checkout@v6.0.2
+      - name: Checkout
+        uses: actions/checkout@v4
 
-    - name: Setup Rust
-      uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
 
-    - name: Install cargo-audit
-      run: cargo install cargo-audit --locked
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
 
-    - name: Run security audit
-      run: cargo audit
+      - name: Run security audit
+        run: cargo audit
 
-
-  # Build and tests on multiple platforms
   test:
-    name: Test (${{ matrix.os }})
+    name: Test (${{ matrix.os }} / ${{ matrix.rust }})
     strategy:
       fail-fast: false
       matrix:
@@ -106,48 +122,157 @@ jobs:
         rust: [stable]
         include:
           - os: ubuntu-latest
-            rust: nightly
-          - os: ubuntu-latest
             rust: beta
-
+          - os: ubuntu-latest
+            rust: nightly
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
 
     steps:
-    - name: Checkout
-      uses: actions/checkout@v6.0.2
+      - name: Checkout
+        uses: actions/checkout@v4
 
-    - name: Setup Rust
-      uses: actions-rust-lang/setup-rust-toolchain@v1
-      with:
-        toolchain: ${{ matrix.rust }}
+      # -------------------------
+      # Rust toolchain
+      # -------------------------
 
-    - name: Build (Debug)
-      run: cargo build --verbose --workspace --all-features
+      - name: Setup Rust (non-Windows)
+        if: runner.os != 'Windows'
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: ${{ matrix.rust }}
 
-    - name: Run tests
-      run: cargo test --verbose --workspace --all-targets --all-features
+      # Windows: GNU toolchain to pair with MSYS2 LLVM cleanly
+      - name: Setup Rust (Windows GNU)
+        if: runner.os == 'Windows'
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable-x86_64-pc-windows-gnu
 
-    - name: Build (Release)
-      run: cargo build --release --verbose --workspace --all-features
+      # -------------------------
+      # LLVM install + env
+      # -------------------------
 
-    - name: Run tests (Release)
-      run: cargo test --release --verbose --workspace --all-targets --all-features
+      # Linux/macOS: install-llvm-action sets LLVM_PATH
+      - name: Setup LLVM (Linux/macOS)
+        if: runner.os != 'Windows'
+        uses: KyleMayes/install-llvm-action@v2
+        with:
+          version: "21"
 
-  # Documentation build
+      - name: Configure LLVM env (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          echo "LLVM_SYS_211_PREFIX=${LLVM_PATH}" >> "$GITHUB_ENV"
+          echo "PATH=${LLVM_PATH}/bin:$PATH" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=${LLVM_PATH}/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+
+      # macOS: DO NOT set DYLD_LIBRARY_PATH (breaks llvm-config + node).
+      # Also force linking with LLVM's clang to avoid Apple LLVM 17 LTO mismatch.
+      - name: Configure LLVM env (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          echo "LLVM_SYS_211_PREFIX=${LLVM_PATH}" >> "$GITHUB_ENV"
+          echo "PATH=${LLVM_PATH}/bin:$PATH" >> "$GITHUB_ENV"
+          echo "LIBCLANG_PATH=${LLVM_PATH}/lib" >> "$GITHUB_ENV"
+
+          echo "CC=${LLVM_PATH}/bin/clang" >> "$GITHUB_ENV"
+          echo "CXX=${LLVM_PATH}/bin/clang++" >> "$GITHUB_ENV"
+          echo "AR=${LLVM_PATH}/bin/llvm-ar" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER=${LLVM_PATH}/bin/clang" >> "$GITHUB_ENV"
+
+      - name: Verify llvm-config (Linux/macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          echo "DYLD_LIBRARY_PATH=${DYLD_LIBRARY_PATH:-<unset>}"
+          which llvm-config
+          llvm-config --version
+          clang --version || true
+          "${LLVM_PATH}/bin/clang" --version
+
+      # Windows: install LLVM via MSYS2 so llvm-config exists, but run cargo in Windows shell.
+      - name: Setup MSYS2 (Windows)
+        if: runner.os == 'Windows'
+        id: msys2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-llvm
+            mingw-w64-x86_64-clang
+            mingw-w64-x86_64-lld
+
+      - name: Configure LLVM env (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $msys2 = "${{ steps.msys2.outputs.msys2-location }}"
+          $llvm  = Join-Path $msys2 "mingw64"
+          "LLVM_SYS_211_PREFIX=$llvm" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "LIBCLANG_PATH=$llvm\bin"   | Out-File -FilePath $env:GITHUB_ENV -Append
+          "PATH=$llvm\bin;$env:PATH"  | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Verify llvm-config (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $msys2 = "${{ steps.msys2.outputs.msys2-location }}"
+          $llvm  = Join-Path $msys2 "mingw64"
+          Get-ChildItem "$llvm\bin\llvm-config.exe" -ErrorAction Stop | Out-Host
+          & "$llvm\bin\llvm-config.exe" --version
+
+      # -------------------------
+      # Build + test (no duplicates)
+      # -------------------------
+
+      - name: Build (Debug)
+        run: cargo build --verbose --workspace --all-features
+
+      - name: Run tests
+        run: cargo test --verbose --workspace --all-targets --all-features
+
+      - name: Build (Release)
+        run: cargo build --release --verbose --workspace --all-features
+
+      - name: Run tests (Release)
+        run: cargo test --release --verbose --workspace --all-targets --all-features
+
   docs:
     name: Documentation
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-    - name: Checkout
-      uses: actions/checkout@v6.0.2
+      - name: Checkout
+        uses: actions/checkout@v4
 
-    - name: Setup Rust
-      uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
 
-    - name: Build documentation
-      run: cargo doc --no-deps --workspace --all-features
-      env:
-        RUSTDOCFLAGS: -D warnings
-    
+      - name: Setup LLVM (Linux)
+        uses: KyleMayes/install-llvm-action@v2
+        with:
+          version: "21"
+
+      - name: Configure LLVM env (Linux)
+        shell: bash
+        run: |
+          echo "LLVM_SYS_211_PREFIX=${LLVM_PATH}" >> "$GITHUB_ENV"
+          echo "PATH=${LLVM_PATH}/bin:$PATH" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=${LLVM_PATH}/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+
+      - name: Verify llvm-config
+        shell: bash
+        run: |
+          which llvm-config
+          llvm-config --version
+
+      - name: Build documentation
+        run: cargo doc --no-deps --workspace --all-features
+        env:
+          RUSTDOCFLAGS: -D warnings
