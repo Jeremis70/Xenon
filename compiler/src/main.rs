@@ -1,7 +1,11 @@
+mod ast;
 mod cli;
+mod codegen;
 mod config;
 mod driver;
 mod lexer;
+mod link;
+mod parser;
 mod pipeline;
 mod session;
 use clap::Parser;

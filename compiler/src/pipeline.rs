@@ -1,11 +1,19 @@
-use crate::lexer::lex;
+use std::path::PathBuf;
+
+use crate::lexer::{Token, lex};
+use crate::parser::Parser;
 use crate::session::Session;
 
+use crate::codegen::{default_output_paths, emit_object_and_ir};
+use crate::link::link_executable;
+
 pub fn compile(session: &Session) -> i32 {
+    let mut tokens: Vec<Token> = Vec::new();
     for source in &session.source {
         println!("Compiling source file: {:?}", source.path);
-        let tokens = lex(&source.content);
-        println!("Tokens: {:?}", tokens);
+        let source_tokens = lex(&source.content);
+        println!("Tokens: {:?}", source_tokens);
+        tokens.extend(source_tokens);
     }
 
     println!("Stage: {:?}", session.stop_after);
@@ -64,6 +72,39 @@ pub fn compile(session: &Session) -> i32 {
     if session.prefer_static {
         println!("Link preference: static");
     }
+
+    let mut parser = Parser::new(&tokens);
+    let program = match parser.parse_program() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("Parse error: {e}");
+            return 1;
+        }
+    };
+
+    // Output dir choice
+    let out_dir: PathBuf = session
+        .out_dir
+        .clone()
+        .unwrap_or_else(|| PathBuf::from("."));
+
+    let (obj_path, ll_path) = default_output_paths(&out_dir);
+    let exe_path = out_dir.join("out");
+
+    if let Err(e) = emit_object_and_ir(&program, &obj_path, Some(&ll_path)) {
+        eprintln!("Codegen error: {e}");
+        return 1;
+    }
+
+    if let Err(e) = link_executable(&obj_path, &exe_path) {
+        eprintln!("Link error: {e}");
+        return 1;
+    }
+
+    println!("Wrote: {:?}", ll_path);
+    println!("Wrote: {:?}", obj_path);
+    println!("Wrote: {:?}", exe_path);
+
     0
 }
 
