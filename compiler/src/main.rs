@@ -1,17 +1,7 @@
-mod ast;
-mod cli;
-mod codegen;
-mod config;
-mod driver;
-mod lexer;
-mod link;
-mod parser;
-mod pipeline;
-mod session;
-mod tokens;
 use clap::Parser;
 
-use crate::cli::Cli;
+use xenonc::cli::Cli;
+use xenonc::driver;
 
 fn main() {
     let cli = Cli::parse();
