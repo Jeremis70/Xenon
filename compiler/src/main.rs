@@ -8,6 +8,7 @@ mod link;
 mod parser;
 mod pipeline;
 mod session;
+mod tokens;
 use clap::Parser;
 
 use crate::cli::Cli;

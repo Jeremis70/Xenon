@@ -1,5 +1,5 @@
 use crate::ast::*;
-use crate::lexer::Token;
+use crate::tokens::{Token, TokenKind};
 
 pub struct Parser<'a> {
     tokens: &'a [Token],
@@ -28,18 +28,21 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn expect(&mut self, expected: &Token) -> Result<(), String> {
+    fn expect(&mut self, expected: &TokenKind) -> Result<(), String> {
         match self.advance() {
-            Some(t) if t == expected => Ok(()),
-            Some(t) => Err(format!("Expected {:?}, found {:?}", expected, t)),
+            Some(t) if &t.kind == expected => Ok(()),
+            Some(t) => Err(format!("Expected {:?}, found {:?}", expected, t.kind)),
             None => Err(format!("Expected {:?}, found end of input", expected)),
         }
     }
 
     fn expect_ident_string(&mut self) -> Result<String, String> {
         match self.advance() {
-            Some(Token::Ident(s)) => Ok(s.clone()),
-            Some(t) => Err(format!("Expected Ident(_), found {:?}", t)),
+            Some(Token {
+                kind: TokenKind::Ident(s),
+                ..
+            }) => Ok(s.clone()),
+            Some(t) => Err(format!("Expected Ident(_), found {:?}", t.kind)),
             None => Err("Expected Ident(_), found end of input".into()),
         }
     }
@@ -53,18 +56,18 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_function(&mut self) -> Result<Function, String> {
-        self.expect(&Token::Fn)?;
+        self.expect(&TokenKind::Fn)?;
         let name = self.expect_ident_string()?;
 
-        self.expect(&Token::LParen)?;
-        self.expect(&Token::RParen)?;
+        self.expect(&TokenKind::LParen)?;
+        self.expect(&TokenKind::RParen)?;
 
-        self.expect(&Token::Arrow)?;
+        self.expect(&TokenKind::Arrow)?;
         let return_type = self.expect_ident_string()?; // "u32" for now
 
-        self.expect(&Token::LBrace)?;
+        self.expect(&TokenKind::LBrace)?;
         let body = self.parse_body_mvp()?;
-        self.expect(&Token::RBrace)?;
+        self.expect(&TokenKind::RBrace)?;
 
         Ok(Function {
             name,
@@ -76,16 +79,22 @@ impl<'a> Parser<'a> {
     fn parse_body_mvp(&mut self) -> Result<Vec<Expr>, String> {
         let mut body = Vec::new();
 
-        self.expect(&Token::Return)?;
+        self.expect(&TokenKind::Return)?;
 
         let expr = match self.advance() {
-            Some(Token::Int(v)) => Expr::Int(*v as i64),
-            Some(Token::Ident(s)) => Expr::Ident(s.clone()),
-            Some(t) => return Err(format!("Expected Int(_) or Ident(_), found {:?}", t)),
+            Some(Token {
+                kind: TokenKind::Int(v),
+                ..
+            }) => Expr::Int(*v as i64),
+            Some(Token {
+                kind: TokenKind::Ident(s),
+                ..
+            }) => Expr::Ident(s.clone()),
+            Some(t) => return Err(format!("Expected Int(_) or Ident(_), found {:?}", t.kind)),
             None => return Err("Expected expression, found end of input".into()),
         };
 
-        self.expect(&Token::Semicolon)?;
+        self.expect(&TokenKind::Semicolon)?;
         body.push(Expr::Return(Box::new(expr)));
 
         Ok(body)
