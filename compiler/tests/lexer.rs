@@ -4,7 +4,7 @@ use xenonc::tokens::{Span, TokenKind};
 #[test]
 fn lex_emits_kinds_and_spans_point_to_source() {
     let src = "fn x()->u32{return 42;}";
-    let tokens = lex(src);
+    let tokens = lex(src).expect("lexing should succeed");
 
     let kinds: Vec<&TokenKind> = tokens.iter().map(|t| &t.kind).collect();
 
@@ -35,7 +35,7 @@ fn lex_emits_kinds_and_spans_point_to_source() {
 #[test]
 fn lex_string_literal_strip_quotes_no_decode() {
     let src = "\"hi\\n\"";
-    let tokens = lex(src);
+    let tokens = lex(src).expect("lexing should succeed");
 
     assert_eq!(tokens.len(), 1);
     assert_eq!(
@@ -50,4 +50,11 @@ fn lex_string_literal_strip_quotes_no_decode() {
         TokenKind::Str(s) => assert_eq!(s, "hi\\n"),
         other => panic!("Expected Str, got {:?}", other),
     }
+}
+
+#[test]
+fn lex_invalid_input_returns_error() {
+    let err = lex("fn @").expect_err("lexing should fail on invalid token");
+
+    assert_eq!(err.span, Span { start: 3, end: 4 });
 }

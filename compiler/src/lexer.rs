@@ -1,7 +1,20 @@
-use crate::tokens::{Token, TokenKind};
+use crate::tokens::{Span, Token, TokenKind};
 use logos::Logos;
 
-pub fn lex(input: &str) -> Vec<Token> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LexError {
+    pub span: Span,
+}
+
+impl std::fmt::Display for LexError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Lexing error at span {:?}", self.span)
+    }
+}
+
+impl std::error::Error for LexError {}
+
+pub fn lex(input: &str) -> Result<Vec<Token>, LexError> {
     let mut tokens = Vec::new();
     let mut lexer = TokenKind::lexer(input);
 
@@ -14,10 +27,12 @@ pub fn lex(input: &str) -> Vec<Token> {
                 });
             }
             Err(_) => {
-                eprintln!("Lexing error at span {:?}", lexer.span());
+                return Err(LexError {
+                    span: lexer.span().into(),
+                });
             }
         }
     }
 
-    tokens
+    Ok(tokens)
 }

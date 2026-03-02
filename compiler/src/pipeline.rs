@@ -12,7 +12,13 @@ pub fn compile(session: &Session) -> i32 {
     let mut tokens: Vec<Token> = Vec::new();
     for source in &session.source {
         println!("Compiling source file: {:?}", source.path);
-        let source_tokens = lex(&source.content);
+        let source_tokens = match lex(&source.content) {
+            Ok(tokens) => tokens,
+            Err(err) => {
+                eprintln!("Lex error in {:?}: {err}", source.path);
+                return 1;
+            }
+        };
         println!("Tokens: {:?}", source_tokens);
         tokens.extend(source_tokens);
     }
@@ -112,7 +118,13 @@ pub fn compile(session: &Session) -> i32 {
 pub fn check(session: &Session) -> i32 {
     for source in &session.source {
         println!("Compiling source file: {:?}", source.path);
-        let tokens = lex(&source.content);
+        let tokens = match lex(&source.content) {
+            Ok(tokens) => tokens,
+            Err(err) => {
+                eprintln!("Lex error in {:?}: {err}", source.path);
+                return 1;
+            }
+        };
         println!("Tokens: {:?}", tokens);
     }
 
