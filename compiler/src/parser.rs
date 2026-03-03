@@ -28,6 +28,7 @@ impl std::fmt::Display for ParseError {
     }
 }
 
+impl std::error::Error for ParseError {}
 pub struct Parser<'a> {
     tokens: &'a [Token],
     position: usize,
