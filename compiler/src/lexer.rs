@@ -6,6 +6,8 @@ pub struct LexError {
     pub span: Span,
 }
 
+type LexResult<T> = Result<T, LexError>;
+
 impl std::fmt::Display for LexError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Lexing error at span {:?}", self.span)
@@ -14,7 +16,7 @@ impl std::fmt::Display for LexError {
 
 impl std::error::Error for LexError {}
 
-pub fn lex(input: &str) -> Result<Vec<Token>, LexError> {
+pub fn lex(input: &str) -> LexResult<Vec<Token>> {
     let mut tokens = Vec::new();
     let mut lexer = TokenKind::lexer(input);
 
