@@ -1,34 +1,7 @@
 use crate::ast::*;
+use crate::error::{ParseError, ParseResult};
 use crate::tokens::{Span, Token, TokenKind};
 
-#[derive(Debug)]
-pub struct ParseError {
-    pub message: String,
-    pub span: Span,
-}
-
-pub type ParseResult<T> = Result<T, ParseError>;
-
-impl ParseError {
-    pub fn new(message: impl Into<String>, span: Span) -> Self {
-        Self {
-            message: message.into(),
-            span,
-        }
-    }
-}
-
-impl std::fmt::Display for ParseError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{} (span {}..{})",
-            self.message, self.span.start, self.span.end
-        )
-    }
-}
-
-impl std::error::Error for ParseError {}
 pub struct Parser<'a> {
     tokens: &'a [Token],
     position: usize,
