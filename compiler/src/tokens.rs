@@ -1,6 +1,5 @@
+use crate::error::{ParseError, ParseResult};
 use logos::Logos;
-
-use crate::parser::{ParseError, ParseResult};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Span {
