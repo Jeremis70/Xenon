@@ -20,6 +20,24 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: Detect code changes
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            code:
+              - '**/*.rs'
+              - '**/Cargo.toml'
+              - '**/Cargo.lock'
+              - 'rust-toolchain.toml'
+              - '.github/workflows/rust.yml'
+
   licenses:
     name: License Check
     runs-on: ubuntu-latest
@@ -155,6 +173,8 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
+          shared-key: "${{ matrix.os }}-${{ matrix.rust }}"
+          save-if: ${{ github.ref == 'refs/heads/master' }}
 
       - name: Setup LLVM (Linux/macOS)
         if: runner.os != 'Windows'
@@ -226,6 +246,8 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
+          shared-key: "${{ matrix.os }}-${{ matrix.rust }}"
+          save-if: ${{ github.ref == 'refs/heads/master' }}
 
       - name: Configure LLVM env (Windows)
         if: runner.os == 'Windows'
@@ -257,14 +279,150 @@ jobs:
         shell: msys2 {0}
         run: cargo test --verbose --workspace --all-targets --all-features
 
+      - name: Run tests (Debug)
+        if: runner.os != 'Windows'
+        run: cargo test --verbose --workspace --all-targets --all-features
+
+  test-release:
+    name: Test Release (${{ matrix.os }} / ${{ matrix.rust }})
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        rust: [stable]
+        include:
+          - os: ubuntu-latest
+            rust: beta
+          - os: ubuntu-latest
+            rust: nightly
+
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v6
+
+      # -------------------------
+      # Linux/macOS: rustup toolchain
+      # -------------------------
+      - name: Setup Rust (Linux/macOS)
+        if: runner.os != 'Windows'
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: ${{ matrix.rust }}
+
+      - name: Cache Rust (Linux/macOS)
+        if: runner.os != 'Windows'
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+          shared-key: "${{ matrix.os }}-${{ matrix.rust }}"
+          save-if: ${{ github.ref == 'refs/heads/master' }}
+
+      - name: Setup LLVM (Linux/macOS)
+        if: runner.os != 'Windows'
+        uses: KyleMayes/install-llvm-action@v2
+        with:
+          version: "21"
+
+      - name: Configure LLVM env (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          echo "LLVM_SYS_211_PREFIX=${LLVM_PATH}" >> "$GITHUB_ENV"
+          echo "PATH=${LLVM_PATH}/bin:$PATH" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=${LLVM_PATH}/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+          echo "LIBCLANG_PATH=${LLVM_PATH}/lib" >> "$GITHUB_ENV"
+
+      - name: Configure LLVM env (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
+
+          echo "LLVM_SYS_211_PREFIX=${LLVM_PATH}" >> "$GITHUB_ENV"
+          echo "PATH=${LLVM_PATH}/bin:$PATH" >> "$GITHUB_ENV"
+          echo "LIBCLANG_PATH=${LLVM_PATH}/lib" >> "$GITHUB_ENV"
+
+          echo "CC=${LLVM_PATH}/bin/clang" >> "$GITHUB_ENV"
+          echo "CXX=${LLVM_PATH}/bin/clang++" >> "$GITHUB_ENV"
+          echo "AR=${LLVM_PATH}/bin/llvm-ar" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER=${LLVM_PATH}/bin/clang" >> "$GITHUB_ENV"
+          echo "RUSTFLAGS=-D warnings -C link-arg=-fuse-ld=lld -C link-arg=-lc++ -C link-arg=-lc++abi" >> "$GITHUB_ENV"
+
+          echo "SDKROOT=${SDKROOT}" >> "$GITHUB_ENV"
+          echo "CFLAGS=-isysroot ${SDKROOT}" >> "$GITHUB_ENV"
+          echo "CXXFLAGS=-isysroot ${SDKROOT}" >> "$GITHUB_ENV"
+          echo "MACOSX_DEPLOYMENT_TARGET=14.0" >> "$GITHUB_ENV"
+
+      - name: Verify llvm-config (Linux/macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          which llvm-config
+          llvm-config --version
+          "${LLVM_PATH}/bin/clang" --version
+
+      # -------------------------
+      # Windows: MSYS2 toolchain ONLY (no rustup)
+      # -------------------------
+      - name: Setup MSYS2 (Windows)
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          path-type: minimal
+          install: >-
+            mingw-w64-x86_64-toolchain
+            mingw-w64-x86_64-rust
+            mingw-w64-x86_64-llvm
+            mingw-w64-x86_64-clang
+            mingw-w64-x86_64-lld
+            mingw-w64-x86_64-libffi
+            mingw-w64-x86_64-zlib
+            mingw-w64-x86_64-zstd
+            mingw-w64-x86_64-libxml2
+
+      - name: Cache Rust (Windows/MSYS2)
+        if: runner.os == 'Windows'
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+          shared-key: "${{ matrix.os }}-${{ matrix.rust }}"
+          save-if: ${{ github.ref == 'refs/heads/master' }}
+
+      - name: Configure LLVM env (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          echo "LLVM_SYS_211_PREFIX=/mingw64" >> "$GITHUB_ENV"
+          echo "LIBCLANG_PATH=/mingw64/bin" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=/mingw64/lib/pkgconfig" >> "$GITHUB_ENV"
+
+      - name: Verify toolchain (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          which gcc
+          gcc --version
+          which rustc
+          rustc --version
+          which cargo
+          cargo --version
+          which llvm-config
+          llvm-config --version
+
+      # -------------------------
+      # Tests
+      # -------------------------
+
       - name: Run tests (Release) (Windows)
         if: runner.os == 'Windows'
         shell: msys2 {0}
         run: cargo test --release --verbose --workspace --all-targets --all-features
-
-      - name: Run tests (Debug)
-        if: runner.os != 'Windows'
-        run: cargo test --verbose --workspace --all-targets --all-features
 
       - name: Run tests (Release)
         if: runner.os != 'Windows'
