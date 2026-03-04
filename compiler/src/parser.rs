@@ -60,42 +60,34 @@ impl<'a> Parser<'a> {
         ParseError::new(message, span)
     }
 
-    fn peek(&self) -> Option<&Token> {
+    fn peek(&self) -> Option<&'a Token> {
         self.tokens.get(self.position)
     }
 
-    fn advance(&mut self) -> Option<&Token> {
+    fn advance(&mut self) -> Option<&'a Token> {
         if self.position < self.tokens.len() {
             let idx = self.position;
             self.position += 1;
-            self.tokens.get(idx)
+            Some(&self.tokens[idx])
         } else {
             None
         }
     }
 
-    fn expect(&mut self, expected: TokenKind) -> ParseResult<()> {
+    fn expect(&mut self, kinds: impl AsRef<[TokenKind]>) -> ParseResult<&'a Token> {
+        let kinds = kinds.as_ref();
+        let description = if kinds.len() == 1 {
+            format!("{:?}", kinds[0])
+        } else {
+            format!("one of {:?}", kinds)
+        };
         match self.advance() {
-            Some(t) if t.kind == expected => Ok(()),
+            Some(t) if kinds.contains(&t.kind) => Ok(t),
             Some(t) => Err(ParseError::new(
-                format!("Expected {:?}, found {:?}", expected, t.kind),
+                format!("Expected {}, found {:?}", description, t.kind),
                 t.span,
             )),
-            None => Err(self.error(format!("Expected {:?}, found end of input", expected))),
-        }
-    }
-
-    fn expect_ident_string(&mut self) -> ParseResult<String> {
-        match self.advance() {
-            Some(Token {
-                kind: TokenKind::Ident(s),
-                ..
-            }) => Ok(s.clone()),
-            Some(t) => Err(ParseError::new(
-                format!("Expected identifier, found {:?}", t.kind),
-                t.span,
-            )),
-            None => Err(self.error("Expected identifier, found end of input")),
+            None => Err(self.error(format!("Expected {}, found end of input", description))),
         }
     }
 
@@ -109,13 +101,21 @@ impl<'a> Parser<'a> {
 
     fn parse_function(&mut self) -> ParseResult<Function> {
         self.expect(TokenKind::Fn)?;
-        let name = self.expect_ident_string()?;
+        let name = self
+            .expect(TokenKind::Ident)?
+            .value()
+            .as_ident()
+            .to_string();
 
         self.expect(TokenKind::LParen)?;
         self.expect(TokenKind::RParen)?;
 
         self.expect(TokenKind::Arrow)?;
-        let return_type = self.expect_ident_string()?;
+        let return_type = self
+            .expect(TokenKind::Ident)?
+            .value()
+            .as_ident()
+            .to_string();
 
         self.expect(TokenKind::LBrace)?;
         let body = self.parse_body_mvp()?;
@@ -129,31 +129,17 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_body_mvp(&mut self) -> ParseResult<Vec<Expr>> {
-        let mut body = Vec::new();
-
         self.expect(TokenKind::Return)?;
 
-        let expr = match self.advance() {
-            Some(Token {
-                kind: TokenKind::Int(v),
-                ..
-            }) => Expr::Int(*v as i64),
-            Some(Token {
-                kind: TokenKind::Ident(s),
-                ..
-            }) => Expr::Ident(s.clone()),
-            Some(t) => {
-                return Err(ParseError::new(
-                    format!("Expected integer or identifier, found {:?}", t.kind),
-                    t.span,
-                ));
-            }
-            None => return Err(self.error("Expected expression, found end of input")),
+        let token = self.expect([TokenKind::Int, TokenKind::Ident])?;
+        let expr = match token.kind {
+            TokenKind::Int => Expr::Int(token.value().as_int() as i64),
+            TokenKind::Ident => Expr::Ident(token.value().as_ident().to_string()),
+            _ => unreachable!(),
         };
 
         self.expect(TokenKind::Semicolon)?;
-        body.push(Expr::Return(Box::new(expr)));
 
-        Ok(body)
+        Ok(vec![Expr::Return(Box::new(expr))])
     }
 }
