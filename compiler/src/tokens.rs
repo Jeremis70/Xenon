@@ -1,5 +1,7 @@
 use logos::Logos;
 
+use crate::parser::{ParseError, ParseResult};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Span {
     pub start: usize,
@@ -67,31 +69,8 @@ impl AsRef<[TokenKind]> for TokenKind {
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenValue {
     Ident(String),
-    Int(u64),
+    Int(i64),
     Str(String),
-}
-
-impl TokenValue {
-    pub fn as_ident(&self) -> &str {
-        match self {
-            Self::Ident(s) => s,
-            _ => panic!("expected Ident value"),
-        }
-    }
-
-    pub fn as_int(&self) -> u64 {
-        match self {
-            Self::Int(v) => *v,
-            _ => panic!("expected Int value"),
-        }
-    }
-
-    pub fn as_str(&self) -> &str {
-        match self {
-            Self::Str(s) => s,
-            _ => panic!("expected Str value"),
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -102,8 +81,25 @@ pub struct Token {
 }
 
 impl Token {
-    pub fn value(&self) -> &TokenValue {
-        self.value.as_ref().expect("token carries no value")
+    pub fn ident_value(&self) -> ParseResult<&str> {
+        match &self.value {
+            Some(TokenValue::Ident(s)) => Ok(s.as_str()),
+            _ => Err(ParseError::new("expected identifier value", self.span)),
+        }
+    }
+
+    pub fn int_value(&self) -> ParseResult<i64> {
+        match &self.value {
+            Some(TokenValue::Int(v)) => Ok(*v),
+            _ => Err(ParseError::new("expected integer value", self.span)),
+        }
+    }
+
+    pub fn str_value(&self) -> ParseResult<&str> {
+        match &self.value {
+            Some(TokenValue::Str(s)) => Ok(s.as_str()),
+            _ => Err(ParseError::new("expected string value", self.span)),
+        }
     }
 }
 
@@ -187,8 +183,8 @@ enum RawKind {
 
     // ---------- Literals ----------
     // Integer (decimal only for MVP)
-    #[regex(r"[0-9]+", |lex| lex.slice().parse::<u64>().ok())]
-    Int(u64),
+    #[regex(r"[0-9]+", |lex| lex.slice().parse::<i64>().ok())]
+    Int(i64),
 
     // String literal with basic escapes allowed (we keep the raw content for MVP).
     // If you want decoded escapes, do it in the callback.

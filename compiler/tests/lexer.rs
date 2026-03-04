@@ -25,9 +25,9 @@ fn lex_emits_kinds_and_spans_point_to_source() {
         ]
     );
 
-    assert_eq!(tokens[1].value().as_ident(), "x");
-    assert_eq!(tokens[5].value().as_ident(), "u32");
-    assert_eq!(tokens[8].value().as_int(), 42);
+    assert_eq!(tokens[1].ident_value().unwrap(), "x");
+    assert_eq!(tokens[5].ident_value().unwrap(), "u32");
+    assert_eq!(tokens[8].int_value().unwrap(), 42);
 
     // Verify that the spans point to the correct substrings in the source
     assert_eq!(&src[tokens[0].span.start..tokens[0].span.end], "fn");
@@ -51,7 +51,7 @@ fn lex_string_literal_strip_quotes_no_decode() {
     );
 
     assert_eq!(tokens[0].kind, TokenKind::Str);
-    assert_eq!(tokens[0].value().as_str(), "hi\\n");
+    assert_eq!(tokens[0].str_value().unwrap(), "hi\\n");
 }
 
 #[test]

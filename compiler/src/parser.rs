@@ -10,7 +10,7 @@ pub struct ParseError {
 pub type ParseResult<T> = Result<T, ParseError>;
 
 impl ParseError {
-    fn new(message: impl Into<String>, span: Span) -> Self {
+    pub fn new(message: impl Into<String>, span: Span) -> Self {
         Self {
             message: message.into(),
             span,
@@ -81,8 +81,11 @@ impl<'a> Parser<'a> {
         } else {
             format!("one of {:?}", kinds)
         };
-        match self.advance() {
-            Some(t) if kinds.contains(&t.kind) => Ok(t),
+        match self.peek() {
+            Some(t) if kinds.contains(&t.kind) => {
+                self.advance();
+                Ok(t)
+            }
             Some(t) => Err(ParseError::new(
                 format!("Expected {}, found {:?}", description, t.kind),
                 t.span,
@@ -101,21 +104,13 @@ impl<'a> Parser<'a> {
 
     fn parse_function(&mut self) -> ParseResult<Function> {
         self.expect(TokenKind::Fn)?;
-        let name = self
-            .expect(TokenKind::Ident)?
-            .value()
-            .as_ident()
-            .to_string();
+        let name = self.expect(TokenKind::Ident)?.ident_value()?.to_string();
 
         self.expect(TokenKind::LParen)?;
         self.expect(TokenKind::RParen)?;
 
         self.expect(TokenKind::Arrow)?;
-        let return_type = self
-            .expect(TokenKind::Ident)?
-            .value()
-            .as_ident()
-            .to_string();
+        let return_type = self.expect(TokenKind::Ident)?.ident_value()?.to_string();
 
         self.expect(TokenKind::LBrace)?;
         let body = self.parse_body_mvp()?;
@@ -133,8 +128,8 @@ impl<'a> Parser<'a> {
 
         let token = self.expect([TokenKind::Int, TokenKind::Ident])?;
         let expr = match token.kind {
-            TokenKind::Int => Expr::Int(token.value().as_int() as i64),
-            TokenKind::Ident => Expr::Ident(token.value().as_ident().to_string()),
+            TokenKind::Int => Expr::Int(token.int_value()?),
+            TokenKind::Ident => Expr::Ident(token.ident_value()?.to_string()),
             _ => unreachable!(),
         };
 
