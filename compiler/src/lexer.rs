@@ -1,5 +1,4 @@
-use crate::tokens::{Span, Token, TokenKind};
-use logos::Logos;
+use crate::tokens::{Span, Token, tokenize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LexError {
@@ -17,24 +16,5 @@ impl std::fmt::Display for LexError {
 impl std::error::Error for LexError {}
 
 pub fn lex(input: &str) -> LexResult<Vec<Token>> {
-    let mut tokens = Vec::new();
-    let mut lexer = TokenKind::lexer(input);
-
-    while let Some(kind_res) = lexer.next() {
-        match kind_res {
-            Ok(kind) => {
-                tokens.push(Token {
-                    kind,
-                    span: lexer.span().into(),
-                });
-            }
-            Err(_) => {
-                return Err(LexError {
-                    span: lexer.span().into(),
-                });
-            }
-        }
-    }
-
-    Ok(tokens)
+    tokenize(input).map_err(|span| LexError { span })
 }
