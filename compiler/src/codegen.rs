@@ -73,6 +73,8 @@ impl<'ctx> CodeGen<'ctx> {
             Expr::Int(v) => Ok(i32t.const_int(*v as u64, true)),
             Expr::Ident(name) => Err(format!("MVP: unknown identifier '{name}' (no vars yet)")),
             Expr::Return(_) => Err("MVP: nested return not allowed".into()),
+            Expr::BinOp { .. } => Err("MVP: binary expressions not supported yet".into()),
+            Expr::UnaryOp { .. } => Err("MVP: unary expressions not supported yet".into()),
         }
     }
 }
