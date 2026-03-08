@@ -96,16 +96,19 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_body_mvp(&mut self) -> ParseResult<Vec<Expr>> {
-        self.expect(TokenKind::Return)?;
-
+    fn parse_expression(&mut self) -> ParseResult<Expr> {
         let token = self.expect([TokenKind::Int, TokenKind::Ident])?;
         let expr = match token.kind {
             TokenKind::Int => Expr::Int(token.int_value()?),
             TokenKind::Ident => Expr::Ident(token.ident_value()?.to_string()),
             _ => unreachable!(),
         };
+        Ok(expr)
+    }
 
+    fn parse_body_mvp(&mut self) -> ParseResult<Vec<Expr>> {
+        self.expect(TokenKind::Return)?;
+        let expr = self.parse_expression()?;
         self.expect(TokenKind::Semicolon)?;
 
         Ok(vec![Expr::Return(Box::new(expr))])
