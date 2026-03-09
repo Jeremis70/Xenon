@@ -97,18 +97,63 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_expression(&mut self) -> ParseResult<Expr> {
-        let token = self.expect([TokenKind::Int, TokenKind::Ident])?;
-        let expr = match token.kind {
-            TokenKind::Int => Expr::Int(token.int_value()?),
-            TokenKind::Ident => Expr::Ident(token.ident_value()?.to_string()),
-            _ => unreachable!(),
-        };
-        Ok(expr)
+        self.parse_expression_with_precedence(0)
+    }
+
+    fn parse_expression_with_precedence(&mut self, min_precedence: u8) -> ParseResult<Expr> {
+        let mut left = self.parse_primary()?;
+
+        while let Some(op_token) = self.peek() {
+            let Some(op) = BinOp::from_token(&op_token.kind) else {
+                break;
+            };
+
+            let (left_precedence, right_precedence) = op.precedence();
+            if left_precedence < min_precedence {
+                break;
+            }
+
+            self.advance();
+            let right = self.parse_expression_with_precedence(right_precedence)?;
+
+            left = Expr::BinOp {
+                lhs: Box::new(left),
+                op,
+                rhs: Box::new(right),
+            };
+        }
+
+        Ok(left)
+    }
+
+    fn parse_primary(&mut self) -> ParseResult<Expr> {
+        let token = self.expect([
+            TokenKind::Int,
+            TokenKind::Ident,
+            TokenKind::Minus,
+            TokenKind::Bang,
+            TokenKind::LParen,
+        ])?;
+        match token.kind {
+            TokenKind::Minus | TokenKind::Bang => Ok(Expr::UnaryOp {
+                op: UnaryOp::from_token(&token.kind).unwrap(),
+                operand: Box::new(self.parse_primary()?),
+            }),
+            TokenKind::Int => Ok(Expr::Int(token.int_value().unwrap())),
+            TokenKind::Ident => Ok(Expr::Ident(token.ident_value().unwrap().to_string())),
+            TokenKind::LParen => {
+                let expr = self.parse_expression()?;
+                self.expect(TokenKind::RParen)?;
+                Ok(expr)
+            }
+            _ => Err(self.error(format!("Unexpected token: {:?}", token.kind))),
+        }
     }
 
     fn parse_body_mvp(&mut self) -> ParseResult<Vec<Expr>> {
         self.expect(TokenKind::Return)?;
         let expr = self.parse_expression()?;
+        println!("Parsed return expression: {expr:?}");
         self.expect(TokenKind::Semicolon)?;
 
         Ok(vec![Expr::Return(Box::new(expr))])
