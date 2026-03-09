@@ -1,5 +1,5 @@
 // Testing MVP for xenon programming language
 fn main()->u32
 {
-    return 1;
+    return -3 - 2 + (3*4) + 18;
 }
