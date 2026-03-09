@@ -9,7 +9,9 @@ use inkwell::targets::{
 };
 use inkwell::values::FunctionValue;
 
-use crate::ast::{Expr, Function, Program};
+use inkwell::IntPredicate;
+
+use crate::ast::{BinOp, Expr, Function, Program, UnaryOp};
 
 pub struct CodeGen<'ctx> {
     context: &'ctx Context,
@@ -73,8 +75,124 @@ impl<'ctx> CodeGen<'ctx> {
             Expr::Int(v) => Ok(i32t.const_int(*v as u64, true)),
             Expr::Ident(name) => Err(format!("MVP: unknown identifier '{name}' (no vars yet)")),
             Expr::Return(_) => Err("MVP: nested return not allowed".into()),
-            Expr::BinOp { .. } => Err("MVP: binary expressions not supported yet".into()),
-            Expr::UnaryOp { .. } => Err("MVP: unary expressions not supported yet".into()),
+            Expr::BinOp { lhs, op, rhs } => {
+                let lhs_val = self.codegen_expr(lhs)?;
+                let rhs_val = self.codegen_expr(rhs)?;
+                self.codegen_binop(op, lhs_val, rhs_val)
+            }
+            Expr::UnaryOp { op, operand } => {
+                let val = self.codegen_expr(operand)?;
+                self.codegen_unaryop(op, val)
+            }
+        }
+    }
+
+    fn codegen_binop(
+        &self,
+        op: &BinOp,
+        lhs: inkwell::values::IntValue<'ctx>,
+        rhs: inkwell::values::IntValue<'ctx>,
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        let i32t = self.context.i32_type();
+
+        // Helper to zero-extend an i1 comparison result to i32.
+        let cmp_to_i32 = |cmp: inkwell::values::IntValue<'ctx>, name: &str| {
+            self.builder
+                .build_int_z_extend(cmp, i32t, name)
+                .map_err(|e| format!("build_int_z_extend({name}) failed: {e:?}"))
+        };
+
+        match op {
+            BinOp::Add => self
+                .builder
+                .build_int_add(lhs, rhs, "add")
+                .map_err(|e| format!("build_int_add failed: {e:?}")),
+            BinOp::Sub => self
+                .builder
+                .build_int_sub(lhs, rhs, "sub")
+                .map_err(|e| format!("build_int_sub failed: {e:?}")),
+            BinOp::Mul => self
+                .builder
+                .build_int_mul(lhs, rhs, "mul")
+                .map_err(|e| format!("build_int_mul failed: {e:?}")),
+            BinOp::Div => self
+                .builder
+                .build_int_signed_div(lhs, rhs, "div")
+                .map_err(|e| format!("build_int_signed_div failed: {e:?}")),
+            BinOp::Mod => self
+                .builder
+                .build_int_signed_rem(lhs, rhs, "mod")
+                .map_err(|e| format!("build_int_signed_rem failed: {e:?}")),
+            BinOp::Eq => {
+                let cmp = self
+                    .builder
+                    .build_int_compare(IntPredicate::EQ, lhs, rhs, "eq")
+                    .map_err(|e| format!("build_int_compare(EQ) failed: {e:?}"))?;
+                cmp_to_i32(cmp, "eq_ext")
+            }
+            BinOp::NotEq => {
+                let cmp = self
+                    .builder
+                    .build_int_compare(IntPredicate::NE, lhs, rhs, "ne")
+                    .map_err(|e| format!("build_int_compare(NE) failed: {e:?}"))?;
+                cmp_to_i32(cmp, "ne_ext")
+            }
+            BinOp::Lt => {
+                let cmp = self
+                    .builder
+                    .build_int_compare(IntPredicate::SLT, lhs, rhs, "lt")
+                    .map_err(|e| format!("build_int_compare(SLT) failed: {e:?}"))?;
+                cmp_to_i32(cmp, "lt_ext")
+            }
+            BinOp::Gt => {
+                let cmp = self
+                    .builder
+                    .build_int_compare(IntPredicate::SGT, lhs, rhs, "gt")
+                    .map_err(|e| format!("build_int_compare(SGT) failed: {e:?}"))?;
+                cmp_to_i32(cmp, "gt_ext")
+            }
+            BinOp::LtEq => {
+                let cmp = self
+                    .builder
+                    .build_int_compare(IntPredicate::SLE, lhs, rhs, "le")
+                    .map_err(|e| format!("build_int_compare(SLE) failed: {e:?}"))?;
+                cmp_to_i32(cmp, "le_ext")
+            }
+            BinOp::GtEq => {
+                let cmp = self
+                    .builder
+                    .build_int_compare(IntPredicate::SGE, lhs, rhs, "ge")
+                    .map_err(|e| format!("build_int_compare(SGE) failed: {e:?}"))?;
+                cmp_to_i32(cmp, "ge_ext")
+            }
+            // Bitwise AND/OR — for boolean-like integers (i32)
+            BinOp::And => self
+                .builder
+                .build_and(lhs, rhs, "and")
+                .map_err(|e| format!("build_and failed: {e:?}")),
+            BinOp::Or => self
+                .builder
+                .build_or(lhs, rhs, "or")
+                .map_err(|e| format!("build_or failed: {e:?}")),
+        }
+    }
+
+    fn codegen_unaryop(
+        &self,
+        op: &UnaryOp,
+        val: inkwell::values::IntValue<'ctx>,
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        match op {
+            // Two's-complement negation: 0 - val
+            UnaryOp::Neg => self
+                .builder
+                .build_int_neg(val, "neg")
+                .map_err(|e| format!("build_int_neg failed: {e:?}")),
+            // Bitwise complement: ~val (use for boolean NOT on i32)
+            UnaryOp::Not => self
+                .builder
+                .build_not(val, "not")
+                .map_err(|e| format!("build_not failed: {e:?}")),
         }
     }
 }
