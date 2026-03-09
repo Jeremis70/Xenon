@@ -37,6 +37,19 @@ pub enum TokenKind {
     Colon,
     Period,
     // Multi-char operators
+    PlusEq,
+    MinusEq,
+    StarEq,
+    SlashEq,
+    AndEq,
+    OrEq,
+    XorEq,
+    LShiftEq,
+    RShiftEq,
+    PowEq,
+    PlusPlus,
+    MinusMinus,
+
     Arrow,
     EqEq,
     NotEq,
@@ -44,6 +57,10 @@ pub enum TokenKind {
     GtEq,
     AndAnd,
     OrOr,
+    XorXor,
+    LShift,
+    RShift,
+    Pow,
     // Single-char operators
     Eq,
     Lt,
@@ -53,6 +70,10 @@ pub enum TokenKind {
     Star,
     Slash,
     Bang,
+    And,
+    Or,
+    Xor,
+    Percent,
     // Value-bearing
     Ident,
     Int,
@@ -143,6 +164,31 @@ enum RawKind {
     Period,
 
     // ---------- Multi-char operators (put before single-char) ----------
+    #[token("<<=")]
+    LShiftEq,
+    #[token(">>=")]
+    RShiftEq,
+    #[token("**=")]
+    PowEq,
+    #[token("++")]
+    PlusPlus,
+    #[token("--")]
+    MinusMinus,
+    #[token("+=")]
+    PlusEq,
+    #[token("-=")]
+    MinusEq,
+    #[token("*=")]
+    StarEq,
+    #[token("/=")]
+    SlashEq,
+    #[token("&=")]
+    AndEq,
+    #[token("|=")]
+    OrEq,
+    #[token("^=")]
+    XorEq,
+
     #[token("->")]
     Arrow,
 
@@ -159,7 +205,14 @@ enum RawKind {
     AndAnd,
     #[token("||")]
     OrOr,
-
+    #[token("^^")]
+    XorXor,
+    #[token("<<")]
+    LShift,
+    #[token(">>")]
+    RShift,
+    #[token("**")]
+    Pow,
     // ---------- Single-char operators ----------
     #[token("=")]
     Eq,
@@ -176,9 +229,16 @@ enum RawKind {
     Star,
     #[token("/")]
     Slash,
-
+    #[token("%")]
+    Percent,
     #[token("!")]
     Bang,
+    #[token("&")]
+    And,
+    #[token("|")]
+    Or,
+    #[token("^")]
+    Xor,
 
     // ---------- Literals ----------
     // Integer (decimal only for MVP)
@@ -231,6 +291,18 @@ fn into_token_parts(raw: RawKind) -> (TokenKind, Option<TokenValue>) {
         RawKind::Semicolon => (TokenKind::Semicolon, None),
         RawKind::Colon => (TokenKind::Colon, None),
         RawKind::Period => (TokenKind::Period, None),
+        RawKind::PlusEq => (TokenKind::PlusEq, None),
+        RawKind::MinusEq => (TokenKind::MinusEq, None),
+        RawKind::StarEq => (TokenKind::StarEq, None),
+        RawKind::SlashEq => (TokenKind::SlashEq, None),
+        RawKind::AndEq => (TokenKind::AndEq, None),
+        RawKind::OrEq => (TokenKind::OrEq, None),
+        RawKind::XorEq => (TokenKind::XorEq, None),
+        RawKind::LShiftEq => (TokenKind::LShiftEq, None),
+        RawKind::RShiftEq => (TokenKind::RShiftEq, None),
+        RawKind::PowEq => (TokenKind::PowEq, None),
+        RawKind::PlusPlus => (TokenKind::PlusPlus, None),
+        RawKind::MinusMinus => (TokenKind::MinusMinus, None),
         RawKind::Arrow => (TokenKind::Arrow, None),
         RawKind::EqEq => (TokenKind::EqEq, None),
         RawKind::NotEq => (TokenKind::NotEq, None),
@@ -238,6 +310,10 @@ fn into_token_parts(raw: RawKind) -> (TokenKind, Option<TokenValue>) {
         RawKind::GtEq => (TokenKind::GtEq, None),
         RawKind::AndAnd => (TokenKind::AndAnd, None),
         RawKind::OrOr => (TokenKind::OrOr, None),
+        RawKind::XorXor => (TokenKind::XorXor, None),
+        RawKind::LShift => (TokenKind::LShift, None),
+        RawKind::RShift => (TokenKind::RShift, None),
+        RawKind::Pow => (TokenKind::Pow, None),
         RawKind::Eq => (TokenKind::Eq, None),
         RawKind::Lt => (TokenKind::Lt, None),
         RawKind::Gt => (TokenKind::Gt, None),
@@ -246,6 +322,10 @@ fn into_token_parts(raw: RawKind) -> (TokenKind, Option<TokenValue>) {
         RawKind::Star => (TokenKind::Star, None),
         RawKind::Slash => (TokenKind::Slash, None),
         RawKind::Bang => (TokenKind::Bang, None),
+        RawKind::And => (TokenKind::And, None),
+        RawKind::Or => (TokenKind::Or, None),
+        RawKind::Xor => (TokenKind::Xor, None),
+        RawKind::Percent => (TokenKind::Percent, None),
         RawKind::Ident(s) => (TokenKind::Ident, Some(TokenValue::Ident(s))),
         RawKind::Int(v) => (TokenKind::Int, Some(TokenValue::Int(v))),
         RawKind::Str(s) => (TokenKind::Str, Some(TokenValue::Str(s))),
