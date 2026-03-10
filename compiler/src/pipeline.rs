@@ -8,6 +8,8 @@ use crate::tokens::Token;
 use crate::codegen::{default_output_paths, emit_object_and_ir};
 use crate::link::link_executable;
 
+use crate::constant_fold::fold_constants;
+
 pub fn compile(session: &Session) -> i32 {
     let mut tokens: Vec<Token> = Vec::new();
     for source in &session.source {
@@ -88,6 +90,8 @@ pub fn compile(session: &Session) -> i32 {
             return 1;
         }
     };
+
+    let program = fold_constants(program);
 
     // Output dir choice
     let out_dir: PathBuf = session
