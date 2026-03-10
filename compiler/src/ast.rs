@@ -74,7 +74,8 @@ impl BinOp {
         }
     }
 
-    // (left_bp, right_bp) — right > left means left-associative
+    // right_precedence > left_precedence = left-associative
+    // left_precedence > right_precedence = right-associative
     pub fn precedence(&self) -> (u8, u8) {
         match self {
             BinOp::LogicalOr => (1, 2),
