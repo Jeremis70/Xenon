@@ -1,6 +1,12 @@
 use crate::tokens::TokenKind;
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum Stmt {
+    Return(Box<Expr>),
+    Expr(Box<Expr>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     // Literals
     Int(i64),
@@ -18,9 +24,6 @@ pub enum Expr {
         op: UnaryOp,
         operand: Box<Expr>,
     },
-
-    // Statement-level wrapper
-    Return(Box<Expr>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -122,7 +125,7 @@ impl UnaryOp {
 pub struct Function {
     pub name: String,
     pub return_type: String,
-    pub body: Vec<Expr>,
+    pub body: Vec<Stmt>,
 }
 
 #[derive(Debug)]

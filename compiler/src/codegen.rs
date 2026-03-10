@@ -11,7 +11,7 @@ use inkwell::values::FunctionValue;
 
 use inkwell::IntPredicate;
 
-use crate::ast::{BinOp, Expr, Function, Program, UnaryOp};
+use crate::ast::{BinOp, Expr, Function, Program, Stmt, UnaryOp};
 
 pub struct CodeGen<'ctx> {
     context: &'ctx Context,
@@ -53,9 +53,9 @@ impl<'ctx> CodeGen<'ctx> {
         self.builder.position_at_end(entry);
 
         // MVP body: must contain exactly one return
-        for expr in &f.body {
-            match expr {
-                Expr::Return(inner) => {
+        for stmt in &f.body {
+            match stmt {
+                Stmt::Return(inner) => {
                     let value = self.codegen_expr(inner)?;
                     self.builder
                         .build_return(Some(&value))
@@ -74,7 +74,6 @@ impl<'ctx> CodeGen<'ctx> {
         match e {
             Expr::Int(v) => Ok(i32t.const_int(*v as u64, true)),
             Expr::Ident(name) => Err(format!("MVP: unknown identifier '{name}' (no vars yet)")),
-            Expr::Return(_) => Err("MVP: nested return not allowed".into()),
             Expr::BinOp { lhs, op, rhs } => {
                 let lhs_val = self.codegen_expr(lhs)?;
                 let rhs_val = self.codegen_expr(rhs)?;

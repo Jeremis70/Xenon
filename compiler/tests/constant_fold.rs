@@ -1,4 +1,4 @@
-use xenonc::ast::{BinOp, Expr, Function, Program, UnaryOp};
+use xenonc::ast::{BinOp, Expr, Function, Program, Stmt, UnaryOp};
 use xenonc::constant_fold::fold_constants;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -8,14 +8,14 @@ fn make_program(expr: Expr) -> Program {
         functions: vec![Function {
             name: "test".to_string(),
             return_type: "i64".to_string(),
-            body: vec![expr],
+            body: vec![Stmt::Expr(Box::new(expr))],
         }],
     }
 }
 
 /// Fold a single expression and return the result.
 fn fold(expr: Expr) -> Expr {
-    fold_constants(make_program(expr))
+    match fold_constants(make_program(expr))
         .functions
         .into_iter()
         .next()
@@ -24,6 +24,10 @@ fn fold(expr: Expr) -> Expr {
         .into_iter()
         .next()
         .unwrap()
+    {
+        Stmt::Expr(inner) => *inner,
+        other => panic!("expected Stmt::Expr, got {:?}", other),
+    }
 }
 
 fn binop(lhs: Expr, op: BinOp, rhs: Expr) -> Expr {
@@ -199,8 +203,15 @@ fn folds_deep_nesting() {
 
 #[test]
 fn folds_through_return() {
-    let expr = Expr::Return(Box::new(binop(int(2), BinOp::Add, int(3))));
-    assert_eq!(fold(expr), Expr::Return(Box::new(int(5))));
+    let program = Program {
+        functions: vec![Function {
+            name: "test".to_string(),
+            return_type: "i64".to_string(),
+            body: vec![Stmt::Return(Box::new(binop(int(2), BinOp::Add, int(3))))],
+        }],
+    };
+    let result = fold_constants(program);
+    assert_eq!(result.functions[0].body[0], Stmt::Return(Box::new(int(5))));
 }
 
 // ── Identifiers block folding ────────────────────────────────────────────────
