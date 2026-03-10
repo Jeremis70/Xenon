@@ -137,15 +137,25 @@ impl<'a> Parser<'a> {
         ])?;
         match token.kind {
             TokenKind::Minus | TokenKind::Bang | TokenKind::Tilde => {
-                let op = UnaryOp::from_token(&token.kind).unwrap();
+                let op =
+                    UnaryOp::from_token(&token.kind).expect("token kind guarantees unary operator");
                 let precedence = op.precedence();
                 Ok(Expr::UnaryOp {
                     op,
                     operand: Box::new(self.parse_expression_with_precedence(precedence)?),
                 })
             }
-            TokenKind::Int => Ok(Expr::Int(token.int_value().unwrap())),
-            TokenKind::Ident => Ok(Expr::Ident(token.ident_value().unwrap().to_string())),
+            TokenKind::Int => Ok(Expr::Int(
+                token
+                    .int_value()
+                    .expect("token kind guarantees Int variant"),
+            )),
+            TokenKind::Ident => Ok(Expr::Ident(
+                token
+                    .ident_value()
+                    .expect("token kind guarantees Ident variant")
+                    .to_string(),
+            )),
             TokenKind::LParen => {
                 let expr = self.parse_expression()?;
                 self.expect(TokenKind::RParen)?;
@@ -158,7 +168,6 @@ impl<'a> Parser<'a> {
     fn parse_body_mvp(&mut self) -> ParseResult<Vec<Expr>> {
         self.expect(TokenKind::Return)?;
         let expr = self.parse_expression()?;
-        println!("Parsed return expression: {expr:?}");
         self.expect(TokenKind::Semicolon)?;
 
         Ok(vec![Expr::Return(Box::new(expr))])

@@ -383,7 +383,7 @@ pub fn emit_object_and_ir(
         )
         .ok_or("create_target_machine returned None")?;
 
-    // 4) Emit object file using write_to_file (TargetMachine API) :contentReference[oaicite:3]{index=3}
+    // 4) Emit object file using write_to_file (TargetMachine API)
     tm.write_to_file(&module, FileType::Object, out_obj)
         .map_err(|e| format!("write_to_file(.o) failed: {e}"))?;
 
