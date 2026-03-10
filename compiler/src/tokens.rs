@@ -70,6 +70,7 @@ pub enum TokenKind {
     Star,
     Slash,
     Bang,
+    Tilde,
     And,
     Or,
     Xor,
@@ -233,6 +234,8 @@ enum RawKind {
     Percent,
     #[token("!")]
     Bang,
+    #[token("~")]
+    Tilde,
     #[token("&")]
     And,
     #[token("|")]
@@ -322,6 +325,7 @@ fn into_token_parts(raw: RawKind) -> (TokenKind, Option<TokenValue>) {
         RawKind::Star => (TokenKind::Star, None),
         RawKind::Slash => (TokenKind::Slash, None),
         RawKind::Bang => (TokenKind::Bang, None),
+        RawKind::Tilde => (TokenKind::Tilde, None),
         RawKind::And => (TokenKind::And, None),
         RawKind::Or => (TokenKind::Or, None),
         RawKind::Xor => (TokenKind::Xor, None),
