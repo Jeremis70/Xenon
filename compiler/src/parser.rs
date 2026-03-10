@@ -132,10 +132,11 @@ impl<'a> Parser<'a> {
             TokenKind::Ident,
             TokenKind::Minus,
             TokenKind::Bang,
+            TokenKind::Tilde,
             TokenKind::LParen,
         ])?;
         match token.kind {
-            TokenKind::Minus | TokenKind::Bang => Ok(Expr::UnaryOp {
+            TokenKind::Minus | TokenKind::Bang | TokenKind::Tilde => Ok(Expr::UnaryOp {
                 op: UnaryOp::from_token(&token.kind).unwrap(),
                 operand: Box::new(self.parse_primary()?),
             }),
