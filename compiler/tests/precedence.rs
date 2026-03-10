@@ -192,7 +192,7 @@ fn full_bitwise_chain() {
 }
 
 /////////////////////////////////
-//         COMPARAISON
+//         COMPARISON
 /////////////////////////////////
 
 /// `1 & 2 == 3`  →  `(1 & 2) == 3`  (bitwise-and > equality)
@@ -464,7 +464,7 @@ fn pow_is_right_associative() {
 }
 
 /////////////////////////////////
-//         PARANTHESIS
+//         PARENTHESES
 /////////////////////////////////
 
 /// `(1 + 2) * 3`  →  `(1 + 2) * 3`
@@ -513,7 +513,7 @@ fn double_parens_are_transparent() {
     assert_eq!(parse_expr("((1 + 2))"), binop(int(1), BinOp::Add, int(2)));
 }
 
-/// `(1 | 2) && 3`  →  `(1 | 2) && 3`  (parens override logical/bitwise tier)
+/// `1 | (2 && 3)`  →  `1 | (2 && 3)`  (parens override logical/bitwise tier)
 #[test]
 fn parens_override_bitwise_logical_boundary() {
     assert_eq!(
