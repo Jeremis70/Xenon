@@ -1,4 +1,4 @@
-use xenonc::ast::{BinOp, Expr, UnaryOp};
+use xenonc::ast::{BinOp, Expr, Stmt, UnaryOp};
 use xenonc::lexer::lex;
 use xenonc::parser::Parser;
 
@@ -10,7 +10,7 @@ fn parse_expr(expr_src: &str) -> Expr {
     let mut parser = Parser::new(&tokens);
     let program = parser.parse_program().expect("parsing should succeed");
     match program.functions[0].body[0].clone() {
-        Expr::Return(expr) => *expr,
+        Stmt::Return(expr) => *expr,
         other => panic!("expected return statement, got {:?}", other),
     }
 }

@@ -1,4 +1,4 @@
-use crate::ast::{BinOp, Expr, Function, Program, UnaryOp};
+use crate::ast::{BinOp, Expr, Function, Program, Stmt, UnaryOp};
 
 pub fn fold_constants(program: Program) -> Program {
     Program {
@@ -10,7 +10,14 @@ fn fold_function(func: Function) -> Function {
     Function {
         name: func.name,
         return_type: func.return_type,
-        body: func.body.into_iter().map(fold_expr).collect(),
+        body: func.body.into_iter().map(fold_stmt).collect(),
+    }
+}
+
+fn fold_stmt(stmt: Stmt) -> Stmt {
+    match stmt {
+        Stmt::Return(inner) => Stmt::Return(Box::new(fold_expr(*inner))),
+        Stmt::Expr(inner) => Stmt::Expr(Box::new(fold_expr(*inner))),
     }
 }
 
@@ -47,8 +54,6 @@ fn fold_expr(expr: Expr) -> Expr {
                 },
             }
         }
-
-        Expr::Return(inner) => Expr::Return(Box::new(fold_expr(*inner))),
 
         Expr::Int(_) | Expr::Ident(_) => expr,
     }

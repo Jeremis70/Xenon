@@ -1,4 +1,4 @@
-use xenonc::ast::Expr;
+use xenonc::ast::{Expr, Stmt};
 use xenonc::lexer::lex;
 use xenonc::parser::Parser;
 use xenonc::tokens::Span;
@@ -19,7 +19,7 @@ fn parse_program_parses_minimal_function() {
 
     assert!(matches!(
         &function.body[0],
-        Expr::Return(expr) if matches!(expr.as_ref(), Expr::Int(42))
+        Stmt::Return(expr) if matches!(expr.as_ref(), Expr::Int(42))
     ));
 }
 
@@ -65,7 +65,7 @@ fn parse_program_parses_return_ident() {
     let program = parser.parse_program().expect("parsing should succeed");
 
     match &program.functions[0].body[0] {
-        Expr::Return(expr) => assert!(matches!(expr.as_ref(), Expr::Ident(s) if s == "y")),
+        Stmt::Return(expr) => assert!(matches!(expr.as_ref(), Expr::Ident(s) if s == "y")),
         other => panic!("Expected return statement, got {:?}", other),
     }
 }

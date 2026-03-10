@@ -165,11 +165,11 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_body_mvp(&mut self) -> ParseResult<Vec<Expr>> {
+    fn parse_body_mvp(&mut self) -> ParseResult<Vec<Stmt>> {
         self.expect(TokenKind::Return)?;
         let expr = self.parse_expression()?;
         self.expect(TokenKind::Semicolon)?;
 
-        Ok(vec![Expr::Return(Box::new(expr))])
+        Ok(vec![Stmt::Return(Box::new(expr))])
     }
 }
