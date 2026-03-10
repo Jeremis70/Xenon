@@ -33,7 +33,10 @@ fn parse_program_reports_token_span_for_invalid_return_expr() {
         .parse_program()
         .expect_err("parsing should fail on missing return expression");
 
-    assert_eq!(err.message, "Expected one of [Int, Ident], found Semicolon");
+    assert_eq!(
+        err.message,
+        "Expected one of [Int, Ident, Minus, Bang, Tilde, LParen], found Semicolon"
+    );
     assert_eq!(err.span, Span { start: 18, end: 19 });
 }
 
@@ -49,7 +52,7 @@ fn parse_program_reports_eof_span_when_expression_is_missing() {
 
     assert_eq!(
         err.message,
-        "Expected one of [Int, Ident], found end of input"
+        "Expected one of [Int, Ident, Minus, Bang, Tilde, LParen], found end of input"
     );
     assert_eq!(err.span, Span { start: 18, end: 18 });
 }
