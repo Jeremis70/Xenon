@@ -136,10 +136,14 @@ impl<'a> Parser<'a> {
             TokenKind::LParen,
         ])?;
         match token.kind {
-            TokenKind::Minus | TokenKind::Bang | TokenKind::Tilde => Ok(Expr::UnaryOp {
-                op: UnaryOp::from_token(&token.kind).unwrap(),
-                operand: Box::new(self.parse_primary()?),
-            }),
+            TokenKind::Minus | TokenKind::Bang | TokenKind::Tilde => {
+                let op = UnaryOp::from_token(&token.kind).unwrap();
+                let precedence = op.precedence();
+                Ok(Expr::UnaryOp {
+                    op,
+                    operand: Box::new(self.parse_expression_with_precedence(precedence)?),
+                })
+            }
             TokenKind::Int => Ok(Expr::Int(token.int_value().unwrap())),
             TokenKind::Ident => Ok(Expr::Ident(token.ident_value().unwrap().to_string())),
             TokenKind::LParen => {

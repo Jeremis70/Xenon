@@ -80,10 +80,10 @@ impl BinOp {
             BinOp::LogicalOr => (1, 2),
             BinOp::LogicalXor => (3, 4),
             BinOp::LogicalAnd => (5, 6),
-            BinOp::BitwiseOr => (7, 8),
-            BinOp::BitwiseXor => (9, 10),
-            BinOp::BitwiseAnd => (11, 12),
-            BinOp::Eq | BinOp::NotEq => (13, 14),
+            BinOp::Eq | BinOp::NotEq => (7, 8),
+            BinOp::BitwiseOr => (9, 10),
+            BinOp::BitwiseXor => (11, 12),
+            BinOp::BitwiseAnd => (13, 14),
             BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq => (15, 16),
             BinOp::LShift | BinOp::RShift => (17, 18),
             BinOp::Add | BinOp::Sub => (19, 20),
@@ -112,7 +112,7 @@ impl UnaryOp {
 
     pub fn precedence(&self) -> u8 {
         match self {
-            UnaryOp::Neg | UnaryOp::Not | UnaryOp::BitwiseNot => 30,
+            UnaryOp::Neg | UnaryOp::Not | UnaryOp::BitwiseNot => 23,
         }
     }
 }
