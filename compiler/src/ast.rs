@@ -30,14 +30,21 @@ pub enum BinOp {
     Mul,
     Div,
     Mod,
+    Pow,
     Eq,
     NotEq,
     Lt,
     Gt,
     LtEq,
     GtEq,
-    And,
-    Or,
+    BitwiseAnd,
+    BitwiseOr,
+    BitwiseXor,
+    LogicalAnd,
+    LogicalOr,
+    LogicalXor,
+    LShift,
+    RShift,
 }
 
 impl BinOp {
@@ -47,15 +54,22 @@ impl BinOp {
             TokenKind::Minus => Some(BinOp::Sub),
             TokenKind::Star => Some(BinOp::Mul),
             TokenKind::Slash => Some(BinOp::Div),
+            TokenKind::Percent => Some(BinOp::Mod),
+            TokenKind::Pow => Some(BinOp::Pow),
             TokenKind::EqEq => Some(BinOp::Eq),
             TokenKind::NotEq => Some(BinOp::NotEq),
             TokenKind::Lt => Some(BinOp::Lt),
             TokenKind::Gt => Some(BinOp::Gt),
-            TokenKind::AndAnd => Some(BinOp::And),
-            TokenKind::OrOr => Some(BinOp::Or),
             TokenKind::LtEq => Some(BinOp::LtEq),
             TokenKind::GtEq => Some(BinOp::GtEq),
-            TokenKind::Percent => Some(BinOp::Mod),
+            TokenKind::And => Some(BinOp::BitwiseAnd),
+            TokenKind::Or => Some(BinOp::BitwiseOr),
+            TokenKind::Xor => Some(BinOp::BitwiseXor),
+            TokenKind::AndAnd => Some(BinOp::LogicalAnd),
+            TokenKind::OrOr => Some(BinOp::LogicalOr),
+            TokenKind::XorXor => Some(BinOp::LogicalXor),
+            TokenKind::LShift => Some(BinOp::LShift),
+            TokenKind::RShift => Some(BinOp::RShift),
             _ => None,
         }
     }
@@ -63,22 +77,27 @@ impl BinOp {
     // (left_bp, right_bp) — right > left means left-associative
     pub fn precedence(&self) -> (u8, u8) {
         match self {
-            BinOp::Or => (1, 2),
-            BinOp::And => (3, 4),
-            BinOp::Eq | BinOp::NotEq => (5, 6),
-            BinOp::Lt | BinOp::Gt => (7, 8),
-            BinOp::LtEq | BinOp::GtEq => (7, 8),
-            BinOp::Add | BinOp::Sub => (10, 11),
-            BinOp::Mul | BinOp::Div => (20, 21),
-            BinOp::Mod => (20, 21),
+            BinOp::LogicalOr => (1, 2),
+            BinOp::LogicalXor => (3, 4),
+            BinOp::LogicalAnd => (5, 6),
+            BinOp::BitwiseOr => (7, 8),
+            BinOp::BitwiseXor => (9, 10),
+            BinOp::BitwiseAnd => (11, 12),
+            BinOp::Eq | BinOp::NotEq => (13, 14),
+            BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq => (15, 16),
+            BinOp::LShift | BinOp::RShift => (17, 18),
+            BinOp::Add | BinOp::Sub => (19, 20),
+            BinOp::Mul | BinOp::Div | BinOp::Mod => (21, 22),
+            BinOp::Pow => (24, 23), // right-associative
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum UnaryOp {
-    Neg, // -x
-    Not, // !x
+    Neg,        // -x
+    Not,        // !x (logical NOT)
+    BitwiseNot, // ~x
 }
 
 impl UnaryOp {
@@ -86,13 +105,14 @@ impl UnaryOp {
         match kind {
             TokenKind::Minus => Some(UnaryOp::Neg),
             TokenKind::Bang => Some(UnaryOp::Not),
+            TokenKind::Tilde => Some(UnaryOp::BitwiseNot),
             _ => None,
         }
     }
 
     pub fn precedence(&self) -> u8 {
         match self {
-            UnaryOp::Neg | UnaryOp::Not => 30,
+            UnaryOp::Neg | UnaryOp::Not | UnaryOp::BitwiseNot => 30,
         }
     }
 }
