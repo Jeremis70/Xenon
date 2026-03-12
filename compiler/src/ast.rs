@@ -1,9 +1,86 @@
+use crate::error::TypeError;
 use crate::tokens::TokenKind;
+use std::str::FromStr;
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Type {
+    Int(u32),  // Any bit-width integer
+    UInt(u32), // Any bit-width integer
+    Float16,
+    BFloat16,
+    Float32,
+    Float64,
+    Float128,
+    Bool,
+}
+
+impl FromStr for Type {
+    type Err = TypeError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "bool" => return Ok(Type::Bool),
+            "f16" => return Ok(Type::Float16),
+            "bf16" => return Ok(Type::BFloat16),
+            "f32" => return Ok(Type::Float32),
+            "f64" => return Ok(Type::Float64),
+            "f128" => return Ok(Type::Float128),
+            _ => {}
+        }
+
+        // Parameterised integer types: (i|u)<width>
+        let (signed, digits) = if let Some(rest) = s.strip_prefix('i') {
+            (true, rest)
+        } else if let Some(rest) = s.strip_prefix('u') {
+            (false, rest)
+        } else {
+            return Err(TypeError::Unknown(s.to_owned()));
+        };
+
+        if digits.is_empty() {
+            return Err(TypeError::InvalidBitWidth {
+                raw: s.to_owned(),
+                reason: "missing bit width",
+            });
+        }
+
+        let width = digits
+            .parse::<u32>()
+            .map_err(|_| TypeError::InvalidBitWidth {
+                raw: s.to_owned(),
+                reason: "bit width must be a positive integer",
+            })?;
+
+        if width == 0 {
+            return Err(TypeError::InvalidBitWidth {
+                raw: s.to_owned(),
+                reason: "bit width must be non-zero",
+            });
+        }
+
+        Ok(if signed {
+            Type::Int(width)
+        } else {
+            Type::UInt(width)
+        })
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
     Return(Box<Expr>),
     Expr(Box<Expr>),
+
+    VarDecl {
+        name: String,
+        ty: Type,
+        value: Box<Expr>,
+    },
+    Assign {
+        name: String,
+        op: Option<BinOp>, // None for simple assignment, Some(op) for compound assignment (e.g., +=)
+        value: Box<Expr>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]

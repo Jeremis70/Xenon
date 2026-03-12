@@ -18,6 +18,16 @@ fn fold_stmt(stmt: Stmt) -> Stmt {
     match stmt {
         Stmt::Return(inner) => Stmt::Return(Box::new(fold_expr(*inner))),
         Stmt::Expr(inner) => Stmt::Expr(Box::new(fold_expr(*inner))),
+        Stmt::VarDecl { name, ty, value } => Stmt::VarDecl {
+            name,
+            ty,
+            value: Box::new(fold_expr(*value)),
+        },
+        Stmt::Assign { name, op, value } => Stmt::Assign {
+            name,
+            op,
+            value: Box::new(fold_expr(*value)),
+        },
     }
 }
 
