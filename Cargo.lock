@@ -371,4 +371,5 @@ dependencies = [
  "clap",
  "inkwell",
  "logos",
+ "thiserror",
 ]

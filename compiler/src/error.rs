@@ -1,19 +1,15 @@
 use crate::tokens::Span;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("lexing error at {span:?}")]
 pub struct LexError {
     pub span: Span,
 }
 
-impl std::fmt::Display for LexError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Lexing error at span {:?}", self.span)
-    }
-}
-impl std::error::Error for LexError {}
 pub type LexResult<T> = Result<T, LexError>;
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
+#[error("{message} (span {}..{})", span.start, span.end)]
 pub struct ParseError {
     pub message: String,
     pub span: Span,
@@ -28,16 +24,12 @@ impl ParseError {
     }
 }
 
-impl std::fmt::Display for ParseError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{} (span {}..{})",
-            self.message, self.span.start, self.span.end
-        )
-    }
-}
-
-impl std::error::Error for ParseError {}
-
 pub type ParseResult<T> = Result<T, ParseError>;
+
+#[derive(Debug, thiserror::Error)]
+pub enum TypeError {
+    #[error("unknown type: `{0}`")]
+    Unknown(String),
+    #[error("invalid bit width in `{raw}`: {reason}")]
+    InvalidBitWidth { raw: String, reason: &'static str },
+}
