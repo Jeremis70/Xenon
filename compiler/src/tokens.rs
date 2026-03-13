@@ -47,6 +47,7 @@ pub enum TokenKind {
     LShiftEq,
     RShiftEq,
     PowEq,
+    PercentEq,
     PlusPlus,
     MinusMinus,
 
@@ -189,6 +190,8 @@ enum RawKind {
     OrEq,
     #[token("^=")]
     XorEq,
+    #[token("%=")]
+    PercentEq,
 
     #[token("->")]
     Arrow,
@@ -304,6 +307,8 @@ fn into_token_parts(raw: RawKind) -> (TokenKind, Option<TokenValue>) {
         RawKind::LShiftEq => (TokenKind::LShiftEq, None),
         RawKind::RShiftEq => (TokenKind::RShiftEq, None),
         RawKind::PowEq => (TokenKind::PowEq, None),
+        RawKind::PercentEq => (TokenKind::PercentEq, None),
+
         RawKind::PlusPlus => (TokenKind::PlusPlus, None),
         RawKind::MinusMinus => (TokenKind::MinusMinus, None),
         RawKind::Arrow => (TokenKind::Arrow, None),
