@@ -1,5 +1,5 @@
 use crate::ast::*;
-use crate::error::{ParseError, ParseResult};
+use crate::error::{ParseError, ParseResult, TypeError};
 use crate::tokens::{Span, Token, TokenKind};
 
 pub struct Parser<'a> {
@@ -86,7 +86,7 @@ impl<'a> Parser<'a> {
         let return_type = self.expect(TokenKind::Ident)?.ident_value()?.to_string();
 
         self.expect(TokenKind::LBrace)?;
-        let body = self.parse_body_mvp()?;
+        let body = self.parse_body()?;
         self.expect(TokenKind::RBrace)?;
 
         Ok(Function {
@@ -96,10 +96,58 @@ impl<'a> Parser<'a> {
         })
     }
 
+    fn parse_type(&self, token: &Token) -> ParseResult<Type> {
+        token
+            .ident_value()?
+            .parse::<Type>()
+            .map_err(|e: TypeError| ParseError::new(e.to_string(), token.span))
+    }
+
     fn parse_expression(&mut self) -> ParseResult<Expr> {
         self.parse_expression_with_precedence(0)
     }
 
+    fn parse_statement(&mut self) -> ParseResult<Stmt> {
+        let first_token = self.expect([TokenKind::Return, TokenKind::Ident])?;
+        match first_token.kind {
+            TokenKind::Return => {
+                let expr = self.parse_expression()?;
+                self.expect(TokenKind::Semicolon)?;
+                Ok(Stmt::Return(Box::new(expr)))
+            }
+            TokenKind::Ident => {
+                let second_token = self.expect([TokenKind::Ident, TokenKind::Eq])?;
+                match second_token.kind {
+                    TokenKind::Ident => {
+                        // Variable declaration
+                        let ty = self.parse_type(first_token)?;
+                        let name = second_token.ident_value()?.to_string();
+                        self.expect(TokenKind::Eq)?;
+                        let value = Box::new(self.parse_expression()?);
+
+                        let stmt = Stmt::VarDecl { name, ty, value };
+                        self.expect(TokenKind::Semicolon)?;
+
+                        Ok(stmt)
+                    }
+                    TokenKind::Eq => {
+                        // Assignment
+                        let name = first_token.ident_value()?.to_string();
+                        let op = AssignOp::from_token(&second_token.kind)
+                            .expect("token kind guarantees assignment operator");
+                        let value = Box::new(self.parse_expression()?);
+
+                        let stmt = Stmt::Assign { name, op, value };
+                        self.expect(TokenKind::Semicolon)?;
+
+                        Ok(stmt)
+                    }
+                    _ => unreachable!("expect guarantees token is either Ident or Eq"),
+                }
+            }
+            _ => unreachable!("expect guarantees token is either Return or Ident"),
+        }
+    }
     fn parse_expression_with_precedence(&mut self, min_precedence: u8) -> ParseResult<Expr> {
         let mut left = self.parse_primary()?;
 
@@ -165,11 +213,14 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_body_mvp(&mut self) -> ParseResult<Vec<Stmt>> {
-        self.expect(TokenKind::Return)?;
-        let expr = self.parse_expression()?;
-        self.expect(TokenKind::Semicolon)?;
-
-        Ok(vec![Stmt::Return(Box::new(expr))])
+    fn parse_body(&mut self) -> ParseResult<Vec<Stmt>> {
+        let mut stmts = Vec::new();
+        while let Some(token) = self.peek() {
+            if token.kind == TokenKind::RBrace {
+                break;
+            }
+            stmts.push(self.parse_statement()?);
+        }
+        Ok(stmts)
     }
 }
