@@ -225,11 +225,19 @@ pub struct Param {
     pub ty: Type,
 }
 
+/// The return type of a function, with an optional name for future named-return support.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReturnType {
+    /// Named return value (e.g. `->u32 result`). Currently always `None`.
+    pub name: Option<String>,
+    pub ty: Type,
+}
+
 #[derive(Debug)]
 pub struct Function {
     pub name: String,
     pub params: Vec<Param>,
-    pub return_type: String,
+    pub return_type: ReturnType,
     pub body: Vec<Stmt>,
 }
 
