@@ -1,4 +1,4 @@
-use xenonc::ast::{BinOp, Expr, Function, Program, Stmt, UnaryOp};
+use xenonc::ast::{BinOp, Expr, Function, Program, ReturnType, Stmt, Type, UnaryOp};
 use xenonc::constant_fold::fold_constants;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -8,7 +8,10 @@ fn make_program(expr: Expr) -> Program {
         functions: vec![Function {
             name: "test".to_string(),
             params: vec![],
-            return_type: "i64".to_string(),
+            return_type: ReturnType {
+                name: None,
+                ty: Type::Int(64),
+            },
             body: vec![Stmt::Expr(Box::new(expr))],
         }],
     }
@@ -208,7 +211,10 @@ fn folds_through_return() {
         functions: vec![Function {
             name: "test".to_string(),
             params: vec![],
-            return_type: "i64".to_string(),
+            return_type: ReturnType {
+                name: None,
+                ty: Type::Int(64),
+            },
             body: vec![Stmt::Return(Box::new(binop(int(2), BinOp::Add, int(3))))],
         }],
     };
