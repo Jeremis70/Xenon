@@ -96,6 +96,9 @@ impl<'ctx> CodeGen<'ctx> {
                     self.builder
                         .build_return(Some(&value))
                         .map_err(llvm_err!("build_return"))?;
+                    // After emitting a return, the current basic block is terminated.
+                    // Stop generating further instructions for this function body.
+                    break;
                 }
                 Stmt::VarDecl { name, ty, value } => {
                     let llvm_ty = self.llvm_type(ty)?;
