@@ -1,4 +1,4 @@
-use crate::ast::*;
+use crate::ast::{BinOp, Expr, Function, Program, Stmt, Type, UnaryOp};
 use crate::error::{ParseError, ParseResult, TypeError};
 use crate::tokens::{Span, Token, TokenKind};
 
@@ -116,10 +116,24 @@ impl<'a> Parser<'a> {
                 Ok(Stmt::Return(Box::new(expr)))
             }
             TokenKind::Ident => {
-                let second_token = self.expect([TokenKind::Ident, TokenKind::Eq])?;
+                let second_token = self.expect([
+                    TokenKind::Ident,
+                    TokenKind::Eq,
+                    TokenKind::PlusEq,
+                    TokenKind::MinusEq,
+                    TokenKind::StarEq,
+                    TokenKind::SlashEq,
+                    TokenKind::PercentEq,
+                    TokenKind::PowEq,
+                    TokenKind::AndEq,
+                    TokenKind::OrEq,
+                    TokenKind::XorEq,
+                    TokenKind::LShiftEq,
+                    TokenKind::RShiftEq,
+                ])?;
                 match second_token.kind {
                     TokenKind::Ident => {
-                        // Variable declaration
+                        // Variable declaration: <type> <name> = <expr>;
                         let ty = self.parse_type(first_token)?;
                         let name = second_token.ident_value()?.to_string();
                         self.expect(TokenKind::Eq)?;
@@ -130,19 +144,28 @@ impl<'a> Parser<'a> {
 
                         Ok(stmt)
                     }
-                    TokenKind::Eq => {
-                        // Assignment
+                    kind if kind.is_assign_op() => {
                         let name = first_token.ident_value()?.to_string();
-                        let op = AssignOp::from_token(&second_token.kind)
-                            .expect("token kind guarantees assignment operator");
-                        let value = Box::new(self.parse_expression()?);
+                        let rhs = self.parse_expression()?;
+                        let value = match BinOp::from_assign_token(&kind) {
+                            Some(op) => Expr::BinOp {
+                                // Compound assignment
+                                lhs: Box::new(Expr::Ident(name.clone())),
+                                op,
+                                rhs: Box::new(rhs),
+                            },
+                            None => rhs, // normal assignment
+                        };
 
-                        let stmt = Stmt::Assign { name, op, value };
+                        let stmt = Stmt::Assign {
+                            name,
+                            value: Box::new(value),
+                        };
                         self.expect(TokenKind::Semicolon)?;
 
                         Ok(stmt)
                     }
-                    _ => unreachable!("expect guarantees token is either Ident or Eq"),
+                    _ => unreachable!("expect guarantees valid second token"),
                 }
             }
             _ => unreachable!("expect guarantees token is either Return or Ident"),
@@ -152,7 +175,7 @@ impl<'a> Parser<'a> {
         let mut left = self.parse_primary()?;
 
         while let Some(op_token) = self.peek() {
-            let Some(op) = BinOp::from_token(&op_token.kind) else {
+            let Some(op) = BinOp::from_op_token(&op_token.kind) else {
                 break;
             };
 

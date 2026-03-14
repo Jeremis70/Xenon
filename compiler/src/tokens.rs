@@ -7,6 +7,27 @@ pub struct Span {
     pub end: usize,
 }
 
+impl TokenKind {
+    /// Returns `true` for all assignment operator tokens (`=`, `+=`, `-=`, …).
+    pub fn is_assign_op(self) -> bool {
+        matches!(
+            self,
+            TokenKind::Eq
+                | TokenKind::PlusEq
+                | TokenKind::MinusEq
+                | TokenKind::StarEq
+                | TokenKind::SlashEq
+                | TokenKind::PercentEq
+                | TokenKind::PowEq
+                | TokenKind::AndEq
+                | TokenKind::OrEq
+                | TokenKind::XorEq
+                | TokenKind::LShiftEq
+                | TokenKind::RShiftEq
+        )
+    }
+}
+
 impl From<std::ops::Range<usize>> for Span {
     fn from(r: std::ops::Range<usize>) -> Self {
         Self {
