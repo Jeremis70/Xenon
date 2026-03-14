@@ -9,14 +9,13 @@ use inkwell::module::Module;
 use inkwell::targets::{
     CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine,
 };
-use inkwell::types::BasicTypeEnum;
+use inkwell::types::{BasicType, BasicTypeEnum};
 use inkwell::values::{FunctionValue, PointerValue};
 
 use inkwell::IntPredicate;
 
 use crate::ast::{BinOp, Expr, Function, Program, Stmt, UnaryOp};
 use crate::error::{CodegenError, CodegenResult};
-use crate::tokens::Span;
 
 /// Maps an inkwell builder error to [`CodegenError::LlvmBuilder`].
 macro_rules! llvm_err {
@@ -67,19 +66,7 @@ impl<'ctx> CodeGen<'ctx> {
     }
 
     fn compile_function(&mut self, f: &Function) -> CodegenResult<FunctionValue<'ctx>> {
-        // MVP type mapping:
-        // "u32" -> i32 (close enough for now; refine later)
-        let ret_ty = match f.return_type.as_str() {
-            "u32" | "i32" => self.context.i32_type(),
-            other => {
-                return Err(CodegenError::UnsupportedType {
-                    ty: other.to_string(),
-                    span: Span { start: 0, end: 0 },
-                });
-            }
-        };
-
-        // MVP: no params
+        let ret_ty = self.llvm_type(&f.return_type.ty)?;
         let fn_ty = ret_ty.fn_type(&[], false);
         let fn_val = self.module.add_function(&f.name, fn_ty, None);
 
@@ -93,6 +80,7 @@ impl<'ctx> CodeGen<'ctx> {
             match stmt {
                 Stmt::Return(inner) => {
                     let value = self.codegen_expr(inner)?;
+                    let value = self.cast_int_to_type(value, ret_ty)?;
                     self.builder
                         .build_return(Some(&value))
                         .map_err(llvm_err!("build_return"))?;
@@ -108,19 +96,21 @@ impl<'ctx> CodeGen<'ctx> {
                         .map_err(llvm_err!("build_alloca"))?;
                     self.variables.insert(name.clone(), (alloca, llvm_ty));
                     let init_val = self.codegen_expr(value)?;
+                    let init_val = self.cast_int_to_type(init_val, llvm_ty)?;
                     self.builder
                         .build_store(alloca, init_val)
                         .map_err(llvm_err!("build_store"))?;
                 }
                 Stmt::Assign { name, value } => {
-                    let (var_ptr, _) = self
+                    let (var_ptr, var_ty) = *self
                         .variables
                         .get(name)
                         .ok_or_else(|| CodegenError::UndefinedVariable { name: name.clone() })?;
 
                     let val = self.codegen_expr(value)?;
+                    let val = self.cast_int_to_type(val, var_ty)?;
                     self.builder
-                        .build_store(*var_ptr, val)
+                        .build_store(var_ptr, val)
                         .map_err(llvm_err!("build_store"))?;
                 }
                 Stmt::Expr(expr) => {
@@ -130,6 +120,33 @@ impl<'ctx> CodeGen<'ctx> {
         }
 
         Ok(fn_val)
+    }
+
+    /// Casts `val` to `target` via truncation or zero-extension as needed.
+    /// If the bit widths are already equal no instruction is emitted.
+    fn cast_int_to_type(
+        &self,
+        val: inkwell::values::IntValue<'ctx>,
+        target: BasicTypeEnum<'ctx>,
+    ) -> CodegenResult<inkwell::values::IntValue<'ctx>> {
+        let BasicTypeEnum::IntType(target_ty) = target else {
+            return Ok(val);
+        };
+        match val
+            .get_type()
+            .get_bit_width()
+            .cmp(&target_ty.get_bit_width())
+        {
+            std::cmp::Ordering::Equal => Ok(val),
+            std::cmp::Ordering::Greater => self
+                .builder
+                .build_int_truncate(val, target_ty, "trunc")
+                .map_err(llvm_err!("build_int_truncate")),
+            std::cmp::Ordering::Less => self
+                .builder
+                .build_int_z_extend(val, target_ty, "zext")
+                .map_err(llvm_err!("build_int_z_extend")),
+        }
     }
 
     fn codegen_expr(&self, e: &Expr) -> CodegenResult<inkwell::values::IntValue<'ctx>> {
