@@ -7,6 +7,7 @@ fn make_program(expr: Expr) -> Program {
     Program {
         functions: vec![Function {
             name: "test".to_string(),
+            params: vec![],
             return_type: "i64".to_string(),
             body: vec![Stmt::Expr(Box::new(expr))],
         }],
@@ -206,6 +207,7 @@ fn folds_through_return() {
     let program = Program {
         functions: vec![Function {
             name: "test".to_string(),
+            params: vec![],
             return_type: "i64".to_string(),
             body: vec![Stmt::Return(Box::new(binop(int(2), BinOp::Add, int(3))))],
         }],

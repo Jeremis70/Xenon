@@ -9,6 +9,7 @@ pub fn fold_constants(program: Program) -> Program {
 fn fold_function(func: Function) -> Function {
     Function {
         name: func.name,
+        params: func.params,
         return_type: func.return_type,
         body: func.body.into_iter().map(fold_stmt).collect(),
     }
