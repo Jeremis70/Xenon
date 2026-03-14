@@ -1,3 +1,4 @@
+use crate::ast::Type;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -31,6 +32,7 @@ pub struct CodeGen<'ctx> {
     context: &'ctx Context,
     module: Module<'ctx>,
     builder: Builder<'ctx>,
+    variables: HashMap<String, (PointerValue<'ctx>, BasicTypeEnum<'ctx>)>,
 }
 
 impl<'ctx> CodeGen<'ctx> {
@@ -41,7 +43,20 @@ impl<'ctx> CodeGen<'ctx> {
             context,
             module,
             builder,
+            variables: HashMap::new(),
         }
+    }
+
+    fn llvm_type(&self, ty: &crate::ast::Type) -> CodegenResult<BasicTypeEnum<'ctx>> {
+        Ok(match ty {
+            Type::Bool => self.context.bool_type().into(),
+            Type::Int(w) | Type::UInt(w) => self.context.custom_width_int_type(*w).into(),
+            Type::Float16 => self.context.f16_type().into(),
+            Type::BFloat16 => self.context.bf16_type().into(),
+            Type::Float32 => self.context.f32_type().into(),
+            Type::Float64 => self.context.f64_type().into(),
+            Type::Float128 => self.context.f128_type().into(),
+        })
     }
 
     pub fn compile_program(mut self, program: &Program) -> CodegenResult<Module<'ctx>> {
@@ -71,6 +86,8 @@ impl<'ctx> CodeGen<'ctx> {
         let entry = self.context.append_basic_block(fn_val, "entry");
         self.builder.position_at_end(entry);
 
+        self.variables.clear();
+
         // MVP body: must contain exactly one return
         for stmt in &f.body {
             match stmt {
@@ -80,16 +97,29 @@ impl<'ctx> CodeGen<'ctx> {
                         .build_return(Some(&value))
                         .map_err(llvm_err!("build_return"))?;
                 }
-                Stmt::VarDecl {
-                    name: _,
-                    ty: _,
-                    value: _,
-                } => {}
-                Stmt::Assign {
-                    name: _,
-                    op: _,
-                    value: _,
-                } => {}
+                Stmt::VarDecl { name, ty, value } => {
+                    let llvm_ty = self.llvm_type(ty)?;
+                    let alloca = self
+                        .builder
+                        .build_alloca(llvm_ty, name.as_str())
+                        .map_err(llvm_err!("build_alloca"))?;
+                    self.variables.insert(name.clone(), (alloca, llvm_ty));
+                    let init_val = self.codegen_expr(value)?;
+                    self.builder
+                        .build_store(alloca, init_val)
+                        .map_err(llvm_err!("build_store"))?;
+                }
+                Stmt::Assign { name, value } => {
+                    let (var_ptr, _) = self
+                        .variables
+                        .get(name)
+                        .ok_or_else(|| CodegenError::UndefinedVariable { name: name.clone() })?;
+
+                    let val = self.codegen_expr(value)?;
+                    self.builder
+                        .build_store(*var_ptr, val)
+                        .map_err(llvm_err!("build_store"))?;
+                }
                 Stmt::Expr(expr) => {
                     self.codegen_expr(expr)?;
                 }
@@ -104,7 +134,16 @@ impl<'ctx> CodeGen<'ctx> {
 
         match e {
             Expr::Int(v) => Ok(i32t.const_int(*v as u64, true)),
-            Expr::Ident(name) => Err(CodegenError::UndefinedVariable { name: name.clone() }),
+            Expr::Ident(name) => {
+                let (ptr, ty) = self
+                    .variables
+                    .get(name)
+                    .ok_or_else(|| CodegenError::UndefinedVariable { name: name.clone() })?;
+                self.builder
+                    .build_load(*ty, *ptr, name.as_str())
+                    .map_err(llvm_err!("build_load"))
+                    .map(|v| v.into_int_value())
+            }
             Expr::BinOp { lhs, op, rhs } => {
                 let lhs_val = self.codegen_expr(lhs)?;
                 let rhs_val = self.codegen_expr(rhs)?;
