@@ -1,4 +1,4 @@
-use crate::ast::{BinOp, Expr, Function, Param, Program, Stmt, Type, UnaryOp};
+use crate::ast::{BinOp, Expr, Function, Param, Program, ReturnType, Stmt, Type, UnaryOp};
 use crate::error::{ParseError, ParseResult, TypeError};
 use crate::tokens::{Span, Token, TokenKind};
 
@@ -79,10 +79,12 @@ impl<'a> Parser<'a> {
         self.expect(TokenKind::Fn)?;
         let name = self.expect(TokenKind::Ident)?.ident_value()?.to_string();
 
+        self.expect(TokenKind::LParen)?;
         let params = self.parse_params()?;
+        self.expect(TokenKind::RParen)?;
 
         self.expect(TokenKind::Arrow)?;
-        let return_type = self.expect(TokenKind::Ident)?.ident_value()?.to_string();
+        let return_type = self.parse_return_type()?;
 
         self.expect(TokenKind::LBrace)?;
         let body = self.parse_body()?;
@@ -162,8 +164,13 @@ impl<'a> Parser<'a> {
         Ok(Stmt::VarDecl { name, ty, value })
     }
 
+    fn parse_return_type(&mut self) -> ParseResult<ReturnType> {
+        let type_token = self.expect(TokenKind::Ident)?;
+        let ty = self.parse_type(type_token)?;
+        Ok(ReturnType { name: None, ty })
+    }
+
     fn parse_params(&mut self) -> ParseResult<Vec<Param>> {
-        self.expect(TokenKind::LParen)?;
         let mut params = Vec::new();
         loop {
             match self.peek() {
@@ -179,7 +186,6 @@ impl<'a> Parser<'a> {
             let (ty, name) = self.parse_typed_binding(type_token, name_token)?;
             params.push(Param { name, ty });
         }
-        self.expect(TokenKind::RParen)?;
         Ok(params)
     }
 
