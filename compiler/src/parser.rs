@@ -132,38 +132,10 @@ impl<'a> Parser<'a> {
                     TokenKind::RShiftEq,
                 ])?;
                 match second_token.kind {
-                    TokenKind::Ident => {
-                        // Variable declaration: <type> <name> = <expr>;
-                        let ty = self.parse_type(first_token)?;
-                        let name = second_token.ident_value()?.to_string();
-                        self.expect(TokenKind::Eq)?;
-                        let value = Box::new(self.parse_expression()?);
-
-                        let stmt = Stmt::VarDecl { name, ty, value };
-                        self.expect(TokenKind::Semicolon)?;
-
-                        Ok(stmt)
-                    }
+                    TokenKind::Ident => self.parse_var_decl(first_token, second_token),
                     kind if kind.is_assign_op() => {
                         let name = first_token.ident_value()?.to_string();
-                        let rhs = self.parse_expression()?;
-                        let value = match BinOp::from_assign_token(&kind) {
-                            Some(op) => Expr::BinOp {
-                                // Compound assignment
-                                lhs: Box::new(Expr::Ident(name.clone())),
-                                op,
-                                rhs: Box::new(rhs),
-                            },
-                            None => rhs, // normal assignment
-                        };
-
-                        let stmt = Stmt::Assign {
-                            name,
-                            value: Box::new(value),
-                        };
-                        self.expect(TokenKind::Semicolon)?;
-
-                        Ok(stmt)
+                        self.parse_var_assign(name, &kind)
                     }
                     _ => unreachable!("expect guarantees valid second token"),
                 }
@@ -171,6 +143,33 @@ impl<'a> Parser<'a> {
             _ => unreachable!("expect guarantees token is either Return or Ident"),
         }
     }
+
+    fn parse_var_decl(&mut self, type_token: &Token, name_token: &Token) -> ParseResult<Stmt> {
+        let ty = self.parse_type(type_token)?;
+        let name = name_token.ident_value()?.to_string();
+        self.expect(TokenKind::Eq)?;
+        let value = Box::new(self.parse_expression()?);
+        self.expect(TokenKind::Semicolon)?;
+        Ok(Stmt::VarDecl { name, ty, value })
+    }
+
+    fn parse_var_assign(&mut self, name: String, kind: &TokenKind) -> ParseResult<Stmt> {
+        let rhs = self.parse_expression()?;
+        let value = match BinOp::from_assign_token(kind) {
+            Some(op) => Expr::BinOp {
+                lhs: Box::new(Expr::Ident(name.clone())),
+                op,
+                rhs: Box::new(rhs),
+            },
+            None => rhs,
+        };
+        self.expect(TokenKind::Semicolon)?;
+        Ok(Stmt::Assign {
+            name,
+            value: Box::new(value),
+        })
+    }
+
     fn parse_expression_with_precedence(&mut self, min_precedence: u8) -> ParseResult<Expr> {
         let mut left = self.parse_primary()?;
 
