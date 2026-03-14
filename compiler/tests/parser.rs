@@ -1,4 +1,4 @@
-use xenonc::ast::{BinOp, Expr, Stmt, Type};
+use xenonc::ast::{BinOp, Expr, Param, Stmt, Type};
 use xenonc::lexer::lex;
 use xenonc::parser::Parser;
 use xenonc::tokens::Span;
@@ -175,6 +175,7 @@ fn parse_program_parses_minimal_function() {
     assert_eq!(program.functions.len(), 1);
     let function = &program.functions[0];
     assert_eq!(function.name, "x");
+    assert!(function.params.is_empty());
     assert_eq!(function.return_type, "u32");
     assert_eq!(function.body.len(), 1);
 
@@ -182,6 +183,25 @@ fn parse_program_parses_minimal_function() {
         &function.body[0],
         Stmt::Return(expr) if matches!(expr.as_ref(), Expr::Int(42))
     ));
+}
+
+#[test]
+fn parse_function_with_parameters() {
+    let src = "fn add(u32 x, u64 y)->u32{return 1;}";
+    let tokens = lex(src).expect("lexing should succeed");
+
+    let mut parser = Parser::new(&tokens);
+    let program = parser.parse_program().expect("parsing should succeed");
+
+    let function = &program.functions[0];
+    assert_eq!(function.name, "add");
+    assert_eq!(
+        function.params,
+        vec![
+            Param { name: "x".to_string(), ty: Type::UInt(32) },
+            Param { name: "y".to_string(), ty: Type::UInt(64) },
+        ]
+    );
 }
 
 #[test]

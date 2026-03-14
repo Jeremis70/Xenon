@@ -1,4 +1,4 @@
-use crate::ast::{BinOp, Expr, Function, Program, Stmt, Type, UnaryOp};
+use crate::ast::{BinOp, Expr, Function, Param, Program, Stmt, Type, UnaryOp};
 use crate::error::{ParseError, ParseResult, TypeError};
 use crate::tokens::{Span, Token, TokenKind};
 
@@ -79,8 +79,7 @@ impl<'a> Parser<'a> {
         self.expect(TokenKind::Fn)?;
         let name = self.expect(TokenKind::Ident)?.ident_value()?.to_string();
 
-        self.expect(TokenKind::LParen)?;
-        self.expect(TokenKind::RParen)?;
+        let params = self.parse_params()?;
 
         self.expect(TokenKind::Arrow)?;
         let return_type = self.expect(TokenKind::Ident)?.ident_value()?.to_string();
@@ -91,6 +90,7 @@ impl<'a> Parser<'a> {
 
         Ok(Function {
             name,
+            params,
             return_type,
             body,
         })
@@ -144,13 +144,43 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_var_decl(&mut self, type_token: &Token, name_token: &Token) -> ParseResult<Stmt> {
+    fn parse_typed_binding(
+        &self,
+        type_token: &Token,
+        name_token: &Token,
+    ) -> ParseResult<(Type, String)> {
         let ty = self.parse_type(type_token)?;
         let name = name_token.ident_value()?.to_string();
+        Ok((ty, name))
+    }
+
+    fn parse_var_decl(&mut self, type_token: &Token, name_token: &Token) -> ParseResult<Stmt> {
+        let (ty, name) = self.parse_typed_binding(type_token, name_token)?;
         self.expect(TokenKind::Eq)?;
         let value = Box::new(self.parse_expression()?);
         self.expect(TokenKind::Semicolon)?;
         Ok(Stmt::VarDecl { name, ty, value })
+    }
+
+    fn parse_params(&mut self) -> ParseResult<Vec<Param>> {
+        self.expect(TokenKind::LParen)?;
+        let mut params = Vec::new();
+        loop {
+            match self.peek() {
+                Some(t) if t.kind == TokenKind::RParen => break,
+                None => break,
+                _ => {}
+            }
+            if !params.is_empty() {
+                self.expect(TokenKind::Comma)?;
+            }
+            let type_token = self.expect(TokenKind::Ident)?;
+            let name_token = self.expect(TokenKind::Ident)?;
+            let (ty, name) = self.parse_typed_binding(type_token, name_token)?;
+            params.push(Param { name, ty });
+        }
+        self.expect(TokenKind::RParen)?;
+        Ok(params)
     }
 
     fn parse_var_assign(&mut self, name: String, kind: &TokenKind) -> ParseResult<Stmt> {

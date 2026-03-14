@@ -218,9 +218,17 @@ impl UnaryOp {
     }
 }
 
+/// A single function parameter: `<type> <name>`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Param {
+    pub name: String,
+    pub ty: Type,
+}
+
 #[derive(Debug)]
 pub struct Function {
     pub name: String,
+    pub params: Vec<Param>,
     pub return_type: String,
     pub body: Vec<Stmt>,
 }
