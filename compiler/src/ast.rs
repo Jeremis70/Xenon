@@ -67,42 +67,6 @@ impl FromStr for Type {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum AssignOp {
-    Assign, // =
-    AddAssign,
-    SubAssign,
-    MulAssign,
-    DivAssign,
-    ModAssign,
-    PowAssign,
-    AndAssign,
-    OrAssign,
-    XorAssign,
-    LShiftAssign,
-    RShiftAssign,
-}
-
-impl AssignOp {
-    pub fn from_token(kind: &TokenKind) -> Option<Self> {
-        match kind {
-            TokenKind::Eq => Some(AssignOp::Assign),
-            TokenKind::PlusEq => Some(AssignOp::AddAssign),
-            TokenKind::MinusEq => Some(AssignOp::SubAssign),
-            TokenKind::StarEq => Some(AssignOp::MulAssign),
-            TokenKind::SlashEq => Some(AssignOp::DivAssign),
-            TokenKind::PercentEq => Some(AssignOp::ModAssign),
-            TokenKind::PowEq => Some(AssignOp::PowAssign),
-            TokenKind::AndEq => Some(AssignOp::AndAssign),
-            TokenKind::OrEq => Some(AssignOp::OrAssign),
-            TokenKind::XorEq => Some(AssignOp::XorAssign),
-            TokenKind::LShiftEq => Some(AssignOp::LShiftAssign),
-            TokenKind::RShiftEq => Some(AssignOp::RShiftAssign),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
     Return(Box<Expr>),
     Expr(Box<Expr>),
@@ -112,9 +76,10 @@ pub enum Stmt {
         ty: Type,
         value: Box<Expr>,
     },
+    /// Assignment: `x = <value>`. Compound operators (`x += e`) are desugared
+    /// by the parser into `x = x + e` before reaching this node.
     Assign {
         name: String,
-        op: AssignOp,
         value: Box<Expr>,
     },
 }
@@ -164,7 +129,26 @@ pub enum BinOp {
 }
 
 impl BinOp {
-    pub fn from_token(kind: &TokenKind) -> Option<Self> {
+    /// Maps a compound-assignment token (`+=`, `-=`, …) to the corresponding
+    /// [`BinOp`], returning `None` for plain `=`.
+    pub fn from_assign_token(kind: &TokenKind) -> Option<Self> {
+        match kind {
+            TokenKind::PlusEq => Some(BinOp::Add),
+            TokenKind::MinusEq => Some(BinOp::Sub),
+            TokenKind::StarEq => Some(BinOp::Mul),
+            TokenKind::SlashEq => Some(BinOp::Div),
+            TokenKind::PercentEq => Some(BinOp::Mod),
+            TokenKind::PowEq => Some(BinOp::Pow),
+            TokenKind::AndEq => Some(BinOp::BitwiseAnd),
+            TokenKind::OrEq => Some(BinOp::BitwiseOr),
+            TokenKind::XorEq => Some(BinOp::BitwiseXor),
+            TokenKind::LShiftEq => Some(BinOp::LShift),
+            TokenKind::RShiftEq => Some(BinOp::RShift),
+            _ => None,
+        }
+    }
+
+    pub fn from_op_token(kind: &TokenKind) -> Option<Self> {
         match kind {
             TokenKind::Plus => Some(BinOp::Add),
             TokenKind::Minus => Some(BinOp::Sub),
