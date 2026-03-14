@@ -1,7 +1,7 @@
 // Testing MVP for xenon programming language
-fn main()->u32
+fn main()->u8
 {
-    u32 x = 2;
-    x += 3;
+    u4 x = 0;
+    x += 16;
     return x;
 }
