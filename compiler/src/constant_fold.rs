@@ -23,9 +23,8 @@ fn fold_stmt(stmt: Stmt) -> Stmt {
             ty,
             value: Box::new(fold_expr(*value)),
         },
-        Stmt::Assign { name, op, value } => Stmt::Assign {
+        Stmt::Assign { name, value } => Stmt::Assign {
             name,
-            op,
             value: Box::new(fold_expr(*value)),
         },
     }
