@@ -1,7 +1,168 @@
-use xenonc::ast::{Expr, Stmt};
+use xenonc::ast::{BinOp, Expr, Stmt, Type};
 use xenonc::lexer::lex;
 use xenonc::parser::Parser;
 use xenonc::tokens::Span;
+
+// ── Variable declarations ────────────────────────────────────────────────────
+
+#[test]
+fn parse_var_decl_produces_correct_name_type_and_value() {
+    let src = "fn f()->u32{u32 x = 5;}";
+    let tokens = lex(src).expect("lexing should succeed");
+    let mut parser = Parser::new(&tokens);
+    let program = parser.parse_program().expect("parsing should succeed");
+
+    match &program.functions[0].body[0] {
+        Stmt::VarDecl { name, ty, value } => {
+            assert_eq!(name, "x");
+            assert_eq!(*ty, Type::UInt(32));
+            assert!(matches!(value.as_ref(), Expr::Int(5)));
+        }
+        other => panic!("expected VarDecl, got {:?}", other),
+    }
+}
+
+#[test]
+fn parse_var_decl_accepts_signed_integer_type() {
+    let src = "fn f()->i32{i64 count = 0;}";
+    let tokens = lex(src).expect("lexing should succeed");
+    let mut parser = Parser::new(&tokens);
+    let program = parser.parse_program().expect("parsing should succeed");
+
+    match &program.functions[0].body[0] {
+        Stmt::VarDecl { name, ty, .. } => {
+            assert_eq!(name, "count");
+            assert_eq!(*ty, Type::Int(64));
+        }
+        other => panic!("expected VarDecl, got {:?}", other),
+    }
+}
+
+#[test]
+fn parse_var_decl_rejects_unknown_type() {
+    let src = "fn f()->u32{foo x = 1;}";
+    let tokens = lex(src).expect("lexing should succeed");
+    let mut parser = Parser::new(&tokens);
+    let err = parser
+        .parse_program()
+        .expect_err("parsing should fail on unknown type");
+
+    assert!(
+        err.message.contains("unknown type"),
+        "unexpected error: {}",
+        err.message
+    );
+}
+
+// ── Plain assignment ─────────────────────────────────────────────────────────
+
+#[test]
+fn parse_plain_assignment_produces_assign_stmt() {
+    let src = "fn f()->u32{x = 10;}";
+    let tokens = lex(src).expect("lexing should succeed");
+    let mut parser = Parser::new(&tokens);
+    let program = parser.parse_program().expect("parsing should succeed");
+
+    match &program.functions[0].body[0] {
+        Stmt::Assign { name, value } => {
+            assert_eq!(name, "x");
+            assert!(matches!(value.as_ref(), Expr::Int(10)));
+        }
+        other => panic!("expected Assign, got {:?}", other),
+    }
+}
+
+// ── Compound assignment desugaring ───────────────────────────────────────────
+
+fn parse_single_assign(src: &str) -> Stmt {
+    let tokens = lex(src).expect("lexing should succeed");
+    let mut parser = Parser::new(&tokens);
+    let mut program = parser.parse_program().expect("parsing should succeed");
+    program.functions.remove(0).body.remove(0)
+}
+
+fn assert_desugared(stmt: &Stmt, var: &str, expected_op: BinOp, rhs_val: i64) {
+    match stmt {
+        Stmt::Assign { name, value } => {
+            assert_eq!(name, var);
+            match value.as_ref() {
+                Expr::BinOp { lhs, op, rhs } => {
+                    assert!(matches!(lhs.as_ref(), Expr::Ident(s) if s == var));
+                    assert_eq!(*op, expected_op);
+                    assert!(matches!(rhs.as_ref(), Expr::Int(v) if *v == rhs_val));
+                }
+                other => panic!("expected BinOp in desugared value, got {:?}", other),
+            }
+        }
+        other => panic!("expected Assign stmt, got {:?}", other),
+    }
+}
+
+#[test]
+fn parse_compound_add_assign_desugars_to_binop() {
+    let stmt = parse_single_assign("fn f()->u32{x += 3;}");
+    assert_desugared(&stmt, "x", BinOp::Add, 3);
+}
+
+#[test]
+fn parse_compound_sub_assign_desugars_to_binop() {
+    let stmt = parse_single_assign("fn f()->u32{x -= 1;}");
+    assert_desugared(&stmt, "x", BinOp::Sub, 1);
+}
+
+#[test]
+fn parse_compound_mul_assign_desugars_to_binop() {
+    let stmt = parse_single_assign("fn f()->u32{x *= 2;}");
+    assert_desugared(&stmt, "x", BinOp::Mul, 2);
+}
+
+#[test]
+fn parse_compound_div_assign_desugars_to_binop() {
+    let stmt = parse_single_assign("fn f()->u32{x /= 4;}");
+    assert_desugared(&stmt, "x", BinOp::Div, 4);
+}
+
+#[test]
+fn parse_compound_mod_assign_desugars_to_binop() {
+    let stmt = parse_single_assign("fn f()->u32{x %= 7;}");
+    assert_desugared(&stmt, "x", BinOp::Mod, 7);
+}
+
+#[test]
+fn parse_compound_pow_assign_desugars_to_binop() {
+    let stmt = parse_single_assign("fn f()->u32{x **= 2;}");
+    assert_desugared(&stmt, "x", BinOp::Pow, 2);
+}
+
+#[test]
+fn parse_compound_bitand_assign_desugars_to_binop() {
+    let stmt = parse_single_assign("fn f()->u32{x &= 5;}");
+    assert_desugared(&stmt, "x", BinOp::BitwiseAnd, 5);
+}
+
+#[test]
+fn parse_compound_bitor_assign_desugars_to_binop() {
+    let stmt = parse_single_assign("fn f()->u32{x |= 5;}");
+    assert_desugared(&stmt, "x", BinOp::BitwiseOr, 5);
+}
+
+#[test]
+fn parse_compound_bitxor_assign_desugars_to_binop() {
+    let stmt = parse_single_assign("fn f()->u32{x ^= 5;}");
+    assert_desugared(&stmt, "x", BinOp::BitwiseXor, 5);
+}
+
+#[test]
+fn parse_compound_lshift_assign_desugars_to_binop() {
+    let stmt = parse_single_assign("fn f()->u32{x <<= 1;}");
+    assert_desugared(&stmt, "x", BinOp::LShift, 1);
+}
+
+#[test]
+fn parse_compound_rshift_assign_desugars_to_binop() {
+    let stmt = parse_single_assign("fn f()->u32{x >>= 1;}");
+    assert_desugared(&stmt, "x", BinOp::RShift, 1);
+}
 
 #[test]
 fn parse_program_parses_minimal_function() {
