@@ -150,10 +150,8 @@ impl<'ctx> CodeGen<'ctx> {
     }
 
     fn codegen_expr(&self, e: &Expr) -> CodegenResult<inkwell::values::IntValue<'ctx>> {
-        let i32t = self.context.i32_type();
-
         match e {
-            Expr::Int(v) => Ok(i32t.const_int(*v as u64, true)),
+            Expr::Int(v) => Ok(self.context.i64_type().const_int(*v as u64, true)),
             Expr::Ident(name) => {
                 let (ptr, ty) = self
                     .variables
@@ -182,12 +180,21 @@ impl<'ctx> CodeGen<'ctx> {
         lhs: inkwell::values::IntValue<'ctx>,
         rhs: inkwell::values::IntValue<'ctx>,
     ) -> CodegenResult<inkwell::values::IntValue<'ctx>> {
-        let i32t = self.context.i32_type();
+        // Normalize both operands to the narrower of the two types, truncating
+        // the larger operand (typically a literal) down to the variable's width.
+        let (lhs, rhs) = if lhs.get_type().get_bit_width() <= rhs.get_type().get_bit_width() {
+            let rhs = self.cast_int_to_type(rhs, lhs.get_type().into())?;
+            (lhs, rhs)
+        } else {
+            let lhs = self.cast_int_to_type(lhs, rhs.get_type().into())?;
+            (lhs, rhs)
+        };
+        let wt = lhs.get_type();
 
-        // Helper to zero-extend an i1 comparison result to i32.
-        let cmp_to_i32 = |cmp: inkwell::values::IntValue<'ctx>, name: &str| {
+        // Helper to zero-extend an i1 comparison result to the working type.
+        let cmp_to_wt = |cmp: inkwell::values::IntValue<'ctx>, name: &str| {
             self.builder
-                .build_int_z_extend(cmp, i32t, name)
+                .build_int_z_extend(cmp, wt, name)
                 .map_err(llvm_err!("build_int_z_extend"))
         };
 
@@ -216,8 +223,8 @@ impl<'ctx> CodeGen<'ctx> {
                 // Integer exponentiation via a countdown loop:
                 //   result = 1; while exp > 0 { result *= base; exp -= 1; }
                 // Negative exponents on integers always yield 1 (integer truncation).
-                let one = i32t.const_int(1, false);
-                let zero = i32t.const_int(0, false);
+                let one = wt.const_int(1, false);
+                let zero = wt.const_int(0, false);
 
                 let pre_block = self
                     .builder
@@ -241,11 +248,11 @@ impl<'ctx> CodeGen<'ctx> {
 
                 let result_phi = self
                     .builder
-                    .build_phi(i32t, "pow_result")
+                    .build_phi(wt, "pow_result")
                     .map_err(llvm_err!("build_phi"))?;
                 let exp_phi = self
                     .builder
-                    .build_phi(i32t, "pow_exp")
+                    .build_phi(wt, "pow_exp")
                     .map_err(llvm_err!("build_phi"))?;
 
                 let exp_val = exp_phi.as_basic_value().into_int_value();
@@ -287,42 +294,42 @@ impl<'ctx> CodeGen<'ctx> {
                     .builder
                     .build_int_compare(IntPredicate::EQ, lhs, rhs, "eq")
                     .map_err(llvm_err!("build_int_compare"))?;
-                cmp_to_i32(cmp, "eq_ext")
+                cmp_to_wt(cmp, "eq_ext")
             }
             BinOp::NotEq => {
                 let cmp = self
                     .builder
                     .build_int_compare(IntPredicate::NE, lhs, rhs, "ne")
                     .map_err(llvm_err!("build_int_compare"))?;
-                cmp_to_i32(cmp, "ne_ext")
+                cmp_to_wt(cmp, "ne_ext")
             }
             BinOp::Lt => {
                 let cmp = self
                     .builder
                     .build_int_compare(IntPredicate::SLT, lhs, rhs, "lt")
                     .map_err(llvm_err!("build_int_compare"))?;
-                cmp_to_i32(cmp, "lt_ext")
+                cmp_to_wt(cmp, "lt_ext")
             }
             BinOp::Gt => {
                 let cmp = self
                     .builder
                     .build_int_compare(IntPredicate::SGT, lhs, rhs, "gt")
                     .map_err(llvm_err!("build_int_compare"))?;
-                cmp_to_i32(cmp, "gt_ext")
+                cmp_to_wt(cmp, "gt_ext")
             }
             BinOp::LtEq => {
                 let cmp = self
                     .builder
                     .build_int_compare(IntPredicate::SLE, lhs, rhs, "le")
                     .map_err(llvm_err!("build_int_compare"))?;
-                cmp_to_i32(cmp, "le_ext")
+                cmp_to_wt(cmp, "le_ext")
             }
             BinOp::GtEq => {
                 let cmp = self
                     .builder
                     .build_int_compare(IntPredicate::SGE, lhs, rhs, "ge")
                     .map_err(llvm_err!("build_int_compare"))?;
-                cmp_to_i32(cmp, "ge_ext")
+                cmp_to_wt(cmp, "ge_ext")
             }
             BinOp::BitwiseAnd => self
                 .builder
@@ -338,7 +345,7 @@ impl<'ctx> CodeGen<'ctx> {
                 .map_err(llvm_err!("build_xor")),
             BinOp::LogicalAnd => {
                 // Logical AND: result is 1 if both lhs and rhs are non-zero
-                let zero = i32t.const_int(0, false);
+                let zero = wt.const_int(0, false);
                 let lhs_nonzero = self
                     .builder
                     .build_int_compare(IntPredicate::NE, lhs, zero, "lhs_nz")
@@ -351,11 +358,11 @@ impl<'ctx> CodeGen<'ctx> {
                     .builder
                     .build_and(lhs_nonzero, rhs_nonzero, "logical_and")
                     .map_err(llvm_err!("build_and"))?;
-                cmp_to_i32(result, "logical_and_ext")
+                cmp_to_wt(result, "logical_and_ext")
             }
             BinOp::LogicalOr => {
                 // Logical OR: result is 1 if either lhs or rhs is non-zero
-                let zero = i32t.const_int(0, false);
+                let zero = wt.const_int(0, false);
                 let lhs_nonzero = self
                     .builder
                     .build_int_compare(IntPredicate::NE, lhs, zero, "lhs_nz")
@@ -368,11 +375,11 @@ impl<'ctx> CodeGen<'ctx> {
                     .builder
                     .build_or(lhs_nonzero, rhs_nonzero, "logical_or")
                     .map_err(llvm_err!("build_or"))?;
-                cmp_to_i32(result, "logical_or_ext")
+                cmp_to_wt(result, "logical_or_ext")
             }
             BinOp::LogicalXor => {
                 // Logical XOR: result is 1 if exactly one of lhs or rhs is non-zero
-                let zero = i32t.const_int(0, false);
+                let zero = wt.const_int(0, false);
                 let lhs_nonzero = self
                     .builder
                     .build_int_compare(IntPredicate::NE, lhs, zero, "lhs_nz")
@@ -385,7 +392,7 @@ impl<'ctx> CodeGen<'ctx> {
                     .builder
                     .build_xor(lhs_nonzero, rhs_nonzero, "logical_xor")
                     .map_err(llvm_err!("build_xor"))?;
-                cmp_to_i32(result, "logical_xor_ext")
+                cmp_to_wt(result, "logical_xor_ext")
             }
             BinOp::LShift => self
                 .builder
@@ -411,14 +418,14 @@ impl<'ctx> CodeGen<'ctx> {
                 .map_err(llvm_err!("build_int_neg")),
             // Logical NOT: result is 1 if val is 0, else 0
             UnaryOp::Not => {
-                let i32t = self.context.i32_type();
-                let zero = i32t.const_int(0, false);
+                let ty = val.get_type();
+                let zero = ty.const_zero();
                 let is_zero = self
                     .builder
                     .build_int_compare(IntPredicate::EQ, val, zero, "is_zero")
                     .map_err(llvm_err!("build_int_compare"))?;
                 self.builder
-                    .build_int_z_extend(is_zero, i32t, "not_ext")
+                    .build_int_z_extend(is_zero, ty, "not_ext")
                     .map_err(llvm_err!("build_int_z_extend"))
             }
             // Bitwise complement: ~val
