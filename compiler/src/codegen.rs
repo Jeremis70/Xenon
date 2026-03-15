@@ -59,16 +59,23 @@ impl<'ctx> CodeGen<'ctx> {
     }
 
     pub fn compile_program(mut self, program: &Program) -> CodegenResult<Module<'ctx>> {
+        // Declare all functions
+        for f in &program.functions {
+            self.declare_function(f)?;
+        }
+        // Then compile function bodies
         for f in &program.functions {
             self.compile_function(f)?;
         }
         Ok(self.module)
     }
 
-    fn compile_function(&mut self, f: &Function) -> CodegenResult<FunctionValue<'ctx>> {
+    /// Registers a function signature without compiling yet
+    fn declare_function(&self, f: &Function) -> CodegenResult<FunctionValue<'ctx>> {
+        if let Some(existing) = self.module.get_function(&f.name) {
+            return Ok(existing);
+        }
         let ret_ty = self.llvm_type(&f.return_type.ty)?;
-
-        // Build the parameter type list for the LLVM function signature.
         let param_types: Vec<BasicTypeEnum> = f
             .params
             .iter()
@@ -76,9 +83,25 @@ impl<'ctx> CodeGen<'ctx> {
             .collect::<CodegenResult<_>>()?;
         let param_metadata: Vec<inkwell::types::BasicMetadataTypeEnum> =
             param_types.iter().map(|&t| t.into()).collect();
-
         let fn_ty = ret_ty.fn_type(&param_metadata, false);
-        let fn_val = self.module.add_function(&f.name, fn_ty, None);
+        Ok(self.module.add_function(&f.name, fn_ty, None))
+    }
+
+    fn compile_function(&mut self, f: &Function) -> CodegenResult<FunctionValue<'ctx>> {
+        // Reuse the forward declaration emitted by declare_function.
+        let fn_val = self
+            .module
+            .get_function(&f.name)
+            .expect("declare_function must be called before compile_function");
+
+        // Rebuild param types for the alloca loop below.
+        let param_types: Vec<BasicTypeEnum> = f
+            .params
+            .iter()
+            .map(|p| self.llvm_type(&p.ty))
+            .collect::<CodegenResult<_>>()?;
+
+        let ret_ty = self.llvm_type(&f.return_type.ty)?;
 
         let entry = self.context.append_basic_block(fn_val, "entry");
         self.builder.position_at_end(entry);
@@ -202,7 +225,7 @@ impl<'ctx> CodeGen<'ctx> {
                 let callee = self
                     .module
                     .get_function(name)
-                    .ok_or_else(|| CodegenError::UndefinedVariable { name: name.clone() })?;
+                    .ok_or_else(|| CodegenError::UndefinedFunction { name: name.clone() })?;
                 let compiled_args: Vec<inkwell::values::BasicMetadataValueEnum> = args
                     .iter()
                     .zip(callee.get_param_iter())
