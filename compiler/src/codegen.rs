@@ -67,13 +67,40 @@ impl<'ctx> CodeGen<'ctx> {
 
     fn compile_function(&mut self, f: &Function) -> CodegenResult<FunctionValue<'ctx>> {
         let ret_ty = self.llvm_type(&f.return_type.ty)?;
-        let fn_ty = ret_ty.fn_type(&[], false);
+
+        // Build the parameter type list for the LLVM function signature.
+        let param_types: Vec<BasicTypeEnum> = f
+            .params
+            .iter()
+            .map(|p| self.llvm_type(&p.ty))
+            .collect::<CodegenResult<_>>()?;
+        let param_metadata: Vec<inkwell::types::BasicMetadataTypeEnum> =
+            param_types.iter().map(|&t| t.into()).collect();
+
+        let fn_ty = ret_ty.fn_type(&param_metadata, false);
         let fn_val = self.module.add_function(&f.name, fn_ty, None);
 
         let entry = self.context.append_basic_block(fn_val, "entry");
         self.builder.position_at_end(entry);
 
         self.variables.clear();
+
+        // Allocate a stack slot for each parameter and store the incoming value.
+        for (i, param) in f.params.iter().enumerate() {
+            let llvm_ty = param_types[i];
+            let alloca = self
+                .builder
+                .build_alloca(llvm_ty, &param.name)
+                .map_err(llvm_err!("build_alloca (param)"))?;
+            let incoming = fn_val
+                .get_nth_param(i as u32)
+                .ok_or(CodegenError::InvalidIrState("missing param value"))?
+                .into_int_value();
+            self.builder
+                .build_store(alloca, incoming)
+                .map_err(llvm_err!("build_store (param)"))?;
+            self.variables.insert(param.name.clone(), (alloca, llvm_ty));
+        }
 
         // MVP body: must contain exactly one return
         for stmt in &f.body {
@@ -170,6 +197,31 @@ impl<'ctx> CodeGen<'ctx> {
             Expr::UnaryOp { op, operand } => {
                 let val = self.codegen_expr(operand)?;
                 self.codegen_unaryop(op, val)
+            }
+            Expr::Call { name, args } => {
+                let callee = self
+                    .module
+                    .get_function(name)
+                    .ok_or_else(|| CodegenError::UndefinedVariable { name: name.clone() })?;
+                let compiled_args: Vec<inkwell::values::BasicMetadataValueEnum> = args
+                    .iter()
+                    .zip(callee.get_param_iter())
+                    .map(|(arg_expr, param)| {
+                        let val = self.codegen_expr(arg_expr)?;
+                        let target = param.get_type();
+                        self.cast_int_to_type(val, target)
+                            .map(inkwell::values::BasicMetadataValueEnum::from)
+                    })
+                    .collect::<CodegenResult<_>>()?;
+                let call = self
+                    .builder
+                    .build_call(callee, &compiled_args, "call")
+                    .map_err(llvm_err!("build_call"))?;
+                let ret = call
+                    .try_as_basic_value()
+                    .basic()
+                    .ok_or(CodegenError::InvalidIrState("call returned void"))?;
+                Ok(ret.into_int_value())
             }
         }
     }

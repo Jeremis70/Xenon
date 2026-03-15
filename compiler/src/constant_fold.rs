@@ -66,6 +66,12 @@ fn fold_expr(expr: Expr) -> Expr {
         }
 
         Expr::Int(_) | Expr::Ident(_) => expr,
+
+        // Fold arguments but never fold the call itself away.
+        Expr::Call { name, args } => Expr::Call {
+            name,
+            args: args.into_iter().map(fold_expr).collect(),
+        },
     }
 }
 
