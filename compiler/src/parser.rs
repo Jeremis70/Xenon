@@ -256,12 +256,18 @@ impl<'a> Parser<'a> {
                     .int_value()
                     .expect("token kind guarantees Int variant"),
             )),
-            TokenKind::Ident => Ok(Expr::Ident(
-                token
+            TokenKind::Ident => {
+                let name = token
                     .ident_value()
                     .expect("token kind guarantees Ident variant")
-                    .to_string(),
-            )),
+                    .to_string();
+                // Peek for `(` to distinguish a call from a plain identifier.
+                if self.peek().is_some_and(|t| t.kind == TokenKind::LParen) {
+                    self.parse_call(name)
+                } else {
+                    Ok(Expr::Ident(name))
+                }
+            }
             TokenKind::LParen => {
                 let expr = self.parse_expression()?;
                 self.expect(TokenKind::RParen)?;
@@ -269,6 +275,22 @@ impl<'a> Parser<'a> {
             }
             _ => Err(self.error(format!("Unexpected token: {:?}", token.kind))),
         }
+    }
+
+    fn parse_call(&mut self, name: String) -> ParseResult<Expr> {
+        self.expect(TokenKind::LParen)?;
+        let mut args = Vec::new();
+        loop {
+            if self.peek().is_some_and(|t| t.kind == TokenKind::RParen) {
+                break;
+            }
+            if !args.is_empty() {
+                self.expect(TokenKind::Comma)?;
+            }
+            args.push(self.parse_expression()?);
+        }
+        self.expect(TokenKind::RParen)?;
+        Ok(Expr::Call { name, args })
     }
 
     fn parse_body(&mut self) -> ParseResult<Vec<Stmt>> {
