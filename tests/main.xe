@@ -1,7 +1,11 @@
 // Testing MVP for xenon programming language
 fn main()->u8
 {
-    u4 x = 0;
-    x += 16;
+    u32 x = add(20,25);
     return x;
+}
+
+fn add(u32 x,u32 y)->u32
+{
+    return x+y;
 }
