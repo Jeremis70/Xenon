@@ -92,6 +92,12 @@ pub enum Expr {
     // Variable reference
     Ident(String),
 
+    // Function call
+    Call {
+        name: String,
+        args: Vec<Expr>,
+    },
+
     // Arithmetic / logic
     BinOp {
         lhs: Box<Expr>,
