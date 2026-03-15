@@ -41,6 +41,8 @@ pub enum CodegenError {
     UnsupportedOperator { op: String, span: Span },
     #[error("undefined variable: `{name}`")]
     UndefinedVariable { name: String },
+    #[error("undefined function: `{name}`")]
+    UndefinedFunction { name: String },
     /// An inkwell builder call returned an error.
     #[error("LLVM builder error in `{operation}`: {message}")]
     LlvmBuilder {
