@@ -49,7 +49,11 @@ impl<'ctx> CodeGen<'ctx> {
     fn llvm_type(&self, ty: &crate::ast::Type) -> CodegenResult<BasicTypeEnum<'ctx>> {
         Ok(match ty {
             Type::Bool => self.context.bool_type().into(),
-            Type::Int(w) | Type::UInt(w) => self.context.custom_width_int_type(*w).into(),
+            Type::Int(w) | Type::UInt(w) => self
+                .context
+                .custom_width_int_type(std::num::NonZero::new(*w).expect("bit width is non-zero"))
+                .expect("custom_width_int_type failed")
+                .into(),
             Type::Float16 => self.context.f16_type().into(),
             Type::BFloat16 => self.context.bf16_type().into(),
             Type::Float32 => self.context.f32_type().into(),
@@ -226,6 +230,14 @@ impl<'ctx> CodeGen<'ctx> {
                     .module
                     .get_function(name)
                     .ok_or_else(|| CodegenError::UndefinedFunction { name: name.clone() })?;
+                let expected = callee.count_params() as usize;
+                if args.len() != expected {
+                    return Err(CodegenError::ArgumentCountMismatch {
+                        name: name.clone(),
+                        expected,
+                        got: args.len(),
+                    });
+                }
                 let compiled_args: Vec<inkwell::values::BasicMetadataValueEnum> = args
                     .iter()
                     .zip(callee.get_param_iter())
