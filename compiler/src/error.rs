@@ -43,6 +43,12 @@ pub enum CodegenError {
     UndefinedVariable { name: String },
     #[error("undefined function: `{name}`")]
     UndefinedFunction { name: String },
+    #[error("function `{name}` expects {expected} argument(s), got {got}")]
+    ArgumentCountMismatch {
+        name: String,
+        expected: usize,
+        got: usize,
+    },
     /// An inkwell builder call returned an error.
     #[error("LLVM builder error in `{operation}`: {message}")]
     LlvmBuilder {
