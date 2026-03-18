@@ -8,7 +8,7 @@ Xenon is a hobby systems programming language I’m building for fun and learnin
 - Compiler: `xenonc` (implemented in Rust)
 - Planned backend: LLVM IR (via `inkwell`)
 
-The language design/spec lives in [docs/xenon.md](docs/xenon.md).
+Information for the language in [docs/SUMMARY.md](docs/SUMMARY.md).
 
 ## Status
 
@@ -43,4 +43,4 @@ If you use the VS Code tasks in [.vscode/tasks.json](.vscode/tasks.json), note t
 ## License
 
 This project is licensed under the Mozilla Public License Version 2.0 (MPL-2.0).
-See [LICENSE](LICENSE).
+See [LICENSE](LICENSE)..
