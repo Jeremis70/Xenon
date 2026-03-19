@@ -8,7 +8,7 @@ Xenon is a hobby systems programming language I’m building for fun and learnin
 - Compiler: `xenonc` (implemented in Rust)
 - Planned backend: LLVM IR (via `inkwell`)
 
-Information for the language in [docs/SUMMARY.md](docs/SUMMARY.md).
+Language documentation is in [docs/SUMMARY.md](docs/SUMMARY.md).
 
 ## Status
 
