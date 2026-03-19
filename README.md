@@ -43,4 +43,4 @@ If you use the VS Code tasks in [.vscode/tasks.json](.vscode/tasks.json), note t
 ## License
 
 This project is licensed under the Mozilla Public License Version 2.0 (MPL-2.0).
-See [LICENSE](LICENSE)..
+See [LICENSE](LICENSE).
