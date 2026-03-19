@@ -262,3 +262,136 @@ fn parse_program_parses_return_ident() {
         other => panic!("Expected return statement, got {:?}", other),
     }
 }
+
+// ── Function calls ────────────────────────────────────────────────────────────
+
+#[test]
+fn parse_call_no_args() {
+    let src = "fn f()->u32{ return foo(); }";
+    let tokens = lex(src).expect("lexing should succeed");
+    let mut parser = Parser::new(&tokens);
+    let program = parser.parse_program().expect("parsing should succeed");
+
+    match &program.functions[0].body[0] {
+        Stmt::Return(expr) => match expr.as_ref() {
+            Expr::Call { name, args } => {
+                assert_eq!(name, "foo");
+                assert!(args.is_empty());
+            }
+            other => panic!("expected Call, got {:?}", other),
+        },
+        other => panic!("expected Return, got {:?}", other),
+    }
+}
+
+#[test]
+fn parse_call_single_arg() {
+    let src = "fn f()->u32{ return inc(1); }";
+    let tokens = lex(src).expect("lexing should succeed");
+    let mut parser = Parser::new(&tokens);
+    let program = parser.parse_program().expect("parsing should succeed");
+
+    match &program.functions[0].body[0] {
+        Stmt::Return(expr) => match expr.as_ref() {
+            Expr::Call { name, args } => {
+                assert_eq!(name, "inc");
+                assert_eq!(args.len(), 1);
+                assert!(matches!(args[0], Expr::Int(1)));
+            }
+            other => panic!("expected Call, got {:?}", other),
+        },
+        other => panic!("expected Return, got {:?}", other),
+    }
+}
+
+#[test]
+fn parse_call_multiple_args() {
+    let src = "fn f()->u32{ return add(1, 2, 3); }";
+    let tokens = lex(src).expect("lexing should succeed");
+    let mut parser = Parser::new(&tokens);
+    let program = parser.parse_program().expect("parsing should succeed");
+
+    match &program.functions[0].body[0] {
+        Stmt::Return(expr) => match expr.as_ref() {
+            Expr::Call { name, args } => {
+                assert_eq!(name, "add");
+                assert_eq!(args.len(), 3);
+                assert!(matches!(args[0], Expr::Int(1)));
+                assert!(matches!(args[1], Expr::Int(2)));
+                assert!(matches!(args[2], Expr::Int(3)));
+            }
+            other => panic!("expected Call, got {:?}", other),
+        },
+        other => panic!("expected Return, got {:?}", other),
+    }
+}
+
+#[test]
+fn parse_call_arg_can_be_expression() {
+    // Arguments are full expressions, not just literals.
+    let src = "fn f()->u32{ return twice(x + 1); }";
+    let tokens = lex(src).expect("lexing should succeed");
+    let mut parser = Parser::new(&tokens);
+    let program = parser.parse_program().expect("parsing should succeed");
+
+    match &program.functions[0].body[0] {
+        Stmt::Return(expr) => match expr.as_ref() {
+            Expr::Call { name, args } => {
+                assert_eq!(name, "twice");
+                assert_eq!(args.len(), 1);
+                assert!(matches!(&args[0], Expr::BinOp { op: BinOp::Add, .. }));
+            }
+            other => panic!("expected Call, got {:?}", other),
+        },
+        other => panic!("expected Return, got {:?}", other),
+    }
+}
+
+#[test]
+fn parse_call_as_rhs_of_var_decl() {
+    let src = "fn f()->u32{ u32 y = compute(5); return y; }";
+    let tokens = lex(src).expect("lexing should succeed");
+    let mut parser = Parser::new(&tokens);
+    let program = parser.parse_program().expect("parsing should succeed");
+
+    match &program.functions[0].body[0] {
+        Stmt::VarDecl { name, ty, value } => {
+            assert_eq!(name, "y");
+            assert_eq!(*ty, Type::UInt(32));
+            assert!(matches!(value.as_ref(), Expr::Call { name, .. } if name == "compute"));
+        }
+        other => panic!("expected VarDecl, got {:?}", other),
+    }
+}
+
+#[test]
+fn parse_multiple_functions_in_program() {
+    let src = "fn add(u32 a, u32 b)->u32{ return a; } fn main()->u32{ return add(1, 2); }";
+    let tokens = lex(src).expect("lexing should succeed");
+    let mut parser = Parser::new(&tokens);
+    let program = parser.parse_program().expect("parsing should succeed");
+
+    assert_eq!(program.functions.len(), 2);
+    assert_eq!(program.functions[0].name, "add");
+    assert_eq!(program.functions[0].params.len(), 2);
+    assert_eq!(program.functions[1].name, "main");
+    assert!(program.functions[1].params.is_empty());
+
+    match &program.functions[1].body[0] {
+        Stmt::Return(expr) => assert!(matches!(
+            expr.as_ref(),
+            Expr::Call { name, args } if name == "add" && args.len() == 2
+        )),
+        other => panic!("expected Return(Call), got {:?}", other),
+    }
+}
+
+#[test]
+fn parse_function_with_no_params_has_empty_params() {
+    let src = "fn f()->u32{ return 0; }";
+    let tokens = lex(src).expect("lexing should succeed");
+    let mut parser = Parser::new(&tokens);
+    let program = parser.parse_program().expect("parsing should succeed");
+
+    assert!(program.functions[0].params.is_empty());
+}
