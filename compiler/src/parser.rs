@@ -146,26 +146,22 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_typed_binding(
-        &self,
-        type_token: &Token,
-        name_token: &Token,
-    ) -> ParseResult<(Type, String)> {
+    fn parse_typed_binding(&self, type_token: &Token, name_token: &Token) -> ParseResult<Binding> {
         let ty = self.parse_type(type_token)?;
         let name = name_token.ident_value()?.to_string();
-        Ok((ty, name))
+        Ok(Binding {
+            name: Some(name),
+            ty,
+            default: None,
+        })
     }
 
     fn parse_var_decl(&mut self, type_token: &Token, name_token: &Token) -> ParseResult<Stmt> {
-        let (ty, name) = self.parse_typed_binding(type_token, name_token)?;
+        let mut binding = self.parse_typed_binding(type_token, name_token)?;
         self.expect(TokenKind::Eq)?;
-        let default = Some(Box::new(self.parse_expression()?));
+        binding.default = Some(Box::new(self.parse_expression()?));
         self.expect(TokenKind::Semicolon)?;
-        Ok(Stmt::VarDecl(Binding {
-            name: Some(name),
-            ty,
-            default,
-        }))
+        Ok(Stmt::VarDecl(binding))
     }
 
     fn parse_return_type(&mut self) -> ParseResult<Binding> {
@@ -191,12 +187,7 @@ impl<'a> Parser<'a> {
             }
             let type_token = self.expect(TokenKind::Ident)?;
             let name_token = self.expect(TokenKind::Ident)?;
-            let (ty, name) = self.parse_typed_binding(type_token, name_token)?;
-            params.push(Binding {
-                name: Some(name),
-                ty,
-                default: None,
-            });
+            params.push(self.parse_typed_binding(type_token, name_token)?);
         }
         Ok(params)
     }
