@@ -115,9 +115,10 @@ impl<'ctx> CodeGen<'ctx> {
         // Allocate a stack slot for each parameter and store the incoming value.
         for (i, param) in f.params.iter().enumerate() {
             let llvm_ty = param_types[i];
+            let param_name = param.name.as_deref().unwrap_or("");
             let alloca = self
                 .builder
-                .build_alloca(llvm_ty, &param.name)
+                .build_alloca(llvm_ty, param_name)
                 .map_err(llvm_err!("build_alloca (param)"))?;
             let incoming = fn_val
                 .get_nth_param(i as u32)
@@ -126,7 +127,8 @@ impl<'ctx> CodeGen<'ctx> {
             self.builder
                 .build_store(alloca, incoming)
                 .map_err(llvm_err!("build_store (param)"))?;
-            self.variables.insert(param.name.clone(), (alloca, llvm_ty));
+            self.variables
+                .insert(param.name.clone().unwrap_or_default(), (alloca, llvm_ty));
         }
 
         // MVP body: must contain exactly one return
@@ -142,14 +144,21 @@ impl<'ctx> CodeGen<'ctx> {
                     // Stop generating further instructions for this function body.
                     break;
                 }
-                Stmt::VarDecl { name, ty, value } => {
-                    let llvm_ty = self.llvm_type(ty)?;
+                Stmt::VarDecl(binding) => {
+                    let llvm_ty = self.llvm_type(&binding.ty)?;
+                    let var_name = binding.name.as_deref().unwrap_or("_");
                     let alloca = self
                         .builder
-                        .build_alloca(llvm_ty, name.as_str())
+                        .build_alloca(llvm_ty, var_name)
                         .map_err(llvm_err!("build_alloca"))?;
-                    self.variables.insert(name.clone(), (alloca, llvm_ty));
-                    let init_val = self.codegen_expr(value)?;
+                    self.variables
+                        .insert(binding.name.clone().unwrap_or_default(), (alloca, llvm_ty));
+                    let init_val = self.codegen_expr(
+                        binding
+                            .default
+                            .as_ref()
+                            .expect("VarDecl binding must have a default"),
+                    )?;
                     let init_val = self.cast_int_to_type(init_val, llvm_ty)?;
                     self.builder
                         .build_store(alloca, init_val)
