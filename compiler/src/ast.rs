@@ -228,7 +228,7 @@ impl UnaryOp {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Function {
     pub name: String,
     pub params: Vec<Binding>,
@@ -236,7 +236,7 @@ pub struct Function {
     pub body: Vec<Stmt>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Program {
     pub functions: Vec<Function>,
 }
