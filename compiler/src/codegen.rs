@@ -62,6 +62,13 @@ impl<'ctx> CodeGen<'ctx> {
         })
     }
 
+    fn collect_param_types(&self, f: &Function) -> CodegenResult<Vec<BasicTypeEnum<'ctx>>> {
+        f.params
+            .iter()
+            .map(|p| self.llvm_type(&p.ty))
+            .collect::<CodegenResult<_>>()
+    }
+
     pub fn compile_program(mut self, program: &Program) -> CodegenResult<Module<'ctx>> {
         // Declare all functions
         for f in &program.functions {
@@ -80,11 +87,7 @@ impl<'ctx> CodeGen<'ctx> {
             return Ok(existing);
         }
         let ret_ty = self.llvm_type(&f.return_type.ty)?;
-        let param_types: Vec<BasicTypeEnum> = f
-            .params
-            .iter()
-            .map(|p| self.llvm_type(&p.ty))
-            .collect::<CodegenResult<_>>()?;
+        let param_types: Vec<BasicTypeEnum> = self.collect_param_types(f)?;
         let param_metadata: Vec<inkwell::types::BasicMetadataTypeEnum> =
             param_types.iter().map(|&t| t.into()).collect();
         let fn_ty = ret_ty.fn_type(&param_metadata, false);
@@ -98,13 +101,7 @@ impl<'ctx> CodeGen<'ctx> {
             .get_function(&f.name)
             .expect("declare_function must be called before compile_function");
 
-        // Rebuild param types for the alloca loop below.
-        let param_types: Vec<BasicTypeEnum> = f
-            .params
-            .iter()
-            .map(|p| self.llvm_type(&p.ty))
-            .collect::<CodegenResult<_>>()?;
-
+        let param_types: Vec<BasicTypeEnum> = self.collect_param_types(f)?;
         let ret_ty = self.llvm_type(&f.return_type.ty)?;
 
         let entry = self.context.append_basic_block(fn_val, "entry");
