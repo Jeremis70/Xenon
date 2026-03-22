@@ -167,10 +167,16 @@ impl<'a> Parser<'a> {
     fn parse_return_type(&mut self) -> ParseResult<Binding> {
         let type_token = self.expect(TokenKind::Ident)?;
         let ty = self.parse_type(type_token)?;
-        Ok(Binding {
-            name: None,
-            ty,
-            default: None,
+        Ok(match self.peek() {
+            Some(t) if t.kind == TokenKind::Ident => {
+                let name_token = self.expect(TokenKind::Ident)?;
+                self.parse_typed_binding(type_token, name_token)?
+            }
+            _ => Binding {
+                name: None,
+                ty,
+                default: None,
+            },
         })
     }
 
