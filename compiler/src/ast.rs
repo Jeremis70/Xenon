@@ -67,15 +67,19 @@ impl FromStr for Type {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct Binding {
+    pub name: Option<String>,
+    pub ty: Type,
+    pub default: Option<Box<Expr>>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
     Return(Box<Expr>),
     Expr(Box<Expr>),
 
-    VarDecl {
-        name: String,
-        ty: Type,
-        value: Box<Expr>,
-    },
+    /// Variable declaration: `<type> <name> = <expr>;`
+    VarDecl(Binding),
     /// Assignment: `x = <value>`. Compound operators (`x += e`) are desugared
     /// by the parser into `x = x + e` before reaching this node.
     Assign {
@@ -224,26 +228,11 @@ impl UnaryOp {
     }
 }
 
-/// A single function parameter: `<type> <name>`.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Param {
-    pub name: String,
-    pub ty: Type,
-}
-
-/// The return type of a function, with an optional name for future named-return support.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ReturnType {
-    /// Named return value (e.g. `->u32 result`). Currently always `None`.
-    pub name: Option<String>,
-    pub ty: Type,
-}
-
 #[derive(Debug)]
 pub struct Function {
     pub name: String,
-    pub params: Vec<Param>,
-    pub return_type: ReturnType,
+    pub params: Vec<Binding>,
+    pub return_type: Binding,
     pub body: Vec<Stmt>,
 }
 
