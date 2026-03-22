@@ -1,4 +1,4 @@
-use crate::ast::{BinOp, Expr, Function, Param, Program, ReturnType, Stmt, Type, UnaryOp};
+use crate::ast::{BinOp, Binding, Expr, Function, Program, Stmt, Type, UnaryOp};
 use crate::error::{ParseError, ParseResult, TypeError};
 use crate::tokens::{Span, Token, TokenKind};
 
@@ -159,18 +159,26 @@ impl<'a> Parser<'a> {
     fn parse_var_decl(&mut self, type_token: &Token, name_token: &Token) -> ParseResult<Stmt> {
         let (ty, name) = self.parse_typed_binding(type_token, name_token)?;
         self.expect(TokenKind::Eq)?;
-        let value = Box::new(self.parse_expression()?);
+        let default = Some(Box::new(self.parse_expression()?));
         self.expect(TokenKind::Semicolon)?;
-        Ok(Stmt::VarDecl { name, ty, value })
+        Ok(Stmt::VarDecl(Binding {
+            name: Some(name),
+            ty,
+            default,
+        }))
     }
 
-    fn parse_return_type(&mut self) -> ParseResult<ReturnType> {
+    fn parse_return_type(&mut self) -> ParseResult<Binding> {
         let type_token = self.expect(TokenKind::Ident)?;
         let ty = self.parse_type(type_token)?;
-        Ok(ReturnType { name: None, ty })
+        Ok(Binding {
+            name: None,
+            ty,
+            default: None,
+        })
     }
 
-    fn parse_params(&mut self) -> ParseResult<Vec<Param>> {
+    fn parse_params(&mut self) -> ParseResult<Vec<Binding>> {
         let mut params = Vec::new();
         loop {
             match self.peek() {
@@ -184,7 +192,11 @@ impl<'a> Parser<'a> {
             let type_token = self.expect(TokenKind::Ident)?;
             let name_token = self.expect(TokenKind::Ident)?;
             let (ty, name) = self.parse_typed_binding(type_token, name_token)?;
-            params.push(Param { name, ty });
+            params.push(Binding {
+                name: Some(name),
+                ty,
+                default: None,
+            });
         }
         Ok(params)
     }
