@@ -1,4 +1,4 @@
-use crate::ast::{BinOp, Binding, Expr, Function, Program, Stmt, UnaryOp};
+use crate::frontend::ast::{BinOp, Binding, Expr, Function, Program, Stmt, UnaryOp};
 
 pub fn fold_constants(program: Program) -> Program {
     Program {

@@ -1,7 +1,7 @@
-use xenonc::ast::{BinOp, Binding, Expr, Stmt, Type};
-use xenonc::lexer::lex;
-use xenonc::parser::Parser;
-use xenonc::tokens::Span;
+use xenonc::frontend::ast::{BinOp, Binding, Expr, Stmt, Type};
+use xenonc::frontend::lexer::lex;
+use xenonc::frontend::parser::Parser;
+use xenonc::frontend::tokens::Span;
 
 // ── Variable declarations ────────────────────────────────────────────────────
 

@@ -1,4 +1,4 @@
-use crate::tokens::Span;
+use crate::frontend::tokens::Span;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[error("lexing error at {span:?}")]

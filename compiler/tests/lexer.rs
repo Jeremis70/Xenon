@@ -1,5 +1,5 @@
-use xenonc::lexer::lex;
-use xenonc::tokens::{Span, TokenKind};
+use xenonc::frontend::lexer::lex;
+use xenonc::frontend::tokens::{Span, TokenKind};
 
 #[test]
 fn lex_emits_kinds_and_spans_point_to_source() {

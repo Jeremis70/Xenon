@@ -1,7 +1,7 @@
 use clap::Parser;
 
-use xenonc::cli::Cli;
 use xenonc::driver;
+use xenonc::driver::cli::Cli;
 
 fn main() {
     let cli = Cli::parse();

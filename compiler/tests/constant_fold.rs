@@ -1,5 +1,5 @@
-use xenonc::ast::{BinOp, Binding, Expr, Function, Program, Stmt, Type, UnaryOp};
-use xenonc::constant_fold::fold_constants;
+use xenonc::frontend::ast::{BinOp, Binding, Expr, Function, Program, Stmt, Type, UnaryOp};
+use xenonc::middle::constant_fold::fold_constants;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
