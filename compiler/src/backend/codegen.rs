@@ -128,7 +128,26 @@ impl<'ctx> CodeGen<'ctx> {
                 .insert(param.name.clone().unwrap_or_default(), (alloca, llvm_ty));
         }
 
-        // MVP body: must contain exactly one return
+        // If the return type has a named binding (e.g. `-> u32 sum`), allocate a
+        // stack slot for it and zero-initialise it so that it can be used as a
+        // regular variable inside the body and returned implicitly.
+        if let Some(ret_name) = &f.return_type.name {
+            let BasicTypeEnum::IntType(int_ret_ty) = ret_ty else {
+                return Err(CodegenError::InvalidIrState(
+                    "named return variable is only supported for integer types",
+                ));
+            };
+            let alloca = self
+                .builder
+                .build_alloca(ret_ty, ret_name)
+                .map_err(llvm_err!("build_alloca (named return)"))?;
+            let zero = int_ret_ty.const_zero();
+            self.builder
+                .build_store(alloca, zero)
+                .map_err(llvm_err!("build_store (named return init)"))?;
+            self.variables.insert(ret_name.clone(), (alloca, ret_ty));
+        }
+
         for stmt in &f.body {
             match stmt {
                 Stmt::Return(inner) => {
@@ -177,6 +196,32 @@ impl<'ctx> CodeGen<'ctx> {
                     self.codegen_expr(expr)?;
                 }
             }
+        }
+
+        // If the body didn't end with an explicit `return` and the function
+        // has a named return variable, emit an implicit return of that variable.
+        let current_block = self
+            .builder
+            .get_insert_block()
+            .ok_or(CodegenError::InvalidIrState("no insert block after body"))?;
+        if current_block.get_terminator().is_none()
+            && let Some(ret_name) = &f.return_type.name
+        {
+            let &(ptr, ty) =
+                self.variables
+                    .get(ret_name.as_str())
+                    .ok_or(CodegenError::InvalidIrState(
+                        "named return variable missing from variable map",
+                    ))?;
+            let val = self
+                .builder
+                .build_load(ty, ptr, ret_name)
+                .map_err(llvm_err!("build_load (implicit return)"))?
+                .into_int_value();
+            let val = self.cast_int_to_type(val, ret_ty)?;
+            self.builder
+                .build_return(Some(&val))
+                .map_err(llvm_err!("build_return (implicit)"))?;
         }
 
         Ok(fn_val)
