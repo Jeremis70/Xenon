@@ -1,5 +1,5 @@
 use crate::error::TypeError;
-use crate::tokens::TokenKind;
+use crate::frontend::tokens::TokenKind;
 use std::str::FromStr;
 
 #[derive(Debug, Clone, PartialEq)]

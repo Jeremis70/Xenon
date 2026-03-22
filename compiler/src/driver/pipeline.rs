@@ -1,14 +1,14 @@
 use std::path::PathBuf;
 
-use crate::lexer::lex;
-use crate::parser::Parser;
-use crate::session::Session;
-use crate::tokens::Token;
+use crate::driver::session::Session;
+use crate::frontend::lexer::lex;
+use crate::frontend::parser::Parser;
+use crate::frontend::tokens::Token;
 
-use crate::codegen::{default_output_paths, emit_object_and_ir};
-use crate::link::link_executable;
+use crate::backend::codegen::{default_output_paths, emit_object_and_ir};
+use crate::backend::link::link_executable;
 
-use crate::constant_fold::fold_constants;
+use crate::middle::constant_fold::fold_constants;
 
 pub fn compile(session: &Session) -> i32 {
     let mut tokens: Vec<Token> = Vec::new();

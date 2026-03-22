@@ -1,6 +1,6 @@
-use xenonc::ast::{BinOp, Expr, Stmt, UnaryOp};
-use xenonc::lexer::lex;
-use xenonc::parser::Parser;
+use xenonc::frontend::ast::{BinOp, Expr, Stmt, UnaryOp};
+use xenonc::frontend::lexer::lex;
+use xenonc::frontend::parser::Parser;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 

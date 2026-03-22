@@ -1,13 +1,5 @@
-pub mod ast;
-pub mod cli;
-pub mod codegen;
-pub mod config;
-pub mod constant_fold;
+pub mod backend;
 pub mod driver;
 pub mod error;
-pub mod lexer;
-pub mod link;
-pub mod parser;
-pub mod pipeline;
-pub mod session;
-pub mod tokens;
+pub mod frontend;
+pub mod middle;

@@ -1,4 +1,4 @@
-use crate::config::{
+use crate::driver::config::{
     CheckConfig, CheckEmitKind, CodeModel, ColorChoice, CompileConfig, CompileEmitKind, CrateType,
     DebugInfo, Edition, ErrorFormat, LtoMode, OptLevel, RelocationModel, StopAfter,
 };

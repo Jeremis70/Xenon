@@ -1,6 +1,6 @@
-use crate::ast::{BinOp, Binding, Expr, Function, Program, Stmt, Type, UnaryOp};
 use crate::error::{ParseError, ParseResult, TypeError};
-use crate::tokens::{Span, Token, TokenKind};
+use crate::frontend::ast::{BinOp, Binding, Expr, Function, Program, Stmt, Type, UnaryOp};
+use crate::frontend::tokens::{Span, Token, TokenKind};
 
 pub struct Parser<'a> {
     tokens: &'a [Token],

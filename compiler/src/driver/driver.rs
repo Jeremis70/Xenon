@@ -1,7 +1,7 @@
-use crate::cli::{Cli, Commands, PrintKind};
-use crate::config::{CheckConfig, CompileConfig};
-use crate::pipeline::{check, compile};
-use crate::session::Session;
+use crate::driver::cli::{Cli, Commands, PrintKind};
+use crate::driver::config::{CheckConfig, CompileConfig};
+use crate::driver::pipeline::{check, compile};
+use crate::driver::session::Session;
 use std::path::Path;
 
 pub fn run(cli: Cli) -> i32 {

@@ -1,4 +1,4 @@
-use crate::cli;
+use crate::driver::cli;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]

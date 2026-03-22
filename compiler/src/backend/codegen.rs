@@ -1,4 +1,4 @@
-use crate::ast::Type;
+use crate::frontend::ast::Type;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -14,8 +14,8 @@ use inkwell::values::{FunctionValue, PointerValue};
 
 use inkwell::IntPredicate;
 
-use crate::ast::{BinOp, Expr, Function, Program, Stmt, UnaryOp};
 use crate::error::{CodegenError, CodegenResult};
+use crate::frontend::ast::{BinOp, Expr, Function, Program, Stmt, UnaryOp};
 
 /// Maps an inkwell builder error to [`CodegenError::LlvmBuilder`].
 macro_rules! llvm_err {
@@ -46,7 +46,7 @@ impl<'ctx> CodeGen<'ctx> {
         }
     }
 
-    fn llvm_type(&self, ty: &crate::ast::Type) -> CodegenResult<BasicTypeEnum<'ctx>> {
+    fn llvm_type(&self, ty: &crate::frontend::ast::Type) -> CodegenResult<BasicTypeEnum<'ctx>> {
         Ok(match ty {
             Type::Bool => self.context.bool_type().into(),
             Type::Int(w) | Type::UInt(w) => self
