@@ -1,4 +1,4 @@
-use xenonc::ast::{BinOp, Expr, Param, ReturnType, Stmt, Type};
+use xenonc::ast::{BinOp, Binding, Expr, Stmt, Type};
 use xenonc::lexer::lex;
 use xenonc::parser::Parser;
 use xenonc::tokens::Span;
@@ -13,10 +13,10 @@ fn parse_var_decl_produces_correct_name_type_and_value() {
     let program = parser.parse_program().expect("parsing should succeed");
 
     match &program.functions[0].body[0] {
-        Stmt::VarDecl { name, ty, value } => {
-            assert_eq!(name, "x");
-            assert_eq!(*ty, Type::UInt(32));
-            assert!(matches!(value.as_ref(), Expr::Int(5)));
+        Stmt::VarDecl(binding) => {
+            assert_eq!(binding.name.as_deref(), Some("x"));
+            assert_eq!(binding.ty, Type::UInt(32));
+            assert!(matches!(binding.default.as_deref(), Some(Expr::Int(5))));
         }
         other => panic!("expected VarDecl, got {:?}", other),
     }
@@ -30,9 +30,9 @@ fn parse_var_decl_accepts_signed_integer_type() {
     let program = parser.parse_program().expect("parsing should succeed");
 
     match &program.functions[0].body[0] {
-        Stmt::VarDecl { name, ty, .. } => {
-            assert_eq!(name, "count");
-            assert_eq!(*ty, Type::Int(64));
+        Stmt::VarDecl(binding) => {
+            assert_eq!(binding.name.as_deref(), Some("count"));
+            assert_eq!(binding.ty, Type::Int(64));
         }
         other => panic!("expected VarDecl, got {:?}", other),
     }
@@ -178,9 +178,10 @@ fn parse_program_parses_minimal_function() {
     assert!(function.params.is_empty());
     assert_eq!(
         function.return_type,
-        ReturnType {
+        Binding {
             name: None,
-            ty: Type::UInt(32)
+            ty: Type::UInt(32),
+            default: None,
         }
     );
     assert_eq!(function.body.len(), 1);
@@ -204,13 +205,15 @@ fn parse_function_with_parameters() {
     assert_eq!(
         function.params,
         vec![
-            Param {
-                name: "x".to_string(),
-                ty: Type::UInt(32)
+            Binding {
+                name: Some("x".to_string()),
+                ty: Type::UInt(32),
+                default: None,
             },
-            Param {
-                name: "y".to_string(),
-                ty: Type::UInt(64)
+            Binding {
+                name: Some("y".to_string()),
+                ty: Type::UInt(64),
+                default: None,
             },
         ]
     );
@@ -355,10 +358,12 @@ fn parse_call_as_rhs_of_var_decl() {
     let program = parser.parse_program().expect("parsing should succeed");
 
     match &program.functions[0].body[0] {
-        Stmt::VarDecl { name, ty, value } => {
-            assert_eq!(name, "y");
-            assert_eq!(*ty, Type::UInt(32));
-            assert!(matches!(value.as_ref(), Expr::Call { name, .. } if name == "compute"));
+        Stmt::VarDecl(binding) => {
+            assert_eq!(binding.name.as_deref(), Some("y"));
+            assert_eq!(binding.ty, Type::UInt(32));
+            assert!(
+                matches!(binding.default.as_deref(), Some(Expr::Call { name, .. }) if name == "compute")
+            );
         }
         other => panic!("expected VarDecl, got {:?}", other),
     }
