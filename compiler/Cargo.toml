@@ -12,16 +12,16 @@ logos = "0.16.1"
 thiserror = "2.0.18"
 
 [target.'cfg(windows)'.dependencies]
-inkwell = { git = "https://github.com/TheDan64/inkwell", branch = "master", features = [
+inkwell = { git = "https://github.com/TheDan64/inkwell", rev = "7f5895f414f6972c835d5b7ce6cd709a65a6d192", features = [
     "llvm22-1-force-dynamic",
 ] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-inkwell = { git = "https://github.com/TheDan64/inkwell", branch = "master", features = [
+inkwell = { git = "https://github.com/TheDan64/inkwell", rev = "7f5895f414f6972c835d5b7ce6cd709a65a6d192", features = [
     "llvm22-1",
 ] }
 
 [target.'cfg(all(not(windows), not(target_os = "macos")))'.dependencies]
-inkwell = { git = "https://github.com/TheDan64/inkwell", branch = "master", features = [
+inkwell = { git = "https://github.com/TheDan64/inkwell", rev = "7f5895f414f6972c835d5b7ce6cd709a65a6d192", features = [
     "llvm22-1",
 ] }
