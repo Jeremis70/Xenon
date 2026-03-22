@@ -1,4 +1,4 @@
-use crate::ast::{BinOp, Expr, Function, Program, Stmt, UnaryOp};
+use crate::ast::{BinOp, Binding, Expr, Function, Program, Stmt, UnaryOp};
 
 pub fn fold_constants(program: Program) -> Program {
     Program {
@@ -19,11 +19,10 @@ fn fold_stmt(stmt: Stmt) -> Stmt {
     match stmt {
         Stmt::Return(inner) => Stmt::Return(Box::new(fold_expr(*inner))),
         Stmt::Expr(inner) => Stmt::Expr(Box::new(fold_expr(*inner))),
-        Stmt::VarDecl { name, ty, value } => Stmt::VarDecl {
-            name,
-            ty,
-            value: Box::new(fold_expr(*value)),
-        },
+        Stmt::VarDecl(binding) => Stmt::VarDecl(Binding {
+            default: binding.default.map(|v| Box::new(fold_expr(*v))),
+            ..binding
+        }),
         Stmt::Assign { name, value } => Stmt::Assign {
             name,
             value: Box::new(fold_expr(*value)),
