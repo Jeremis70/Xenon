@@ -102,12 +102,12 @@ jobs:
       - name: Setup LLVM (Linux)
         uses: KyleMayes/install-llvm-action@v2
         with:
-          version: "21"
+          version: "22"
 
       - name: Configure LLVM env (Linux)
         shell: bash
         run: |
-          echo "LLVM_SYS_211_PREFIX=${LLVM_PATH}" >> "$GITHUB_ENV"
+          echo "LLVM_SYS_221_PREFIX=${LLVM_PATH}" >> "$GITHUB_ENV"
           echo "PATH=${LLVM_PATH}/bin:$PATH" >> "$GITHUB_ENV"
           echo "LD_LIBRARY_PATH=${LLVM_PATH}/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
 
@@ -184,13 +184,13 @@ jobs:
         if: runner.os != 'Windows'
         uses: KyleMayes/install-llvm-action@v2
         with:
-          version: "21"
+          version: "22"
 
       - name: Configure LLVM env (Linux)
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          echo "LLVM_SYS_211_PREFIX=${LLVM_PATH}" >> "$GITHUB_ENV"
+          echo "LLVM_SYS_221_PREFIX=${LLVM_PATH}" >> "$GITHUB_ENV"
           echo "PATH=${LLVM_PATH}/bin:$PATH" >> "$GITHUB_ENV"
           echo "LD_LIBRARY_PATH=${LLVM_PATH}/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
           echo "LIBCLANG_PATH=${LLVM_PATH}/lib" >> "$GITHUB_ENV"
@@ -201,7 +201,7 @@ jobs:
         run: |
           SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
 
-          echo "LLVM_SYS_211_PREFIX=${LLVM_PATH}" >> "$GITHUB_ENV"
+          echo "LLVM_SYS_221_PREFIX=${LLVM_PATH}" >> "$GITHUB_ENV"
           echo "PATH=${LLVM_PATH}/bin:$PATH" >> "$GITHUB_ENV"
           echo "LIBCLANG_PATH=${LLVM_PATH}/lib" >> "$GITHUB_ENV"
 
@@ -257,7 +257,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: msys2 {0}
         run: |
-          echo "LLVM_SYS_211_PREFIX=/mingw64" >> "$GITHUB_ENV"
+          echo "LLVM_SYS_221_PREFIX=/mingw64" >> "$GITHUB_ENV"
           echo "LIBCLANG_PATH=/mingw64/bin" >> "$GITHUB_ENV"
           echo "PKG_CONFIG_PATH=/mingw64/lib/pkgconfig" >> "$GITHUB_ENV"
 
@@ -329,13 +329,13 @@ jobs:
         if: runner.os != 'Windows'
         uses: KyleMayes/install-llvm-action@v2
         with:
-          version: "21"
+          version: "22"
 
       - name: Configure LLVM env (Linux)
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          echo "LLVM_SYS_211_PREFIX=${LLVM_PATH}" >> "$GITHUB_ENV"
+          echo "LLVM_SYS_221_PREFIX=${LLVM_PATH}" >> "$GITHUB_ENV"
           echo "PATH=${LLVM_PATH}/bin:$PATH" >> "$GITHUB_ENV"
           echo "LD_LIBRARY_PATH=${LLVM_PATH}/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
           echo "LIBCLANG_PATH=${LLVM_PATH}/lib" >> "$GITHUB_ENV"
@@ -346,7 +346,7 @@ jobs:
         run: |
           SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
 
-          echo "LLVM_SYS_211_PREFIX=${LLVM_PATH}" >> "$GITHUB_ENV"
+          echo "LLVM_SYS_221_PREFIX=${LLVM_PATH}" >> "$GITHUB_ENV"
           echo "PATH=${LLVM_PATH}/bin:$PATH" >> "$GITHUB_ENV"
           echo "LIBCLANG_PATH=${LLVM_PATH}/lib" >> "$GITHUB_ENV"
 
@@ -402,7 +402,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: msys2 {0}
         run: |
-          echo "LLVM_SYS_211_PREFIX=/mingw64" >> "$GITHUB_ENV"
+          echo "LLVM_SYS_221_PREFIX=/mingw64" >> "$GITHUB_ENV"
           echo "LIBCLANG_PATH=/mingw64/bin" >> "$GITHUB_ENV"
           echo "PKG_CONFIG_PATH=/mingw64/lib/pkgconfig" >> "$GITHUB_ENV"
 
@@ -450,12 +450,12 @@ jobs:
       - name: Setup LLVM (Linux)
         uses: KyleMayes/install-llvm-action@v2
         with:
-          version: "21"
+          version: "22"
 
       - name: Configure LLVM env (Linux)
         shell: bash
         run: |
-          echo "LLVM_SYS_211_PREFIX=${LLVM_PATH}" >> "$GITHUB_ENV"
+          echo "LLVM_SYS_221_PREFIX=${LLVM_PATH}" >> "$GITHUB_ENV"
           echo "PATH=${LLVM_PATH}/bin:$PATH" >> "$GITHUB_ENV"
           echo "LD_LIBRARY_PATH=${LLVM_PATH}/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
 

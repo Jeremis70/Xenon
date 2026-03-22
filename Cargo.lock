@@ -150,20 +150,19 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 [[package]]
 name = "inkwell"
 version = "0.8.0"
-source = "git+https://github.com/TheDan64/inkwell?branch=master#d20c58f320d1eee62911ce1a274ed32a6aa99861"
+source = "git+https://github.com/TheDan64/inkwell?rev=7f5895f414f6972c835d5b7ce6cd709a65a6d192#7f5895f414f6972c835d5b7ce6cd709a65a6d192"
 dependencies = [
  "bitflags",
  "inkwell_internals",
  "libc",
  "llvm-sys",
- "once_cell",
  "thiserror",
 ]
 
 [[package]]
 name = "inkwell_internals"
 version = "0.13.0"
-source = "git+https://github.com/TheDan64/inkwell?branch=master#d20c58f320d1eee62911ce1a274ed32a6aa99861"
+source = "git+https://github.com/TheDan64/inkwell?rev=7f5895f414f6972c835d5b7ce6cd709a65a6d192#7f5895f414f6972c835d5b7ce6cd709a65a6d192"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -239,12 +238,6 @@ name = "memchr"
 version = "2.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8ca58f447f06ed17d5fc4043ce1b10dd205e060fb3ce5b979b8ed8e59ff3f79"
-
-[[package]]
-name = "once_cell"
-version = "1.21.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "42f5e15c9953c5e4ccceeb2e7382a716482c34515315f7b03532b8b4e8393d2d"
 
 [[package]]
 name = "once_cell_polyfill"
