@@ -5,7 +5,7 @@ fn main()->u8
     return x;
 }
 
-fn add(u32 x,u32 y)->u32
+fn add(u32 x,u32 y)->u32 sum
 {
-    return x+y;
+    sum = x + y;
 }
