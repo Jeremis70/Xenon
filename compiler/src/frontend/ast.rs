@@ -86,6 +86,11 @@ pub enum Stmt {
         name: String,
         value: Box<Expr>,
     },
+    If {
+        condition: Box<Expr>,
+        then_branch: Vec<Stmt>,
+        else_branch: Option<Vec<Stmt>>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
