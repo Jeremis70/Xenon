@@ -415,20 +415,95 @@ impl<'ctx> CodeGen<'ctx> {
                 else_branch,
             } => {
                 let cond_val = self.codegen_expr(condition)?;
-                let then_val = self.codegen_expr(then_branch)?;
-                let else_val = self.codegen_expr(else_branch)?;
+                // Use the condition directly when it is already i1, otherwise
+                // emit icmp ne ..., zero to convert to a branch predicate.
+                let cond_i1 = if cond_val.get_type().get_bit_width() == 1 {
+                    cond_val
+                } else {
+                    let zero = cond_val.get_type().const_zero();
+                    self.builder
+                        .build_int_compare(IntPredicate::NE, cond_val, zero, "if_cond")
+                        .map_err(llvm_err!("build_int_compare"))?
+                };
 
-                // The condition is considered "true" if it's non-zero.
-                let zero = cond_val.get_type().const_zero();
-                let is_true = self
-                    .builder
-                    .build_int_compare(IntPredicate::NE, cond_val, zero, "if_cond")
-                    .map_err(llvm_err!("build_int_compare"))?;
+                // Lower to control flow so only the taken branch executes.
+                // This preserves side-effect semantics and avoids type mismatches
+                // in build_select when the two branches have different bit-widths.
+                let current_block =
+                    self.builder
+                        .get_insert_block()
+                        .ok_or(CodegenError::InvalidIrState(
+                            "no current basic block for if-expression",
+                        ))?;
+                let parent_fn = current_block
+                    .get_parent()
+                    .ok_or(CodegenError::InvalidIrState(
+                        "if-expression outside of function",
+                    ))?;
+
+                let then_bb = self.context.append_basic_block(parent_fn, "ife_then");
+                let else_bb = self.context.append_basic_block(parent_fn, "ife_else");
+                let merge_bb = self.context.append_basic_block(parent_fn, "ife_merge");
 
                 self.builder
-                    .build_select(is_true, then_val, else_val, "if_result")
-                    .map_err(llvm_err!("build_select"))
-                    .map(|v| v.into_int_value())
+                    .build_conditional_branch(cond_i1, then_bb, else_bb)
+                    .map_err(llvm_err!("build_conditional_branch"))?;
+
+                // Then branch
+                self.builder.position_at_end(then_bb);
+                let then_val_raw = self.codegen_expr(then_branch)?;
+                // Re-read the insert block: codegen_expr may have appended blocks.
+                let then_end_bb =
+                    self.builder
+                        .get_insert_block()
+                        .ok_or(CodegenError::InvalidIrState(
+                            "no block after then expression",
+                        ))?;
+
+                // Else branch — evaluate before emitting any branches so we
+                // know both widths and can pick the common type.
+                self.builder.position_at_end(else_bb);
+                let else_val_raw = self.codegen_expr(else_branch)?;
+                let else_end_bb =
+                    self.builder
+                        .get_insert_block()
+                        .ok_or(CodegenError::InvalidIrState(
+                            "no block after else expression",
+                        ))?;
+
+                // Cast both branches to the wider of the two types so the phi
+                // node is always well-typed, even when branches yield i64 literals
+                // and narrower variables.
+                let common_ty = if then_val_raw.get_type().get_bit_width()
+                    >= else_val_raw.get_type().get_bit_width()
+                {
+                    then_val_raw.get_type()
+                } else {
+                    else_val_raw.get_type()
+                };
+                // Emit the widening cast for `then` at the end of then_end_bb
+                // (before its branch terminator).
+                self.builder.position_at_end(then_end_bb);
+                let then_val = self.cast_int_to_type(then_val_raw, common_ty.into())?;
+                self.builder
+                    .build_unconditional_branch(merge_bb)
+                    .map_err(llvm_err!("build_unconditional_branch (ife then->merge)"))?;
+
+                // Emit the widening cast for `else` at the end of else_end_bb.
+                self.builder.position_at_end(else_end_bb);
+                let else_val = self.cast_int_to_type(else_val_raw, common_ty.into())?;
+                self.builder
+                    .build_unconditional_branch(merge_bb)
+                    .map_err(llvm_err!("build_unconditional_branch (ife else->merge)"))?;
+
+                // Merge block: phi picks the value from whichever branch ran.
+                self.builder.position_at_end(merge_bb);
+                let phi = self
+                    .builder
+                    .build_phi(common_ty.as_basic_type_enum(), "ife_result")
+                    .map_err(llvm_err!("build_phi"))?;
+                phi.add_incoming(&[(&then_val, then_end_bb), (&else_val, else_end_bb)]);
+                Ok(phi.as_basic_value().into_int_value())
             }
         }
     }
@@ -439,14 +514,34 @@ impl<'ctx> CodeGen<'ctx> {
         lhs: inkwell::values::IntValue<'ctx>,
         rhs: inkwell::values::IntValue<'ctx>,
     ) -> CodegenResult<inkwell::values::IntValue<'ctx>> {
-        // Normalize both operands to the narrower of the two types, truncating
-        // the larger operand (typically a literal) down to the variable's width.
-        let (lhs, rhs) = if lhs.get_type().get_bit_width() <= rhs.get_type().get_bit_width() {
-            let rhs = self.cast_int_to_type(rhs, lhs.get_type().into())?;
-            (lhs, rhs)
-        } else {
-            let lhs = self.cast_int_to_type(lhs, rhs.get_type().into())?;
-            (lhs, rhs)
+        // Normalize operand widths. When one side is i1 (the result of a
+        // comparison used in arithmetic like `(x == 0) + 2`), promote it to
+        // the other side's width so we never accidentally truncate an integer
+        // down to 1 bit. For all other mismatches we keep the existing rule of
+        // truncating the wider operand (typically a literal) to the variable's
+        // declared width.
+        let (lhs, rhs) = {
+            let lw = lhs.get_type().get_bit_width();
+            let rw = rhs.get_type().get_bit_width();
+            if lw == rw {
+                (lhs, rhs)
+            } else if lw == 1 {
+                // Boolean result on the left: promote it to the integer's width.
+                let lhs = self.cast_int_to_type(lhs, rhs.get_type().into())?;
+                (lhs, rhs)
+            } else if rw == 1 {
+                // Boolean result on the right: promote it to the integer's width.
+                let rhs = self.cast_int_to_type(rhs, lhs.get_type().into())?;
+                (lhs, rhs)
+            } else if lw <= rw {
+                // General rule: truncate the wider operand to the narrower type
+                // (the narrower side is typically the declared variable width).
+                let rhs = self.cast_int_to_type(rhs, lhs.get_type().into())?;
+                (lhs, rhs)
+            } else {
+                let lhs = self.cast_int_to_type(lhs, rhs.get_type().into())?;
+                (lhs, rhs)
+            }
         };
         let wt = lhs.get_type();
 
