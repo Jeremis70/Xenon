@@ -112,6 +112,11 @@ pub enum Expr {
         op: UnaryOp,
         operand: Box<Expr>,
     },
+    IfElse {
+        condition: Box<Expr>,
+        then_branch: Box<Expr>,
+        else_branch: Box<Expr>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]

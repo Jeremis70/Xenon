@@ -66,6 +66,17 @@ fn fold_expr(expr: Expr) -> Expr {
 
         Expr::Int(_) | Expr::Ident(_) => expr,
 
+        // Fold branches and condition but do not evaluate at compile time.
+        Expr::IfElse {
+            condition,
+            then_branch,
+            else_branch,
+        } => Expr::IfElse {
+            condition: Box::new(fold_expr(*condition)),
+            then_branch: Box::new(fold_expr(*then_branch)),
+            else_branch: Box::new(fold_expr(*else_branch)),
+        },
+
         // Fold arguments but never fold the call itself away.
         Expr::Call { name, args } => Expr::Call {
             name,
