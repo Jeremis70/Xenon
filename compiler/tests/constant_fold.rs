@@ -264,3 +264,98 @@ fn logical_ops_not_folded() {
         assert_eq!(fold(expr.clone()), expr);
     }
 }
+
+// ── If statement folding ──────────────────────────────────────────────────────
+
+/// Helper: build a Program that contains a single Stmt::If and run
+/// constant folding over it, returning the resulting Stmt.
+fn fold_if(condition: Expr, then_stmts: Vec<Stmt>, else_stmts: Option<Vec<Stmt>>) -> Stmt {
+    let program = Program {
+        functions: vec![Function {
+            name: "test".to_string(),
+            params: vec![],
+            return_type: Binding {
+                name: None,
+                ty: Type::Int(64),
+                default: None,
+            },
+            body: vec![Stmt::If {
+                condition: Box::new(condition),
+                then_branch: then_stmts,
+                else_branch: else_stmts,
+            }],
+        }],
+    };
+    fold_constants(program)
+        .functions
+        .into_iter()
+        .next()
+        .unwrap()
+        .body
+        .into_iter()
+        .next()
+        .unwrap()
+}
+
+#[test]
+fn fold_if_folds_constant_condition() {
+    // The condition itself is a constant expression and should be folded.
+    let condition = binop(int(1), BinOp::Add, int(1)); // 1 + 1 → 2
+    let result = fold_if(condition, vec![Stmt::Return(Box::new(int(0)))], None);
+    match result {
+        Stmt::If { condition, .. } => {
+            assert_eq!(*condition, int(2), "condition should fold to 2");
+        }
+        other => panic!("expected Stmt::If, got {:?}", other),
+    }
+}
+
+#[test]
+fn fold_if_folds_constant_exprs_inside_then_branch() {
+    let result = fold_if(
+        ident("x"),
+        vec![Stmt::Return(Box::new(binop(int(2), BinOp::Add, int(3))))],
+        None,
+    );
+    match result {
+        Stmt::If { then_branch, .. } => match &then_branch[0] {
+            Stmt::Return(expr) => assert_eq!(expr.as_ref(), &int(5)),
+            other => panic!("expected Return(5), got {:?}", other),
+        },
+        other => panic!("expected Stmt::If, got {:?}", other),
+    }
+}
+
+#[test]
+fn fold_if_folds_constant_exprs_inside_else_branch() {
+    let result = fold_if(
+        ident("x"),
+        vec![Stmt::Return(Box::new(int(0)))],
+        Some(vec![Stmt::Return(Box::new(binop(
+            int(3),
+            BinOp::Mul,
+            int(4),
+        )))]),
+    );
+    match result {
+        Stmt::If {
+            else_branch: Some(else_stmts),
+            ..
+        } => match &else_stmts[0] {
+            Stmt::Return(expr) => assert_eq!(expr.as_ref(), &int(12)),
+            other => panic!("expected Return(12), got {:?}", other),
+        },
+        other => panic!("expected Stmt::If with else branch, got {:?}", other),
+    }
+}
+
+#[test]
+fn fold_if_without_else_branch_preserves_none() {
+    let result = fold_if(ident("x"), vec![Stmt::Return(Box::new(int(1)))], None);
+    match result {
+        Stmt::If { else_branch, .. } => {
+            assert!(else_branch.is_none(), "else branch should remain None");
+        }
+        other => panic!("expected Stmt::If, got {:?}", other),
+    }
+}
