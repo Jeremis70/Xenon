@@ -27,6 +27,15 @@ fn fold_stmt(stmt: Stmt) -> Stmt {
             name,
             value: Box::new(fold_expr(*value)),
         },
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => Stmt::If {
+            condition: Box::new(fold_expr(*condition)),
+            then_branch: then_branch.into_iter().map(fold_stmt).collect(),
+            else_branch: else_branch.map(|branch| branch.into_iter().map(fold_stmt).collect()),
+        },
     }
 }
 
