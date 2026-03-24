@@ -400,3 +400,162 @@ fn parse_function_with_no_params_has_empty_params() {
 
     assert!(program.functions[0].params.is_empty());
 }
+
+// ── If statements ─────────────────────────────────────────────────────────────
+
+/// Helper: parse a Xenon source string and return the first statement of the
+/// first function body.
+fn parse_first_stmt(src: &str) -> Stmt {
+    let tokens = lex(src).expect("lexing should succeed");
+    let mut parser = Parser::new(&tokens);
+    let mut program = parser.parse_program().expect("parsing should succeed");
+    program.functions.remove(0).body.remove(0)
+}
+
+#[test]
+fn parse_if_only_produces_correct_ast() {
+    let stmt = parse_first_stmt("fn f()->u32{ if x { return 1; } }");
+    match stmt {
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            assert!(matches!(condition.as_ref(), Expr::Ident(s) if s == "x"));
+            assert_eq!(then_branch.len(), 1);
+            assert!(matches!(then_branch[0], Stmt::Return(_)));
+            assert!(else_branch.is_none());
+        }
+        other => panic!("expected Stmt::If, got {:?}", other),
+    }
+}
+
+#[test]
+fn parse_if_else_produces_both_branches() {
+    let stmt = parse_first_stmt("fn f()->u32{ if x { return 1; } else { return 2; } }");
+    match stmt {
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            assert!(matches!(condition.as_ref(), Expr::Ident(s) if s == "x"));
+            assert_eq!(then_branch.len(), 1);
+            let else_stmts = else_branch.expect("else branch should be present");
+            assert_eq!(else_stmts.len(), 1);
+            assert!(matches!(else_stmts[0], Stmt::Return(_)));
+        }
+        other => panic!("expected Stmt::If, got {:?}", other),
+    }
+}
+
+#[test]
+fn parse_else_if_is_nested_if_inside_else_branch() {
+    // `else if` must be represented as an Stmt::If nested inside the else branch.
+    let stmt = parse_first_stmt(
+        "fn f()->u32{ if x { return 1; } else if y { return 2; } else { return 3; } }",
+    );
+    match stmt {
+        Stmt::If { else_branch, .. } => {
+            let else_stmts = else_branch.expect("outer else branch should be present");
+            assert_eq!(
+                else_stmts.len(),
+                1,
+                "else branch should hold a single nested if"
+            );
+            assert!(
+                matches!(else_stmts[0], Stmt::If { .. }),
+                "else branch should contain Stmt::If for else-if chain"
+            );
+        }
+        other => panic!("expected Stmt::If, got {:?}", other),
+    }
+}
+
+#[test]
+fn parse_multiple_else_if_clauses_form_nested_chain() {
+    // `if a {} else if b {} else if c {} else {}` must produce a fully nested chain:
+    //   Stmt::If { else: Some([Stmt::If { else: Some([Stmt::If { else: Some([...]) }]) }]) }
+    let stmt = parse_first_stmt(
+        "fn f()->u32{ if a { return 1; } else if b { return 2; } else if c { return 3; } else { return 4; } }",
+    );
+    // Depth-0: outer if
+    let Stmt::If { else_branch, .. } = stmt else {
+        panic!("expected Stmt::If at depth 0");
+    };
+    let d0 = else_branch.expect("depth-0 else branch should be present");
+    assert_eq!(d0.len(), 1);
+
+    // Depth-1: first else-if
+    let Stmt::If { else_branch, .. } = &d0[0] else {
+        panic!("expected Stmt::If at depth 1");
+    };
+    let d1 = else_branch
+        .as_ref()
+        .expect("depth-1 else branch should be present");
+    assert_eq!(d1.len(), 1);
+
+    // Depth-2: second else-if, whose else branch is the final else block
+    let Stmt::If {
+        else_branch,
+        then_branch,
+        ..
+    } = &d1[0]
+    else {
+        panic!("expected Stmt::If at depth 2");
+    };
+    assert_eq!(
+        then_branch.len(),
+        1,
+        "depth-2 then branch should have one stmt"
+    );
+    let d2 = else_branch
+        .as_ref()
+        .expect("depth-2 else branch (the final else) should be present");
+    assert_eq!(d2.len(), 1, "final else branch should have one stmt");
+    assert!(matches!(d2[0], Stmt::Return(_)), "final else should return");
+}
+
+#[test]
+fn parse_if_condition_can_be_comparison_expr() {
+    let stmt = parse_first_stmt("fn f()->u32{ if x == 1 { return 0; } }");
+    match stmt {
+        Stmt::If { condition, .. } => {
+            assert!(
+                matches!(condition.as_ref(), Expr::BinOp { op: BinOp::Eq, .. }),
+                "condition should be an Eq comparison, got {:?}",
+                condition
+            );
+        }
+        other => panic!("expected Stmt::If, got {:?}", other),
+    }
+}
+
+#[test]
+fn parse_if_then_branch_can_have_multiple_statements() {
+    let stmt = parse_first_stmt("fn f()->u32{ if x { u32 a = 1; u32 b = 2; return a; } }");
+    match stmt {
+        Stmt::If { then_branch, .. } => {
+            assert_eq!(then_branch.len(), 3);
+            assert!(matches!(then_branch[0], Stmt::VarDecl(_)));
+            assert!(matches!(then_branch[1], Stmt::VarDecl(_)));
+            assert!(matches!(then_branch[2], Stmt::Return(_)));
+        }
+        other => panic!("expected Stmt::If, got {:?}", other),
+    }
+}
+
+#[test]
+fn parse_if_without_else_and_without_closing_brace_is_error() {
+    let src = "fn f()->u32{ if x { return 1; }";
+    let tokens = lex(src).expect("lexing should succeed");
+    let mut parser = Parser::new(&tokens);
+    // The function body's closing `}` is missing — parsing must not succeed.
+    // (The `if` block's `}` is consumed as the if body; the outer `}` is then absent.)
+    let result = parser.parse_program();
+    assert!(
+        result.is_err(),
+        "expected parse error for missing closing brace, got {:?}",
+        result
+    );
+}
