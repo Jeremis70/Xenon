@@ -42,7 +42,6 @@ pub enum TokenKind {
     // Keywords
     Fn,
     Return,
-    ElseIf,
     If,
     Else,
     While,
@@ -155,8 +154,6 @@ enum RawKind {
     Fn,
     #[token("return")]
     Return,
-    #[token("else if")]
-    ElseIf,
     #[token("if")]
     If,
     #[token("else")]
@@ -307,7 +304,6 @@ fn into_token_parts(raw: RawKind) -> (TokenKind, Option<TokenValue>) {
     match raw {
         RawKind::Fn => (TokenKind::Fn, None),
         RawKind::Return => (TokenKind::Return, None),
-        RawKind::ElseIf => (TokenKind::ElseIf, None),
         RawKind::If => (TokenKind::If, None),
         RawKind::Else => (TokenKind::Else, None),
         RawKind::While => (TokenKind::While, None),

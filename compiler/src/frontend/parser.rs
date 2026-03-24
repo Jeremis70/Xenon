@@ -212,19 +212,21 @@ impl<'a> Parser<'a> {
         self.expect(TokenKind::LBrace)?;
         let then_branch = self.parse_body()?;
         self.expect(TokenKind::RBrace)?;
-        let else_branch = match self.peek().map(|t| t.kind) {
-            Some(TokenKind::ElseIf) => {
-                self.expect(TokenKind::ElseIf)?;
+        let else_branch = if self.peek().is_some_and(|t| t.kind == TokenKind::Else) {
+            self.expect(TokenKind::Else)?;
+            // `else if` — consume the `if` and recurse into a nested if statement.
+            // This works regardless of the whitespace between `else` and `if`.
+            if self.peek().is_some_and(|t| t.kind == TokenKind::If) {
+                self.expect(TokenKind::If)?;
                 Some(vec![self.parse_if()?])
-            }
-            Some(TokenKind::Else) => {
-                self.expect(TokenKind::Else)?;
+            } else {
                 self.expect(TokenKind::LBrace)?;
                 let stmts = self.parse_body()?;
                 self.expect(TokenKind::RBrace)?;
                 Some(stmts)
             }
-            _ => None,
+        } else {
+            None
         };
 
         Ok(Stmt::If {
