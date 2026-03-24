@@ -16,8 +16,10 @@ fn lbp(kind: &TokenKind) -> Option<u8> {
         TokenKind::LShift | TokenKind::RShift => Some(17),
         TokenKind::Plus | TokenKind::Minus => Some(19),
         TokenKind::Star | TokenKind::Slash | TokenKind::Percent => Some(21),
-        // Right associative operator: left_bp > right_bp
+        // right-associative: left_bp > right_bp
         TokenKind::Pow => Some(24),
+        // ternary `x if c else y` — looser than all binary operators
+        TokenKind::If => Some(0),
         _ => None,
     }
 }
@@ -319,7 +321,7 @@ impl<'a> Parser<'a> {
                 }
             }
             TokenKind::LParen => {
-                let expr = self.parse_expr(0)?;
+                let expr = self.parse_expression()?;
                 self.expect(TokenKind::RParen)?;
                 Ok(expr)
             }
@@ -328,16 +330,31 @@ impl<'a> Parser<'a> {
     }
 
     /// Left-denotation: handles tokens that continue an expression
+    /// (binary infix operators and the `x if c else y` ternary).
     fn led(&mut self, left: Expr, token: &'a Token) -> ParseResult<Expr> {
-        {
-            let (r_bp, op) = infix_op(&token.kind)
-                .ok_or_else(|| self.error(format!("not an infix operator: {:?}", token.kind)))?;
-            let right = self.parse_expr(r_bp)?;
-            Ok(Expr::BinOp {
-                lhs: Box::new(left),
-                op,
-                rhs: Box::new(right),
-            })
+        match token.kind {
+            // `<then> if <condition> else <else>`
+            TokenKind::If => {
+                let condition = self.parse_expression()?;
+                self.expect(TokenKind::Else)?;
+                let else_branch = self.parse_expression()?;
+                Ok(Expr::IfElse {
+                    condition: Box::new(condition),
+                    then_branch: Box::new(left),
+                    else_branch: Box::new(else_branch),
+                })
+            }
+            _ => {
+                let (r_bp, op) = infix_op(&token.kind).ok_or_else(|| {
+                    self.error(format!("not an infix operator: {:?}", token.kind))
+                })?;
+                let right = self.parse_expr(r_bp)?;
+                Ok(Expr::BinOp {
+                    lhs: Box::new(left),
+                    op,
+                    rhs: Box::new(right),
+                })
+            }
         }
     }
 
