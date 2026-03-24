@@ -1,4 +1,12 @@
 use xenonc::frontend::ast::{BinOp, Expr, Stmt, UnaryOp};
+
+fn ternary(then_branch: Expr, condition: Expr, else_branch: Expr) -> Expr {
+    Expr::IfElse {
+        condition: Box::new(condition),
+        then_branch: Box::new(then_branch),
+        else_branch: Box::new(else_branch),
+    }
+}
 use xenonc::frontend::lexer::lex;
 use xenonc::frontend::parser::Parser;
 
@@ -602,5 +610,58 @@ fn parens_force_unary_neg_before_pow() {
     assert_eq!(
         parse_expr("(-2) ** 3"),
         binop(unary(UnaryOp::Neg, int(2)), BinOp::Pow, int(3))
+    );
+}
+
+// ── Ternary `x if c else y` ───────────────────────────────────────────────────
+
+/// `1 if 0 else 2`  →  `IfElse { then: 1, condition: 0, else: 2 }`
+#[test]
+fn ternary_basic() {
+    assert_eq!(parse_expr("1 if 0 else 2"), ternary(int(1), int(0), int(2)));
+}
+
+/// `1 + 2 if 0 else 3`  →  `(1 + 2) if 0 else 3`  (add binds tighter than if)
+#[test]
+fn binop_then_branch_binds_tighter_than_if() {
+    assert_eq!(
+        parse_expr("1 + 2 if 0 else 3"),
+        ternary(binop(int(1), BinOp::Add, int(2)), int(0), int(3))
+    );
+}
+
+/// `1 if 0 else 2 + 3`  →  `1 if 0 else (2 + 3)`  (add binds tighter than if)
+#[test]
+fn binop_else_branch_binds_tighter_than_if() {
+    assert_eq!(
+        parse_expr("1 if 0 else 2 + 3"),
+        ternary(int(1), int(0), binop(int(2), BinOp::Add, int(3)))
+    );
+}
+
+/// `1 if 2 + 3 else 4`  →  `1 if (2 + 3) else 4`  (add binds tighter than if)
+#[test]
+fn binop_condition_binds_tighter_than_if() {
+    assert_eq!(
+        parse_expr("1 if 2 + 3 else 4"),
+        ternary(int(1), binop(int(2), BinOp::Add, int(3)), int(4))
+    );
+}
+
+/// `1 if 0 else 2 if 3 else 4`  →  `1 if 0 else (2 if 3 else 4)`  (right-associative)
+#[test]
+fn ternary_is_right_associative_on_else() {
+    assert_eq!(
+        parse_expr("1 if 0 else 2 if 3 else 4"),
+        ternary(int(1), int(0), ternary(int(2), int(3), int(4)))
+    );
+}
+
+/// `1 || 2 if 0 else 3`  →  `(1 || 2) if 0 else 3`  (|| binds tighter than if)
+#[test]
+fn logical_or_binds_tighter_than_if() {
+    assert_eq!(
+        parse_expr("1 || 2 if 0 else 3"),
+        ternary(binop(int(1), BinOp::LogicalOr, int(2)), int(0), int(3))
     );
 }
