@@ -149,52 +149,10 @@ impl<'ctx> CodeGen<'ctx> {
         }
 
         for stmt in &f.body {
-            match stmt {
-                Stmt::Return(inner) => {
-                    let value = self.codegen_expr(inner)?;
-                    let value = self.cast_int_to_type(value, ret_ty)?;
-                    self.builder
-                        .build_return(Some(&value))
-                        .map_err(llvm_err!("build_return"))?;
-                    // After emitting a return, the current basic block is terminated.
-                    // Stop generating further instructions for this function body.
-                    break;
-                }
-                Stmt::VarDecl(binding) => {
-                    let llvm_ty = self.llvm_type(&binding.ty)?;
-                    let var_name = binding.name.as_deref().unwrap_or("_");
-                    let alloca = self
-                        .builder
-                        .build_alloca(llvm_ty, var_name)
-                        .map_err(llvm_err!("build_alloca"))?;
-                    self.variables
-                        .insert(binding.name.clone().unwrap_or_default(), (alloca, llvm_ty));
-                    let init_val = self.codegen_expr(
-                        binding
-                            .default
-                            .as_ref()
-                            .expect("VarDecl binding must have a default"),
-                    )?;
-                    let init_val = self.cast_int_to_type(init_val, llvm_ty)?;
-                    self.builder
-                        .build_store(alloca, init_val)
-                        .map_err(llvm_err!("build_store"))?;
-                }
-                Stmt::Assign { name, value } => {
-                    let (var_ptr, var_ty) = *self
-                        .variables
-                        .get(name)
-                        .ok_or_else(|| CodegenError::UndefinedVariable { name: name.clone() })?;
-
-                    let val = self.codegen_expr(value)?;
-                    let val = self.cast_int_to_type(val, var_ty)?;
-                    self.builder
-                        .build_store(var_ptr, val)
-                        .map_err(llvm_err!("build_store"))?;
-                }
-                Stmt::Expr(expr) => {
-                    self.codegen_expr(expr)?;
-                }
+            // compile_stmt returns true when the current block has been terminated
+            // (e.g. a return was emitted); stop processing the remaining statements.
+            if self.compile_stmt(stmt, fn_val, ret_ty)? {
+                break;
             }
         }
 
@@ -225,6 +183,148 @@ impl<'ctx> CodeGen<'ctx> {
         }
 
         Ok(fn_val)
+    }
+
+    /// Compiles a single statement. Returns `true` when the current basic block
+    /// has been terminated (a `return` was emitted), signalling the caller to
+    /// stop processing further statements in the same scope.
+    fn compile_stmt(
+        &mut self,
+        stmt: &Stmt,
+        fn_val: FunctionValue<'ctx>,
+        ret_ty: BasicTypeEnum<'ctx>,
+    ) -> CodegenResult<bool> {
+        match stmt {
+            Stmt::Return(inner) => {
+                let value = self.codegen_expr(inner)?;
+                let value = self.cast_int_to_type(value, ret_ty)?;
+                self.builder
+                    .build_return(Some(&value))
+                    .map_err(llvm_err!("build_return"))?;
+                Ok(true)
+            }
+            Stmt::VarDecl(binding) => {
+                let llvm_ty = self.llvm_type(&binding.ty)?;
+                let var_name = binding.name.as_deref().unwrap_or("_");
+                let alloca = self
+                    .builder
+                    .build_alloca(llvm_ty, var_name)
+                    .map_err(llvm_err!("build_alloca"))?;
+                self.variables
+                    .insert(binding.name.clone().unwrap_or_default(), (alloca, llvm_ty));
+                let init_val = self.codegen_expr(
+                    binding
+                        .default
+                        .as_ref()
+                        .expect("VarDecl binding must have a default"),
+                )?;
+                let init_val = self.cast_int_to_type(init_val, llvm_ty)?;
+                self.builder
+                    .build_store(alloca, init_val)
+                    .map_err(llvm_err!("build_store"))?;
+                Ok(false)
+            }
+            Stmt::Assign { name, value } => {
+                let (var_ptr, var_ty) = *self
+                    .variables
+                    .get(name)
+                    .ok_or_else(|| CodegenError::UndefinedVariable { name: name.clone() })?;
+                let val = self.codegen_expr(value)?;
+                let val = self.cast_int_to_type(val, var_ty)?;
+                self.builder
+                    .build_store(var_ptr, val)
+                    .map_err(llvm_err!("build_store"))?;
+                Ok(false)
+            }
+            Stmt::Expr(expr) => {
+                self.codegen_expr(expr)?;
+                Ok(false)
+            }
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                let cond_val = self.codegen_expr(condition)?;
+                // If the condition is already a 1-bit integer (e.g. the result of a
+                // comparison), use it directly; otherwise treat non-zero as true.
+                let is_true = if cond_val.get_type().get_bit_width() == 1 {
+                    cond_val
+                } else {
+                    let zero = cond_val.get_type().const_zero();
+                    self.builder
+                        .build_int_compare(IntPredicate::NE, cond_val, zero, "if_cond")
+                        .map_err(llvm_err!("build_int_compare"))?
+                };
+
+                let then_block = self.context.append_basic_block(fn_val, "then");
+                let else_block = self.context.append_basic_block(fn_val, "else");
+                let merge_block = self.context.append_basic_block(fn_val, "if_merge");
+
+                self.builder
+                    .build_conditional_branch(is_true, then_block, else_block)
+                    .map_err(llvm_err!("build_conditional_branch"))?;
+
+                // Then branch
+                self.builder.position_at_end(then_block);
+                for s in then_branch {
+                    if self.compile_stmt(s, fn_val, ret_ty)? {
+                        break;
+                    }
+                }
+                let then_falls_through = self
+                    .builder
+                    .get_insert_block()
+                    .ok_or(CodegenError::InvalidIrState(
+                        "no insert block after then branch",
+                    ))?
+                    .get_terminator()
+                    .is_none();
+                if then_falls_through {
+                    self.builder
+                        .build_unconditional_branch(merge_block)
+                        .map_err(llvm_err!("build_unconditional_branch (then->merge)"))?;
+                }
+
+                // Else branch
+                self.builder.position_at_end(else_block);
+                if let Some(else_stmts) = else_branch {
+                    for s in else_stmts {
+                        if self.compile_stmt(s, fn_val, ret_ty)? {
+                            break;
+                        }
+                    }
+                }
+                let else_falls_through = self
+                    .builder
+                    .get_insert_block()
+                    .ok_or(CodegenError::InvalidIrState(
+                        "no insert block after else branch",
+                    ))?
+                    .get_terminator()
+                    .is_none();
+                if else_falls_through {
+                    self.builder
+                        .build_unconditional_branch(merge_block)
+                        .map_err(llvm_err!("build_unconditional_branch (else->merge)"))?;
+                }
+
+                // If no branch falls through to the merge block, it is unreachable.
+                // Remove it and report the current block as terminated so the caller
+                // stops emitting instructions into this scope.
+                if !then_falls_through && !else_falls_through {
+                    // Safety: merge_block was just created above and has no uses.
+                    unsafe { merge_block.delete() }.map_err(|()| {
+                        CodegenError::InvalidIrState("failed to delete dead merge block")
+                    })?;
+                    return Ok(true);
+                }
+
+                // Continue from the merge block
+                self.builder.position_at_end(merge_block);
+                Ok(false)
+            }
+        }
     }
 
     /// Casts `val` to `target` via truncation or zero-extension as needed.
