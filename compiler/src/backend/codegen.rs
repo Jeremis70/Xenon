@@ -309,6 +309,27 @@ impl<'ctx> CodeGen<'ctx> {
                     .ok_or(CodegenError::InvalidIrState("call returned void"))?;
                 Ok(ret.into_int_value())
             }
+            Expr::IfElse {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                let cond_val = self.codegen_expr(condition)?;
+                let then_val = self.codegen_expr(then_branch)?;
+                let else_val = self.codegen_expr(else_branch)?;
+
+                // The condition is considered "true" if it's non-zero.
+                let zero = cond_val.get_type().const_zero();
+                let is_true = self
+                    .builder
+                    .build_int_compare(IntPredicate::NE, cond_val, zero, "if_cond")
+                    .map_err(llvm_err!("build_int_compare"))?;
+
+                self.builder
+                    .build_select(is_true, then_val, else_val, "if_result")
+                    .map_err(llvm_err!("build_select"))
+                    .map(|v| v.into_int_value())
+            }
         }
     }
 
