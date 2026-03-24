@@ -450,13 +450,6 @@ impl<'ctx> CodeGen<'ctx> {
         };
         let wt = lhs.get_type();
 
-        // Helper to zero-extend an i1 comparison result to the working type.
-        let cmp_to_wt = |cmp: inkwell::values::IntValue<'ctx>, name: &str| {
-            self.builder
-                .build_int_z_extend(cmp, wt, name)
-                .map_err(llvm_err!("build_int_z_extend"))
-        };
-
         match op {
             BinOp::Add => self
                 .builder
@@ -548,48 +541,31 @@ impl<'ctx> CodeGen<'ctx> {
 
                 Ok(result_phi.as_basic_value().into_int_value())
             }
-            BinOp::Eq => {
-                let cmp = self
-                    .builder
-                    .build_int_compare(IntPredicate::EQ, lhs, rhs, "eq")
-                    .map_err(llvm_err!("build_int_compare"))?;
-                cmp_to_wt(cmp, "eq_ext")
-            }
-            BinOp::NotEq => {
-                let cmp = self
-                    .builder
-                    .build_int_compare(IntPredicate::NE, lhs, rhs, "ne")
-                    .map_err(llvm_err!("build_int_compare"))?;
-                cmp_to_wt(cmp, "ne_ext")
-            }
-            BinOp::Lt => {
-                let cmp = self
-                    .builder
-                    .build_int_compare(IntPredicate::SLT, lhs, rhs, "lt")
-                    .map_err(llvm_err!("build_int_compare"))?;
-                cmp_to_wt(cmp, "lt_ext")
-            }
-            BinOp::Gt => {
-                let cmp = self
-                    .builder
-                    .build_int_compare(IntPredicate::SGT, lhs, rhs, "gt")
-                    .map_err(llvm_err!("build_int_compare"))?;
-                cmp_to_wt(cmp, "gt_ext")
-            }
-            BinOp::LtEq => {
-                let cmp = self
-                    .builder
-                    .build_int_compare(IntPredicate::SLE, lhs, rhs, "le")
-                    .map_err(llvm_err!("build_int_compare"))?;
-                cmp_to_wt(cmp, "le_ext")
-            }
-            BinOp::GtEq => {
-                let cmp = self
-                    .builder
-                    .build_int_compare(IntPredicate::SGE, lhs, rhs, "ge")
-                    .map_err(llvm_err!("build_int_compare"))?;
-                cmp_to_wt(cmp, "ge_ext")
-            }
+
+            BinOp::Eq => self
+                .builder
+                .build_int_compare(IntPredicate::EQ, lhs, rhs, "eq")
+                .map_err(llvm_err!("build_int_compare")),
+            BinOp::NotEq => self
+                .builder
+                .build_int_compare(IntPredicate::NE, lhs, rhs, "ne")
+                .map_err(llvm_err!("build_int_compare")),
+            BinOp::Lt => self
+                .builder
+                .build_int_compare(IntPredicate::SLT, lhs, rhs, "lt")
+                .map_err(llvm_err!("build_int_compare")),
+            BinOp::Gt => self
+                .builder
+                .build_int_compare(IntPredicate::SGT, lhs, rhs, "gt")
+                .map_err(llvm_err!("build_int_compare")),
+            BinOp::LtEq => self
+                .builder
+                .build_int_compare(IntPredicate::SLE, lhs, rhs, "le")
+                .map_err(llvm_err!("build_int_compare")),
+            BinOp::GtEq => self
+                .builder
+                .build_int_compare(IntPredicate::SGE, lhs, rhs, "ge")
+                .map_err(llvm_err!("build_int_compare")),
             BinOp::BitwiseAnd => self
                 .builder
                 .build_and(lhs, rhs, "and")
@@ -613,11 +589,9 @@ impl<'ctx> CodeGen<'ctx> {
                     .builder
                     .build_int_compare(IntPredicate::NE, rhs, zero, "rhs_nz")
                     .map_err(llvm_err!("build_int_compare"))?;
-                let result = self
-                    .builder
+                self.builder
                     .build_and(lhs_nonzero, rhs_nonzero, "logical_and")
-                    .map_err(llvm_err!("build_and"))?;
-                cmp_to_wt(result, "logical_and_ext")
+                    .map_err(llvm_err!("build_and"))
             }
             BinOp::LogicalOr => {
                 // Logical OR: result is 1 if either lhs or rhs is non-zero
@@ -630,11 +604,9 @@ impl<'ctx> CodeGen<'ctx> {
                     .builder
                     .build_int_compare(IntPredicate::NE, rhs, zero, "rhs_nz")
                     .map_err(llvm_err!("build_int_compare"))?;
-                let result = self
-                    .builder
+                self.builder
                     .build_or(lhs_nonzero, rhs_nonzero, "logical_or")
-                    .map_err(llvm_err!("build_or"))?;
-                cmp_to_wt(result, "logical_or_ext")
+                    .map_err(llvm_err!("build_or"))
             }
             BinOp::LogicalXor => {
                 // Logical XOR: result is 1 if exactly one of lhs or rhs is non-zero
@@ -647,11 +619,9 @@ impl<'ctx> CodeGen<'ctx> {
                     .builder
                     .build_int_compare(IntPredicate::NE, rhs, zero, "rhs_nz")
                     .map_err(llvm_err!("build_int_compare"))?;
-                let result = self
-                    .builder
+                self.builder
                     .build_xor(lhs_nonzero, rhs_nonzero, "logical_xor")
-                    .map_err(llvm_err!("build_xor"))?;
-                cmp_to_wt(result, "logical_xor_ext")
+                    .map_err(llvm_err!("build_xor"))
             }
             BinOp::LShift => self
                 .builder
