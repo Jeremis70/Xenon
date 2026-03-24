@@ -160,7 +160,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_statement(&mut self) -> ParseResult<Stmt> {
-        let first_token = self.expect([TokenKind::Return, TokenKind::Ident])?;
+        let first_token = self.expect([TokenKind::Return, TokenKind::Ident, TokenKind::If])?;
         match first_token.kind {
             TokenKind::Return => {
                 let expr = self.parse_expression()?;
@@ -192,7 +192,8 @@ impl<'a> Parser<'a> {
                     _ => unreachable!("expect guarantees valid second token"),
                 }
             }
-            _ => unreachable!("expect guarantees token is either Return or Ident"),
+            TokenKind::If => self.parse_if(),
+            _ => unreachable!("expect guarantees token is Return, Ident, or If"),
         }
     }
 
@@ -203,6 +204,33 @@ impl<'a> Parser<'a> {
             name: Some(name),
             ty,
             default: None,
+        })
+    }
+
+    fn parse_if(&mut self) -> ParseResult<Stmt> {
+        let condition = Box::new(self.parse_expression()?);
+        self.expect(TokenKind::LBrace)?;
+        let then_branch = self.parse_body()?;
+        self.expect(TokenKind::RBrace)?;
+        let else_branch = match self.peek().map(|t| t.kind) {
+            Some(TokenKind::ElseIf) => {
+                self.expect(TokenKind::ElseIf)?;
+                Some(vec![self.parse_if()?])
+            }
+            Some(TokenKind::Else) => {
+                self.expect(TokenKind::Else)?;
+                self.expect(TokenKind::LBrace)?;
+                let stmts = self.parse_body()?;
+                self.expect(TokenKind::RBrace)?;
+                Some(stmts)
+            }
+            _ => None,
+        };
+
+        Ok(Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
         })
     }
 
