@@ -27,7 +27,6 @@ else { ... }
 `if` can also be used as an expression:
 
 ```xe
-u8 x = if (condition) 5 else 10;
 u8 y = 5 if (condition) else 10;
 ```
 
