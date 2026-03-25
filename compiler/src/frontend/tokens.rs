@@ -45,7 +45,12 @@ pub enum TokenKind {
     If,
     Else,
     While,
+    Until,
+    Loop,
     For,
+    Break,
+    Continue,
+    Do,
     // Delimiters
     LParen,
     RParen,
@@ -158,10 +163,20 @@ enum RawKind {
     If,
     #[token("else")]
     Else,
+    #[token("loop")]
+    Loop,
     #[token("while")]
     While,
+    #[token("until")]
+    Until,
     #[token("for")]
     For,
+    #[token("break")]
+    Break,
+    #[token("continue")]
+    Continue,
+    #[token("do")]
+    Do,
 
     // ---------- Delimiters ----------
     #[token("(")]
@@ -307,7 +322,12 @@ fn into_token_parts(raw: RawKind) -> (TokenKind, Option<TokenValue>) {
         RawKind::If => (TokenKind::If, None),
         RawKind::Else => (TokenKind::Else, None),
         RawKind::While => (TokenKind::While, None),
+        RawKind::Until => (TokenKind::Until, None),
+        RawKind::Loop => (TokenKind::Loop, None),
         RawKind::For => (TokenKind::For, None),
+        RawKind::Break => (TokenKind::Break, None),
+        RawKind::Continue => (TokenKind::Continue, None),
+        RawKind::Do => (TokenKind::Do, None),
         RawKind::LParen => (TokenKind::LParen, None),
         RawKind::RParen => (TokenKind::RParen, None),
         RawKind::LBrace => (TokenKind::LBrace, None),
