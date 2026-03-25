@@ -91,6 +91,8 @@ pub enum Stmt {
         then_branch: Vec<Stmt>,
         else_branch: Option<Vec<Stmt>>,
     },
+    Break(Option<Box<Expr>>),
+    Continue,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -117,10 +119,14 @@ pub enum Expr {
         op: UnaryOp,
         operand: Box<Expr>,
     },
+    // Control flow
     IfElse {
         condition: Box<Expr>,
         then_branch: Box<Expr>,
         else_branch: Box<Expr>,
+    },
+    Loop {
+        body: Vec<Stmt>,
     },
 }
 
