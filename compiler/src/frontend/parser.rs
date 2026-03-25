@@ -189,6 +189,8 @@ impl<'a> Parser<'a> {
                     TokenKind::XorEq,
                     TokenKind::LShiftEq,
                     TokenKind::RShiftEq,
+                    TokenKind::PlusPlus,
+                    TokenKind::MinusMinus,
                 ])?;
                 match second_token.kind {
                     TokenKind::Ident => self.parse_var_decl(first_token, second_token),
@@ -309,7 +311,10 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_var_assign(&mut self, name: String, kind: &TokenKind) -> ParseResult<Stmt> {
-        let rhs = self.parse_expression()?;
+        let rhs = match kind {
+            TokenKind::PlusPlus | TokenKind::MinusMinus => Expr::Int(1),
+            _ => self.parse_expression()?,
+        };
         let value = match BinOp::from_assign_token(kind) {
             Some(op) => Expr::BinOp {
                 lhs: Box::new(Expr::Ident(name.clone())),

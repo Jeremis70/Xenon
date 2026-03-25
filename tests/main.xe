@@ -7,7 +7,7 @@ fn main()->u8
         {
             break;
         }
-        x+=1;
+        x++;
     }
     return x;
 }

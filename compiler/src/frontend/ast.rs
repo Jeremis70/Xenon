@@ -170,6 +170,8 @@ impl BinOp {
             TokenKind::XorEq => Some(BinOp::BitwiseXor),
             TokenKind::LShiftEq => Some(BinOp::LShift),
             TokenKind::RShiftEq => Some(BinOp::RShift),
+            TokenKind::PlusPlus => Some(BinOp::Add),
+            TokenKind::MinusMinus => Some(BinOp::Sub),
             _ => None,
         }
     }
