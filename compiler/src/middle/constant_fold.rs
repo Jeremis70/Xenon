@@ -36,6 +36,8 @@ fn fold_stmt(stmt: Stmt) -> Stmt {
             then_branch: then_branch.into_iter().map(fold_stmt).collect(),
             else_branch: else_branch.map(|branch| branch.into_iter().map(fold_stmt).collect()),
         },
+        Stmt::Break(opt) => Stmt::Break(opt.map(|e| Box::new(fold_expr(*e)))),
+        Stmt::Continue => Stmt::Continue,
     }
 }
 
@@ -84,6 +86,11 @@ fn fold_expr(expr: Expr) -> Expr {
             condition: Box::new(fold_expr(*condition)),
             then_branch: Box::new(fold_expr(*then_branch)),
             else_branch: Box::new(fold_expr(*else_branch)),
+        },
+
+        // Fold the body but never evaluate the loop at compile time.
+        Expr::Loop { body } => Expr::Loop {
+            body: body.into_iter().map(fold_stmt).collect(),
         },
 
         // Fold arguments but never fold the call itself away.

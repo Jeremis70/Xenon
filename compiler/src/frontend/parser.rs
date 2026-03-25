@@ -160,7 +160,14 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_statement(&mut self) -> ParseResult<Stmt> {
-        let first_token = self.expect([TokenKind::Return, TokenKind::Ident, TokenKind::If])?;
+        let first_token = self.expect([
+            TokenKind::Return,
+            TokenKind::Ident,
+            TokenKind::If,
+            TokenKind::Loop,
+            TokenKind::Break,
+            TokenKind::Continue,
+        ])?;
         match first_token.kind {
             TokenKind::Return => {
                 let expr = self.parse_expression()?;
@@ -193,7 +200,23 @@ impl<'a> Parser<'a> {
                 }
             }
             TokenKind::If => self.parse_if(),
-            _ => unreachable!("expect guarantees token is Return, Ident, or If"),
+            TokenKind::Loop => Ok(Stmt::Expr(Box::new(self.parse_loop_expr()?))),
+            TokenKind::Break => {
+                let value = if self.peek().is_some_and(|t| t.kind != TokenKind::Semicolon) {
+                    Some(Box::new(self.parse_expression()?))
+                } else {
+                    None
+                };
+                self.expect(TokenKind::Semicolon)?;
+                Ok(Stmt::Break(value))
+            }
+            TokenKind::Continue => {
+                self.expect(TokenKind::Semicolon)?;
+                Ok(Stmt::Continue)
+            }
+            _ => unreachable!(
+                "expect guarantees token is Return, Ident, If, Loop, Break, or Continue"
+            ),
         }
     }
 
@@ -205,6 +228,13 @@ impl<'a> Parser<'a> {
             ty,
             default: None,
         })
+    }
+
+    fn parse_loop_expr(&mut self) -> ParseResult<Expr> {
+        self.expect(TokenKind::LBrace)?;
+        let body = self.parse_body()?;
+        self.expect(TokenKind::RBrace)?;
+        Ok(Expr::Loop { body })
     }
 
     fn parse_if(&mut self) -> ParseResult<Stmt> {
@@ -303,6 +333,7 @@ impl<'a> Parser<'a> {
             TokenKind::Bang,
             TokenKind::Tilde,
             TokenKind::LParen,
+            TokenKind::Loop,
         ])?;
         let mut left = self.nud(token)?;
 
@@ -355,6 +386,7 @@ impl<'a> Parser<'a> {
                 self.expect(TokenKind::RParen)?;
                 Ok(expr)
             }
+            TokenKind::Loop => self.parse_loop_expr(),
             _ => Err(self.error(format!("unexpected token in expression: {:?}", token.kind))),
         }
     }
