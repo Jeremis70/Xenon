@@ -24,6 +24,8 @@ impl TokenKind {
                 | TokenKind::XorEq
                 | TokenKind::LShiftEq
                 | TokenKind::RShiftEq
+                | TokenKind::PlusPlus
+                | TokenKind::MinusMinus
         )
     }
 }
