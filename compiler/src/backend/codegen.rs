@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use inkwell::OptimizationLevel;
+use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module;
@@ -27,11 +28,26 @@ macro_rules! llvm_err {
     };
 }
 
+/// Tracks the LLVM blocks and result slot for a single loop nesting level.
+struct LoopFrame<'ctx> {
+    continue_bb: BasicBlock<'ctx>,
+    break_bb: BasicBlock<'ctx>,
+    /// Alloca slot that `break <expr>;` stores into; loaded at `loop_after`.
+    result_slot: PointerValue<'ctx>,
+}
+
 pub struct CodeGen<'ctx> {
     context: &'ctx Context,
     module: Module<'ctx>,
     builder: Builder<'ctx>,
     variables: HashMap<String, (PointerValue<'ctx>, BasicTypeEnum<'ctx>)>,
+    /// Stack of frames pushed when entering a loop, popped on exit.
+    loop_stack: Vec<LoopFrame<'ctx>>,
+    /// The function currently being compiled; set at the start of
+    /// `compile_function` so that `Expr::Loop` in expression position can
+    /// access the function value and return type without threading extra
+    /// parameters through `codegen_expr`.
+    current_fn: Option<(FunctionValue<'ctx>, BasicTypeEnum<'ctx>)>,
 }
 
 impl<'ctx> CodeGen<'ctx> {
@@ -43,6 +59,8 @@ impl<'ctx> CodeGen<'ctx> {
             module,
             builder,
             variables: HashMap::new(),
+            loop_stack: Vec::new(),
+            current_fn: None,
         }
     }
 
@@ -103,7 +121,7 @@ impl<'ctx> CodeGen<'ctx> {
 
         let param_types: Vec<BasicTypeEnum> = self.collect_param_types(f)?;
         let ret_ty = self.llvm_type(&f.return_type.ty)?;
-
+        self.current_fn = Some((fn_val, ret_ty));
         let entry = self.context.append_basic_block(fn_val, "entry");
         self.builder.position_at_end(entry);
 
@@ -238,7 +256,45 @@ impl<'ctx> CodeGen<'ctx> {
             }
             Stmt::Expr(expr) => {
                 self.codegen_expr(expr)?;
-                Ok(false)
+                // An expression like an infinite loop may have terminated the
+                // current block; stop emitting further statements if so.
+                let terminated = self
+                    .builder
+                    .get_insert_block()
+                    .is_some_and(|b| b.get_terminator().is_some());
+                Ok(terminated)
+            }
+            Stmt::Break(opt_expr) => {
+                let (break_bb, result_slot) = {
+                    let frame = self.loop_stack.last().ok_or(CodegenError::InvalidIrState(
+                        "`break` used outside of a loop",
+                    ))?;
+                    (frame.break_bb, frame.result_slot)
+                };
+                if let Some(expr) = opt_expr {
+                    let val = self.codegen_expr(expr)?;
+                    let val = self.cast_int_to_type(val, self.context.i64_type().into())?;
+                    self.builder
+                        .build_store(result_slot, val)
+                        .map_err(llvm_err!("build_store (break value)"))?;
+                }
+                self.builder
+                    .build_unconditional_branch(break_bb)
+                    .map_err(llvm_err!("build_unconditional_branch (break)"))?;
+                Ok(true)
+            }
+            Stmt::Continue => {
+                let continue_bb = self
+                    .loop_stack
+                    .last()
+                    .ok_or(CodegenError::InvalidIrState(
+                        "`continue` used outside of a loop",
+                    ))?
+                    .continue_bb;
+                self.builder
+                    .build_unconditional_branch(continue_bb)
+                    .map_err(llvm_err!("build_unconditional_branch (continue)"))?;
+                Ok(true)
             }
             Stmt::If {
                 condition,
@@ -259,7 +315,6 @@ impl<'ctx> CodeGen<'ctx> {
 
                 let then_block = self.context.append_basic_block(fn_val, "then");
                 let else_block = self.context.append_basic_block(fn_val, "else");
-                let merge_block = self.context.append_basic_block(fn_val, "if_merge");
 
                 self.builder
                     .build_conditional_branch(is_true, then_block, else_block)
@@ -272,19 +327,13 @@ impl<'ctx> CodeGen<'ctx> {
                         break;
                     }
                 }
-                let then_falls_through = self
-                    .builder
-                    .get_insert_block()
-                    .ok_or(CodegenError::InvalidIrState(
-                        "no insert block after then branch",
-                    ))?
-                    .get_terminator()
-                    .is_none();
-                if then_falls_through {
+                let then_end =
                     self.builder
-                        .build_unconditional_branch(merge_block)
-                        .map_err(llvm_err!("build_unconditional_branch (then->merge)"))?;
-                }
+                        .get_insert_block()
+                        .ok_or(CodegenError::InvalidIrState(
+                            "no insert block after then branch",
+                        ))?;
+                let then_falls_through = then_end.get_terminator().is_none();
 
                 // Else branch
                 self.builder.position_at_end(else_block);
@@ -295,29 +344,35 @@ impl<'ctx> CodeGen<'ctx> {
                         }
                     }
                 }
-                let else_falls_through = self
-                    .builder
-                    .get_insert_block()
-                    .ok_or(CodegenError::InvalidIrState(
-                        "no insert block after else branch",
-                    ))?
-                    .get_terminator()
-                    .is_none();
+                let else_end =
+                    self.builder
+                        .get_insert_block()
+                        .ok_or(CodegenError::InvalidIrState(
+                            "no insert block after else branch",
+                        ))?;
+                let else_falls_through = else_end.get_terminator().is_none();
+
+                // If no branch falls through there is no merge point: all paths
+                // are terminated. Don't create a merge block — the function is
+                // already correct and this avoids dead blocks in the IR.
+                if !then_falls_through && !else_falls_through {
+                    return Ok(true);
+                }
+
+                // At least one branch falls through: create the merge block and
+                // wire the open branches to it.
+                let merge_block = self.context.append_basic_block(fn_val, "if_merge");
+                if then_falls_through {
+                    self.builder.position_at_end(then_end);
+                    self.builder
+                        .build_unconditional_branch(merge_block)
+                        .map_err(llvm_err!("build_unconditional_branch (then->merge)"))?;
+                }
                 if else_falls_through {
+                    self.builder.position_at_end(else_end);
                     self.builder
                         .build_unconditional_branch(merge_block)
                         .map_err(llvm_err!("build_unconditional_branch (else->merge)"))?;
-                }
-
-                // If no branch falls through to the merge block, it is unreachable.
-                // Remove it and report the current block as terminated so the caller
-                // stops emitting instructions into this scope.
-                if !then_falls_through && !else_falls_through {
-                    // Safety: merge_block was just created above and has no uses.
-                    unsafe { merge_block.delete() }.map_err(|()| {
-                        CodegenError::InvalidIrState("failed to delete dead merge block")
-                    })?;
-                    return Ok(true);
                 }
 
                 // Continue from the merge block
@@ -354,7 +409,7 @@ impl<'ctx> CodeGen<'ctx> {
         }
     }
 
-    fn codegen_expr(&self, e: &Expr) -> CodegenResult<inkwell::values::IntValue<'ctx>> {
+    fn codegen_expr(&mut self, e: &Expr) -> CodegenResult<inkwell::values::IntValue<'ctx>> {
         match e {
             Expr::Int(v) => Ok(self.context.i64_type().const_int(*v as u64, true)),
             Expr::Ident(name) => {
@@ -389,16 +444,13 @@ impl<'ctx> CodeGen<'ctx> {
                         got: args.len(),
                     });
                 }
-                let compiled_args: Vec<inkwell::values::BasicMetadataValueEnum> = args
-                    .iter()
-                    .zip(callee.get_param_iter())
-                    .map(|(arg_expr, param)| {
-                        let val = self.codegen_expr(arg_expr)?;
-                        let target = param.get_type();
-                        self.cast_int_to_type(val, target)
-                            .map(inkwell::values::BasicMetadataValueEnum::from)
-                    })
-                    .collect::<CodegenResult<_>>()?;
+                let mut compiled_args: Vec<inkwell::values::BasicMetadataValueEnum> =
+                    Vec::with_capacity(args.len());
+                for (arg_expr, param) in args.iter().zip(callee.get_param_iter()) {
+                    let val = self.codegen_expr(arg_expr)?;
+                    let target = param.get_type();
+                    compiled_args.push(self.cast_int_to_type(val, target)?.into());
+                }
                 let call = self
                     .builder
                     .build_call(callee, &compiled_args, "call")
@@ -504,6 +556,68 @@ impl<'ctx> CodeGen<'ctx> {
                     .map_err(llvm_err!("build_phi"))?;
                 phi.add_incoming(&[(&then_val, then_end_bb), (&else_val, else_end_bb)]);
                 Ok(phi.as_basic_value().into_int_value())
+            }
+            Expr::Loop { body } => {
+                let (fn_val, ret_ty) = self.current_fn.ok_or(CodegenError::InvalidIrState(
+                    "`loop` expression compiled outside of a function",
+                ))?;
+
+                let loop_body = self.context.append_basic_block(fn_val, "loop_body");
+                let loop_after = self.context.append_basic_block(fn_val, "loop_after");
+
+                // Allocate a result slot upfront (i64 for type-uniformity).
+                // Each `break <expr>;` stores into this slot; we load it at loop_after.
+                let result_slot = self
+                    .builder
+                    .build_alloca(self.context.i64_type(), "loop_result")
+                    .map_err(llvm_err!("build_alloca (loop result)"))?;
+
+                // Fall through to the loop body.
+                self.builder
+                    .build_unconditional_branch(loop_body)
+                    .map_err(llvm_err!("build_unconditional_branch (loop entry)"))?;
+
+                self.builder.position_at_end(loop_body);
+                self.loop_stack.push(LoopFrame {
+                    continue_bb: loop_body,
+                    break_bb: loop_after,
+                    result_slot,
+                });
+                for s in body {
+                    if self.compile_stmt(s, fn_val, ret_ty)? {
+                        break;
+                    }
+                }
+                self.loop_stack.pop();
+
+                // If the body falls through (no terminator), add a back-edge.
+                let body_end = self
+                    .builder
+                    .get_insert_block()
+                    .ok_or(CodegenError::InvalidIrState("no block after loop body"))?;
+                if body_end.get_terminator().is_none() {
+                    self.builder
+                        .build_unconditional_branch(loop_body)
+                        .map_err(llvm_err!("build_unconditional_branch (loop back)"))?;
+                }
+
+                // If nothing ever branched to loop_after, the loop is infinite.
+                // Terminate the block with `unreachable` (valid IR, no unsafe needed);
+                // LLVM removes dead blocks during optimisation.
+                if loop_after.get_first_use().is_none() {
+                    self.builder.position_at_end(loop_after);
+                    self.builder
+                        .build_unreachable()
+                        .map_err(llvm_err!("build_unreachable (infinite loop)"))?;
+                    // Return a dummy value; this path is never reachable.
+                    return Ok(self.context.i64_type().const_zero());
+                }
+
+                self.builder.position_at_end(loop_after);
+                self.builder
+                    .build_load(self.context.i64_type(), result_slot, "loop_val")
+                    .map_err(llvm_err!("build_load (loop result)"))
+                    .map(|v| v.into_int_value())
             }
         }
     }
