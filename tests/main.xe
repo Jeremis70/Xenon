@@ -2,13 +2,9 @@
 fn main()->u8
 {
     u32 x = 0;
-    loop {
-        if x == 10
-        {
-            break;
-        }
+    do {
         x++;
-    }
+    } while x == 0
     return x;
 }
 
