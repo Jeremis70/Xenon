@@ -66,6 +66,8 @@ pub enum CodegenError {
     TargetMachineCreation,
     #[error("output file error: {0}")]
     OutputFile(String),
+    #[error("function `{name}` has no return statement and no named return variable")]
+    MissingReturn { name: String },
     #[error("{0}")]
     Other(String),
 }
