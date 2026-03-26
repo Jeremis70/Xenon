@@ -587,6 +587,15 @@ impl<'ctx> CodeGen<'ctx> {
             .build_alloca(self.context.i64_type(), "loop_result")
             .map_err(llvm_err!("build_alloca (loop result)"))?;
 
+        // Initialize the result slot to a well-defined default value.
+        // This ensures that if the loop exits without writing a value
+        // (e.g. via `break;` with no value or a false condition), the
+        // subsequent load in `loop_after` reads a defined value rather
+        // than uninitialized memory.
+        let loop_result_default = self.context.i64_type().const_zero();
+        self.builder
+            .build_store(result_slot, loop_result_default)
+            .map_err(llvm_err!("build_store (loop result default)"))?;
         // Create blocks in execution order for readable IR output.
         // Pre condition if there is one
         let loop_cond_pre = if condition.is_some() && !post {
