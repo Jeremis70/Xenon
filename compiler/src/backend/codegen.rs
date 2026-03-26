@@ -557,69 +557,156 @@ impl<'ctx> CodeGen<'ctx> {
                 phi.add_incoming(&[(&then_val, then_end_bb), (&else_val, else_end_bb)]);
                 Ok(phi.as_basic_value().into_int_value())
             }
-            Expr::Loop { body } => {
-                let (fn_val, ret_ty) = self.current_fn.ok_or(CodegenError::InvalidIrState(
-                    "`loop` expression compiled outside of a function",
-                ))?;
+            Expr::Loop { body } => self.compile_loop(body, None, false, false),
+            Expr::CondLoop {
+                post,
+                inverted,
+                condition,
+                body,
+            } => self.compile_loop(body, Some(condition), *post, *inverted),
+        }
+    }
 
-                let loop_body = self.context.append_basic_block(fn_val, "loop_body");
-                let loop_after = self.context.append_basic_block(fn_val, "loop_after");
+    fn compile_loop(
+        &mut self,
+        body: &[Stmt],
+        condition: Option<&Expr>,
+        post: bool,
+        inverted: bool,
+    ) -> CodegenResult<inkwell::values::IntValue<'ctx>> {
+        let (fn_val, ret_ty) = self.current_fn.ok_or(CodegenError::InvalidIrState(
+            "loop expression compiled outside of a function",
+        ))?;
 
-                // Allocate a result slot upfront (i64 for type-uniformity).
-                // Each `break <expr>;` stores into this slot; we load it at loop_after.
-                let result_slot = self
-                    .builder
-                    .build_alloca(self.context.i64_type(), "loop_result")
-                    .map_err(llvm_err!("build_alloca (loop result)"))?;
+        // Allocate a result slot upfront so break can store into it
+        let result_slot = self
+            .builder
+            .build_alloca(self.context.i64_type(), "loop_result")
+            .map_err(llvm_err!("build_alloca (loop result)"))?;
 
-                // Fall through to the loop body.
-                self.builder
-                    .build_unconditional_branch(loop_body)
-                    .map_err(llvm_err!("build_unconditional_branch (loop entry)"))?;
+        // Create blocks in execution order for readable IR output.
+        // Pre condition if there is one
+        let loop_cond_pre = if condition.is_some() && !post {
+            Some(self.context.append_basic_block(fn_val, "loop_cond"))
+        } else {
+            None
+        };
+        // Body block
+        let loop_body = self.context.append_basic_block(fn_val, "loop_body");
 
-                self.builder.position_at_end(loop_body);
-                self.loop_stack.push(LoopFrame {
-                    continue_bb: loop_body,
-                    break_bb: loop_after,
-                    result_slot,
-                });
-                for s in body {
-                    if self.compile_stmt(s, fn_val, ret_ty)? {
-                        break;
-                    }
-                }
-                self.loop_stack.pop();
+        // Post condition if there is one
+        let loop_cond_post = if condition.is_some() && post {
+            Some(self.context.append_basic_block(fn_val, "loop_cond"))
+        } else {
+            None
+        };
 
-                // If the body falls through (no terminator), add a back-edge.
-                let body_end = self
-                    .builder
-                    .get_insert_block()
-                    .ok_or(CodegenError::InvalidIrState("no block after loop body"))?;
-                if body_end.get_terminator().is_none() {
-                    self.builder
-                        .build_unconditional_branch(loop_body)
-                        .map_err(llvm_err!("build_unconditional_branch (loop back)"))?;
-                }
+        // What to do after the loop exits
+        let loop_after = self.context.append_basic_block(fn_val, "loop_after");
 
-                // If nothing ever branched to loop_after, the loop is infinite.
-                // Terminate the block with `unreachable` (valid IR, no unsafe needed);
-                // LLVM removes dead blocks during optimisation.
-                if loop_after.get_first_use().is_none() {
-                    self.builder.position_at_end(loop_after);
-                    self.builder
-                        .build_unreachable()
-                        .map_err(llvm_err!("build_unreachable (infinite loop)"))?;
-                    // Return a dummy value; this path is never reachable.
-                    return Ok(self.context.i64_type().const_zero());
-                }
+        // Unify loop conditions into a single block
+        let loop_cond = loop_cond_pre.or(loop_cond_post);
+        // What to do when the loop body finishes or a `continue` is hit
+        let continue_bb = loop_cond.unwrap_or(loop_body);
 
-                self.builder.position_at_end(loop_after);
-                self.builder
-                    .build_load(self.context.i64_type(), result_slot, "loop_val")
-                    .map_err(llvm_err!("build_load (loop result)"))
-                    .map(|v| v.into_int_value())
+        // Entry branch: either the pre-condition or the body.
+        let entry_bb = if condition.is_some() && !post {
+            continue_bb
+        } else {
+            loop_body
+        };
+        self.builder
+            .build_unconditional_branch(entry_bb)
+            .map_err(llvm_err!("build_unconditional_branch (loop entry)"))?;
+
+        // Emit the pre-condition (while / until).
+        if let (Some(cond_bb), Some(expr)) = (loop_cond_pre, condition) {
+            self.builder.position_at_end(cond_bb);
+            self.emit_loop_condition(expr, inverted, loop_body, loop_after)?;
+        }
+
+        // Compile the body.
+        self.builder.position_at_end(loop_body);
+        self.loop_stack.push(LoopFrame {
+            continue_bb,
+            break_bb: loop_after,
+            result_slot,
+        });
+        for s in body {
+            if self.compile_stmt(s, fn_val, ret_ty)? {
+                break;
             }
         }
+        self.loop_stack.pop();
+
+        // If the body falls through (no terminator), branch to the back-edge
+        // target: condition re-evaluation when one exists, or body top.
+        let body_end = self
+            .builder
+            .get_insert_block()
+            .ok_or(CodegenError::InvalidIrState("no block after loop body"))?;
+        if body_end.get_terminator().is_none() {
+            self.builder
+                .build_unconditional_branch(continue_bb)
+                .map_err(llvm_err!("build_unconditional_branch (loop back)"))?;
+        }
+
+        // Emit the post-condition (do-while / do-until).
+        if let (Some(cond_bb), Some(expr)) = (loop_cond_post, condition) {
+            self.builder.position_at_end(cond_bb);
+            self.emit_loop_condition(expr, inverted, loop_body, loop_after)?;
+        }
+
+        // If nothing ever branched to loop_after the loop is infinite.
+        // Remove the orphaned block entirely so it never appears in the IR.
+        if loop_after.get_first_use().is_none() {
+            loop_after
+                .remove_from_function()
+                .map_err(|()| CodegenError::InvalidIrState("failed to remove loop_after block"))?;
+            // Return a dummy value; this path is never reachable.
+            return Ok(self.context.i64_type().const_zero());
+        }
+
+        // Load the result from the result slot and return it.
+        self.builder.position_at_end(loop_after);
+        self.builder
+            .build_load(self.context.i64_type(), result_slot, "loop_val")
+            .map_err(llvm_err!("build_load (loop result)"))
+            .map(|v| v.into_int_value())
+    }
+
+    fn emit_loop_condition(
+        &mut self,
+        condition: &Expr,
+        inverted: bool,
+        body_bb: BasicBlock<'ctx>,
+        after_bb: BasicBlock<'ctx>,
+    ) -> CodegenResult<()> {
+        let cond_val = self.codegen_expr(condition)?;
+
+        let cond_i1 = if cond_val.get_type().get_bit_width() == 1 {
+            cond_val
+        } else {
+            self.builder
+                .build_int_compare(
+                    IntPredicate::NE,
+                    cond_val,
+                    cond_val.get_type().const_zero(),
+                    "loop_cond_ne",
+                )
+                .map_err(llvm_err!("build_int_compare (loop condition)"))?
+        };
+        // `inverted`: condition is true → exit (until), false → continue.
+        // `normal`:   condition is true → continue (while), false → exit.
+        let (true_bb, false_bb) = if inverted {
+            (after_bb, body_bb)
+        } else {
+            (body_bb, after_bb)
+        };
+        self.builder
+            .build_conditional_branch(cond_i1, true_bb, false_bb)
+            .map_err(llvm_err!("build_conditional_branch (loop condition)"))?;
+        Ok(())
     }
 
     fn codegen_binop(
