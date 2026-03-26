@@ -159,3 +159,169 @@ fn statements_after_if_are_emitted_in_merge_block() {
     assert!(ir.contains("store"), "expected store instructions:\n{ir}");
     assert!(ir.contains("ret i32"), "expected ret instruction:\n{ir}");
 }
+
+// ── Return statements ─────────────────────────────────────────────────────────
+
+/// A function without a `return` and without a named return variable must
+/// produce a `MissingReturn` error instead of segfaulting in LLVM.
+#[test]
+fn missing_return_yields_codegen_error() {
+    use xenonc::error::CodegenError;
+
+    let tokens = xenonc::frontend::lexer::lex("fn bad()->u32 { u32 x = 1; }")
+        .expect("lexing should succeed");
+    let mut parser = Parser::new(&tokens);
+    let program = parser.parse_program().expect("parsing should succeed");
+    let program = fold_constants(program);
+    let context = Context::create();
+    let cg = CodeGen::new(&context, "test");
+    let err = cg
+        .compile_program(&program)
+        .expect_err("codegen should fail with MissingReturn");
+
+    assert!(
+        matches!(err, CodegenError::MissingReturn { ref name } if name == "bad"),
+        "expected MissingReturn for function `bad`, got: {err}"
+    );
+}
+
+/// An explicit `return` at the end of a function without a named return
+/// variable compiles correctly and the IR terminates with `ret`.
+#[test]
+fn explicit_return_terminates_function() {
+    let ir = compile_to_ir("fn f()->u32 { return 7; }");
+    assert!(
+        ir.contains("ret i32 7"),
+        "expected `ret i32 7` in IR:\n{ir}"
+    );
+}
+
+// ── Infinite `loop` ───────────────────────────────────────────────────────────
+
+/// An infinite `loop` with no `break` must not produce a `loop_after` block
+/// in the IR — the dead block should be removed entirely.
+#[test]
+fn infinite_loop_omits_loop_after_block() {
+    let ir = compile_to_ir("fn f()->u32 result { loop { result = 1; } }");
+    assert!(
+        !ir.contains("loop_after"),
+        "dead loop_after block should be removed:\n{ir}"
+    );
+}
+
+/// An infinite `loop` produces a `loop_body` block with a back-edge to itself.
+#[test]
+fn infinite_loop_body_block_has_back_edge() {
+    let ir = compile_to_ir("fn f()->u32 result { loop { result = 1; } }");
+    assert!(ir.contains("loop_body"), "expected loop_body block:\n{ir}");
+    // The back-edge unconditional branch back to loop_body must appear.
+    assert!(
+        ir.contains("br label %loop_body"),
+        "expected back-edge branch to loop_body:\n{ir}"
+    );
+}
+
+/// A `loop` with a `break` must emit `loop_after` as the exit target and load
+/// the break value at that point.
+#[test]
+fn loop_with_break_emits_loop_after_block() {
+    // `loop` is an expression; `return` consumes its value so the function terminates.
+    let ir = compile_to_ir("fn f()->u32 { return loop { break 42; }; }");
+    assert!(
+        ir.contains("loop_after:"),
+        "expected loop_after block:\n{ir}"
+    );
+    assert!(
+        ir.contains("loop_val"),
+        "expected loop result load in IR:\n{ir}"
+    );
+}
+
+/// `continue` inside a `loop` must branch back to `loop_body` (the only
+/// available re-entry point for an infinite loop).
+#[test]
+fn continue_in_infinite_loop_branches_to_loop_body() {
+    // Uses a named return so the function is valid without an explicit return.
+    let ir = compile_to_ir("fn f()->u32 result { loop { if result == 0 { continue; } break 1; } }");
+    assert!(
+        ir.contains("br label %loop_body"),
+        "expected continue to branch back to loop_body:\n{ir}"
+    );
+}
+
+// ── Pre-condition loops (`while` / `until`) ───────────────────────────────────
+
+/// A `while` loop must generate a `loop_cond` block that is branched to
+/// before the body and also as the back-edge target for `continue`.
+#[test]
+fn while_loop_emits_loop_cond_block() {
+    let ir = compile_to_ir("fn f()->u32 result { while result == 0 { result = 1; } }");
+    assert!(ir.contains("loop_cond:"), "expected loop_cond block:\n{ir}");
+    assert!(ir.contains("loop_body:"), "expected loop_body block:\n{ir}");
+    assert!(
+        ir.contains("loop_after:"),
+        "expected loop_after block:\n{ir}"
+    );
+}
+
+/// The `while` entry edge must jump to `loop_cond`, not directly to `loop_body`.
+#[test]
+fn while_loop_entry_branches_to_cond_first() {
+    let ir = compile_to_ir("fn f()->u32 result { while result == 0 { result = 1; } }");
+    // The entry block unconditionally branches to loop_cond (pre-check).
+    assert!(
+        ir.contains("br label %loop_cond"),
+        "expected entry to branch to loop_cond:\n{ir}"
+    );
+}
+
+/// An `until` loop iterates while the condition is *false* and exits when it
+/// becomes true —  the conditional branch must still exit to `loop_after`.
+#[test]
+fn until_loop_exits_when_condition_becomes_true() {
+    let ir = compile_to_ir("fn f()->u32 result { until result == 5 { result = 5; } }");
+    assert!(ir.contains("loop_cond:"), "expected loop_cond block:\n{ir}");
+    assert!(
+        ir.contains("loop_after:"),
+        "expected loop_after block:\n{ir}"
+    );
+    // Both body_bb and after_bb must be referenced from the cond block.
+    assert!(
+        ir.contains("br i1"),
+        "expected conditional branch in loop_cond:\n{ir}"
+    );
+}
+
+// ── Post-condition loops (`do-while` / `do-until`) ────────────────────────────
+
+/// A `do-while` loop must place `loop_cond` *after* `loop_body` in the IR so
+/// that the body always executes at least once.
+#[test]
+fn do_while_loop_emits_cond_after_body() {
+    let ir = compile_to_ir("fn f()->u32 result { do { result = result + 1; } while result == 0 }");
+    // Entry must jump directly to loop_body, not loop_cond.
+    assert!(ir.contains("loop_body:"), "expected loop_body block:\n{ir}");
+    assert!(ir.contains("loop_cond:"), "expected loop_cond block:\n{ir}");
+    // loop_cond must appear after loop_body in the textual IR.
+    let body_pos = ir.find("loop_body:").expect("loop_body must exist");
+    let cond_pos = ir.find("loop_cond:").expect("loop_cond must exist");
+    assert!(
+        cond_pos > body_pos,
+        "loop_cond should appear after loop_body in the IR:\n{ir}"
+    );
+}
+
+/// A `do-until` loop executes the body at least once and exits when the
+/// condition first becomes true.
+#[test]
+fn do_until_loop_emits_cond_after_body() {
+    let ir = compile_to_ir("fn f()->u32 result { do { result = result + 1; } until result == 5 }");
+    assert!(ir.contains("loop_body:"), "expected loop_body block:\n{ir}");
+    assert!(ir.contains("loop_cond:"), "expected loop_cond block:\n{ir}");
+    let body_pos = ir.find("loop_body:").expect("loop_body must exist");
+    let cond_pos = ir.find("loop_cond:").expect("loop_cond must exist");
+    assert!(
+        cond_pos > body_pos,
+        "loop_cond should appear after loop_body in the IR:\n{ir}"
+    );
+}
