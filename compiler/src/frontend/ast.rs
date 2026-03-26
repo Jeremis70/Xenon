@@ -128,6 +128,12 @@ pub enum Expr {
     Loop {
         body: Vec<Stmt>,
     },
+    CondLoop {
+        post: bool,
+        inverted: bool,
+        condition: Box<Expr>,
+        body: Vec<Stmt>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
