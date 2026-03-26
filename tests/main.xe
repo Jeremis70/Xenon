@@ -2,13 +2,25 @@
 fn main()->u8
 {
     u32 x = 0;
-    do {
+    while x < 10
+    {
         x++;
-    } while x == 0
-    return x;
+    }
+    return fibonacci(x);
 }
 
-fn add(u32 x,u32 y)->u32 sum
+fn fibonacci(u32 n)->u32
 {
-    sum = x + y;
+    if n == 0
+    {
+        return 0;
+    }
+    else if n == 1
+    {
+        return 1;
+    }
+    else
+    {
+        return fibonacci(n - 1) + fibonacci(n - 2);
+    }
 }
