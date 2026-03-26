@@ -559,3 +559,202 @@ fn parse_if_without_else_and_without_closing_brace_is_error() {
         result
     );
 }
+
+// ── Loops ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn parse_infinite_loop_produces_loop_expr_stmt() {
+    let src = "fn f()->u32 result { loop { result = 1; } }";
+    let tokens = lex(src).expect("lexing should succeed");
+    let mut parser = Parser::new(&tokens);
+    let program = parser.parse_program().expect("parsing should succeed");
+
+    match &program.functions[0].body[0] {
+        Stmt::Expr(expr) => match expr.as_ref() {
+            Expr::Loop { body } => {
+                assert_eq!(body.len(), 1);
+            }
+            other => panic!("expected Loop expr, got {:?}", other),
+        },
+        other => panic!("expected Expr stmt, got {:?}", other),
+    }
+}
+
+#[test]
+fn parse_while_loop_produces_cond_loop_with_correct_flags() {
+    let src = "fn f()->u32 result { while result == 0 { result = 1; } }";
+    let tokens = lex(src).expect("lexing should succeed");
+    let mut parser = Parser::new(&tokens);
+    let program = parser.parse_program().expect("parsing should succeed");
+
+    match &program.functions[0].body[0] {
+        Stmt::Expr(expr) => match expr.as_ref() {
+            Expr::CondLoop {
+                post,
+                inverted,
+                body,
+                ..
+            } => {
+                assert!(!post, "while loop should not be post-condition");
+                assert!(!inverted, "while loop should not be inverted");
+                assert_eq!(body.len(), 1);
+            }
+            other => panic!("expected CondLoop expr, got {:?}", other),
+        },
+        other => panic!("expected Expr stmt, got {:?}", other),
+    }
+}
+
+#[test]
+fn parse_until_loop_produces_cond_loop_with_inverted_flag() {
+    let src = "fn f()->u32 result { until result == 10 { result = 1; } }";
+    let tokens = lex(src).expect("lexing should succeed");
+    let mut parser = Parser::new(&tokens);
+    let program = parser.parse_program().expect("parsing should succeed");
+
+    match &program.functions[0].body[0] {
+        Stmt::Expr(expr) => match expr.as_ref() {
+            Expr::CondLoop { post, inverted, .. } => {
+                assert!(!post, "until loop should not be post-condition");
+                assert!(*inverted, "until loop should be inverted");
+            }
+            other => panic!("expected CondLoop expr, got {:?}", other),
+        },
+        other => panic!("expected Expr stmt, got {:?}", other),
+    }
+}
+
+#[test]
+fn parse_do_while_loop_produces_cond_loop_with_post_flag() {
+    let src = "fn f()->u32 result { do { result = 1; } while result == 0 }";
+    let tokens = lex(src).expect("lexing should succeed");
+    let mut parser = Parser::new(&tokens);
+    let program = parser.parse_program().expect("parsing should succeed");
+
+    match &program.functions[0].body[0] {
+        Stmt::Expr(expr) => match expr.as_ref() {
+            Expr::CondLoop { post, inverted, .. } => {
+                assert!(*post, "do-while loop should be post-condition");
+                assert!(!inverted, "do-while loop should not be inverted");
+            }
+            other => panic!("expected CondLoop expr, got {:?}", other),
+        },
+        other => panic!("expected Expr stmt, got {:?}", other),
+    }
+}
+
+#[test]
+fn parse_do_until_loop_produces_cond_loop_with_post_and_inverted_flags() {
+    let src = "fn f()->u32 result { do { result = 1; } until result == 10 }";
+    let tokens = lex(src).expect("lexing should succeed");
+    let mut parser = Parser::new(&tokens);
+    let program = parser.parse_program().expect("parsing should succeed");
+
+    match &program.functions[0].body[0] {
+        Stmt::Expr(expr) => match expr.as_ref() {
+            Expr::CondLoop { post, inverted, .. } => {
+                assert!(*post, "do-until loop should be post-condition");
+                assert!(*inverted, "do-until loop should be inverted");
+            }
+            other => panic!("expected CondLoop expr, got {:?}", other),
+        },
+        other => panic!("expected Expr stmt, got {:?}", other),
+    }
+}
+
+#[test]
+fn parse_break_without_value_produces_break_stmt() {
+    let src = "fn f()->u32 result { loop { break; } }";
+    let tokens = lex(src).expect("lexing should succeed");
+    let mut parser = Parser::new(&tokens);
+    let program = parser.parse_program().expect("parsing should succeed");
+
+    let Stmt::Expr(loop_expr) = &program.functions[0].body[0] else {
+        panic!("expected Expr stmt");
+    };
+    let Expr::Loop { body } = loop_expr.as_ref() else {
+        panic!("expected Loop expr");
+    };
+    assert!(matches!(&body[0], Stmt::Break(None)));
+}
+
+#[test]
+fn parse_break_with_value_carries_the_expression() {
+    let src = "fn f()->u32 { loop { break 42; } }";
+    let tokens = lex(src).expect("lexing should succeed");
+    let mut parser = Parser::new(&tokens);
+    let program = parser.parse_program().expect("parsing should succeed");
+
+    let Stmt::Expr(loop_expr) = &program.functions[0].body[0] else {
+        panic!("expected Expr stmt");
+    };
+    let Expr::Loop { body } = loop_expr.as_ref() else {
+        panic!("expected Loop expr");
+    };
+    match &body[0] {
+        Stmt::Break(Some(expr)) => {
+            assert!(matches!(expr.as_ref(), Expr::Int(42)));
+        }
+        other => panic!("expected Break(Some(Int(42))), got {:?}", other),
+    }
+}
+
+#[test]
+fn parse_continue_produces_continue_stmt() {
+    let src = "fn f()->u32 result { loop { continue; } }";
+    let tokens = lex(src).expect("lexing should succeed");
+    let mut parser = Parser::new(&tokens);
+    let program = parser.parse_program().expect("parsing should succeed");
+
+    let Stmt::Expr(loop_expr) = &program.functions[0].body[0] else {
+        panic!("expected Expr stmt");
+    };
+    let Expr::Loop { body } = loop_expr.as_ref() else {
+        panic!("expected Loop expr");
+    };
+    assert!(matches!(&body[0], Stmt::Continue));
+}
+
+// ── Return statements ─────────────────────────────────────────────────────────
+
+#[test]
+fn parse_return_integer_literal() {
+    let src = "fn f()->u32 { return 0; }";
+    let tokens = lex(src).expect("lexing should succeed");
+    let mut parser = Parser::new(&tokens);
+    let program = parser.parse_program().expect("parsing should succeed");
+
+    assert!(matches!(
+        &program.functions[0].body[0],
+        Stmt::Return(expr) if matches!(expr.as_ref(), Expr::Int(0))
+    ));
+}
+
+#[test]
+fn parse_return_expression() {
+    let src = "fn f(u32 x)->u32 { return x + 1; }";
+    let tokens = lex(src).expect("lexing should succeed");
+    let mut parser = Parser::new(&tokens);
+    let program = parser.parse_program().expect("parsing should succeed");
+
+    match &program.functions[0].body[0] {
+        Stmt::Return(expr) => {
+            assert!(matches!(expr.as_ref(), Expr::BinOp { op: BinOp::Add, .. }));
+        }
+        other => panic!("expected Return, got {:?}", other),
+    }
+}
+
+#[test]
+fn parse_multiple_returns_only_first_is_reachable_in_ast() {
+    // Both `return` statements are syntactically valid; the parser makes no
+    // reachability judgement — it just produces both in the body.
+    let src = "fn f()->u32 { return 1; return 2; }";
+    let tokens = lex(src).expect("lexing should succeed");
+    let mut parser = Parser::new(&tokens);
+    let program = parser.parse_program().expect("parsing should succeed");
+
+    assert_eq!(program.functions[0].body.len(), 2);
+    assert!(matches!(&program.functions[0].body[0], Stmt::Return(_)));
+    assert!(matches!(&program.functions[0].body[1], Stmt::Return(_)));
+}
