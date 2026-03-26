@@ -93,6 +93,19 @@ fn fold_expr(expr: Expr) -> Expr {
             body: body.into_iter().map(fold_stmt).collect(),
         },
 
+        // Fold the condition and body but never evaluate the loop at compile time.
+        Expr::CondLoop {
+            post,
+            inverted,
+            condition,
+            body,
+        } => Expr::CondLoop {
+            post,
+            inverted,
+            condition: Box::new(fold_expr(*condition)),
+            body: body.into_iter().map(fold_stmt).collect(),
+        },
+
         // Fold arguments but never fold the call itself away.
         Expr::Call { name, args } => Expr::Call {
             name,

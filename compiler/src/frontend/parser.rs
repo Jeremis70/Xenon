@@ -165,6 +165,9 @@ impl<'a> Parser<'a> {
             TokenKind::Ident,
             TokenKind::If,
             TokenKind::Loop,
+            TokenKind::While,
+            TokenKind::Do,
+            TokenKind::Until,
             TokenKind::Break,
             TokenKind::Continue,
         ])?;
@@ -202,7 +205,10 @@ impl<'a> Parser<'a> {
                 }
             }
             TokenKind::If => self.parse_if(),
-            TokenKind::Loop => Ok(Stmt::Expr(Box::new(self.parse_loop_expr()?))),
+            TokenKind::Loop => Ok(Stmt::Expr(Box::new(self.parse_loop()?))),
+            TokenKind::While | TokenKind::Do | TokenKind::Until => {
+                Ok(Stmt::Expr(Box::new(self.parse_cond_loop(first_token)?)))
+            }
             TokenKind::Break => {
                 let value = if self.peek().is_some_and(|t| t.kind != TokenKind::Semicolon) {
                     Some(Box::new(self.parse_expression()?))
@@ -232,11 +238,44 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_loop_expr(&mut self) -> ParseResult<Expr> {
+    fn parse_loop(&mut self) -> ParseResult<Expr> {
         self.expect(TokenKind::LBrace)?;
         let body = self.parse_body()?;
         self.expect(TokenKind::RBrace)?;
         Ok(Expr::Loop { body })
+    }
+
+    fn parse_cond_loop(&mut self, token: &Token) -> ParseResult<Expr> {
+        match token.kind {
+            TokenKind::While | TokenKind::Until => {
+                let inverted = token.kind == TokenKind::Until;
+                let condition = Box::new(self.parse_expression()?);
+                self.expect(TokenKind::LBrace)?;
+                let body = self.parse_body()?;
+                self.expect(TokenKind::RBrace)?;
+                Ok(Expr::CondLoop {
+                    post: false,
+                    inverted,
+                    condition,
+                    body,
+                })
+            }
+            TokenKind::Do => {
+                self.expect(TokenKind::LBrace)?;
+                let body = self.parse_body()?;
+                self.expect(TokenKind::RBrace)?;
+                let inverted =
+                    self.expect([TokenKind::While, TokenKind::Until])?.kind == TokenKind::Until;
+                let condition = Box::new(self.parse_expression()?);
+                Ok(Expr::CondLoop {
+                    post: true,
+                    inverted,
+                    condition,
+                    body,
+                })
+            }
+            _ => unreachable!("expect guarantees token is While, Until, or Do"),
+        }
     }
 
     fn parse_if(&mut self) -> ParseResult<Stmt> {
@@ -391,7 +430,7 @@ impl<'a> Parser<'a> {
                 self.expect(TokenKind::RParen)?;
                 Ok(expr)
             }
-            TokenKind::Loop => self.parse_loop_expr(),
+            TokenKind::Loop => self.parse_loop(),
             _ => Err(self.error(format!("unexpected token in expression: {:?}", token.kind))),
         }
     }
