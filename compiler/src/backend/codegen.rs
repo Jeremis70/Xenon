@@ -174,15 +174,18 @@ impl<'ctx> CodeGen<'ctx> {
             }
         }
 
-        // If the body didn't end with an explicit `return` and the function
-        // has a named return variable, emit an implicit return of that variable.
+        // If the body didn't end with an explicit `return`, either emit an
+        // implicit return from the named return variable, or report an error.
         let current_block = self
             .builder
             .get_insert_block()
             .ok_or(CodegenError::InvalidIrState("no insert block after body"))?;
-        if current_block.get_terminator().is_none()
-            && let Some(ret_name) = &f.return_type.name
-        {
+        if current_block.get_terminator().is_none() {
+            let Some(ret_name) = &f.return_type.name else {
+                return Err(CodegenError::MissingReturn {
+                    name: f.name.clone(),
+                });
+            };
             let &(ptr, ty) =
                 self.variables
                     .get(ret_name.as_str())
