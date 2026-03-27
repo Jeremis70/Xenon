@@ -73,6 +73,23 @@ impl FromStr for Type {
     }
 }
 
+impl std::fmt::Display for Type {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Type::Int(w) => write!(f, "i{w}"),
+            Type::UInt(w) => write!(f, "u{w}"),
+            Type::USize => write!(f, "usize"),
+            Type::ISize => write!(f, "isize"),
+            Type::Float16 => write!(f, "f16"),
+            Type::BFloat16 => write!(f, "bf16"),
+            Type::Float32 => write!(f, "f32"),
+            Type::Float64 => write!(f, "f64"),
+            Type::Float128 => write!(f, "f128"),
+            Type::Bool => write!(f, "bool"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Binding {
     pub name: Option<String>,
