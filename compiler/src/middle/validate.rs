@@ -21,13 +21,20 @@ fn validate_stmt(stmt: &Stmt) -> SemanticResult<()> {
             {
                 check_constant_range(binding.name.as_deref().unwrap_or("_"), *v, &binding.ty)?;
             }
+            // Also walk the default expression for nested declarations.
+            if let Some(default) = &binding.default {
+                validate_expr(default)?;
+            }
             Ok(())
         }
+        Stmt::Return(expr) => validate_expr(expr),
+        Stmt::Assign { value, .. } => validate_expr(value),
         Stmt::If {
+            condition,
             then_branch,
             else_branch,
-            ..
         } => {
+            validate_expr(condition)?;
             for s in then_branch {
                 validate_stmt(s)?;
             }
@@ -40,22 +47,31 @@ fn validate_stmt(stmt: &Stmt) -> SemanticResult<()> {
         }
         Stmt::Expr(expr) => validate_expr(expr),
         Stmt::Break(Some(expr)) => validate_expr(expr),
-        _ => Ok(()),
+        Stmt::Break(None) | Stmt::Continue => Ok(()),
     }
 }
 
 fn validate_expr(expr: &Expr) -> SemanticResult<()> {
     match expr {
-        Expr::Loop { body } | Expr::CondLoop { body, .. } => {
+        Expr::Loop { body } => {
+            for s in body {
+                validate_stmt(s)?;
+            }
+            Ok(())
+        }
+        Expr::CondLoop {
+            condition, body, ..
+        } => {
+            validate_expr(condition)?;
             for s in body {
                 validate_stmt(s)?;
             }
             Ok(())
         }
         Expr::IfElse {
+            condition,
             then_branch,
             else_branch,
-            condition,
         } => {
             validate_expr(condition)?;
             validate_expr(then_branch)?;
@@ -66,7 +82,13 @@ fn validate_expr(expr: &Expr) -> SemanticResult<()> {
             validate_expr(rhs)
         }
         Expr::UnaryOp { operand, .. } => validate_expr(operand),
-        _ => Ok(()),
+        Expr::Call { args, .. } => {
+            for arg in args {
+                validate_expr(arg)?;
+            }
+            Ok(())
+        }
+        Expr::Int(_) | Expr::Ident(_) => Ok(()),
     }
 }
 
