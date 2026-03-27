@@ -758,3 +758,42 @@ fn parse_multiple_returns_only_first_is_reachable_in_ast() {
     assert!(matches!(&program.functions[0].body[0], Stmt::Return(_)));
     assert!(matches!(&program.functions[0].body[1], Stmt::Return(_)));
 }
+
+// ── usize / isize ─────────────────────────────────────────────────────────────
+
+#[test]
+fn parse_usize_param_and_return() {
+    let src = "fn f(usize x)->usize { return x; }";
+    let tokens = lex(src).expect("lexing should succeed");
+    let mut parser = Parser::new(&tokens);
+    let program = parser.parse_program().expect("parsing should succeed");
+
+    let func = &program.functions[0];
+    assert_eq!(func.params[0].ty, Type::USize);
+    assert_eq!(func.return_type.ty, Type::USize);
+}
+
+#[test]
+fn parse_isize_param_and_return() {
+    let src = "fn f(isize x)->isize { return x; }";
+    let tokens = lex(src).expect("lexing should succeed");
+    let mut parser = Parser::new(&tokens);
+    let program = parser.parse_program().expect("parsing should succeed");
+
+    let func = &program.functions[0];
+    assert_eq!(func.params[0].ty, Type::ISize);
+    assert_eq!(func.return_type.ty, Type::ISize);
+}
+
+#[test]
+fn parse_usize_var_decl() {
+    let src = "fn f()->u32 { usize n = 100; return 0; }";
+    let tokens = lex(src).expect("lexing should succeed");
+    let mut parser = Parser::new(&tokens);
+    let program = parser.parse_program().expect("parsing should succeed");
+
+    match &program.functions[0].body[0] {
+        Stmt::VarDecl(binding) => assert_eq!(binding.ty, Type::USize),
+        other => panic!("expected VarDecl, got {:?}", other),
+    }
+}
