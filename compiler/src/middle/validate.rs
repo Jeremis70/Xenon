@@ -38,6 +38,34 @@ fn validate_stmt(stmt: &Stmt) -> SemanticResult<()> {
             }
             Ok(())
         }
+        Stmt::Expr(expr) => validate_expr(expr),
+        Stmt::Break(Some(expr)) => validate_expr(expr),
+        _ => Ok(()),
+    }
+}
+
+fn validate_expr(expr: &Expr) -> SemanticResult<()> {
+    match expr {
+        Expr::Loop { body } | Expr::CondLoop { body, .. } => {
+            for s in body {
+                validate_stmt(s)?;
+            }
+            Ok(())
+        }
+        Expr::IfElse {
+            then_branch,
+            else_branch,
+            condition,
+        } => {
+            validate_expr(condition)?;
+            validate_expr(then_branch)?;
+            validate_expr(else_branch)
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            validate_expr(lhs)?;
+            validate_expr(rhs)
+        }
+        Expr::UnaryOp { operand, .. } => validate_expr(operand),
         _ => Ok(()),
     }
 }
@@ -46,10 +74,14 @@ fn check_constant_range(name: &str, value: i64, ty: &Type) -> SemanticResult<()>
     let fits = match ty {
         Type::UInt(n) => {
             let n = *n;
-            if n >= 64 {
-                value >= 0
+            if value < 0 {
+                false
+            } else if n >= 64 {
+                true
             } else {
-                value >= 0 && value < (1i64 << n)
+                let v = value as u128;
+                let max = (1u128 << n) - 1;
+                v <= max
             }
         }
         Type::Int(n) => {
@@ -57,9 +89,10 @@ fn check_constant_range(name: &str, value: i64, ty: &Type) -> SemanticResult<()>
             if n >= 64 {
                 true
             } else {
-                let min = -(1i64 << (n - 1));
-                let max = (1i64 << (n - 1)) - 1;
-                value >= min && value <= max
+                let min = -(1i128 << (n - 1));
+                let max = (1i128 << (n - 1)) - 1;
+                let v = value as i128;
+                v >= min && v <= max
             }
         }
         _ => true,
