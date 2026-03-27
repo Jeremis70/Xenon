@@ -178,30 +178,37 @@ impl<'a> Parser<'a> {
                 Ok(Stmt::Return(Box::new(expr)))
             }
             TokenKind::Ident => {
-                let second_token = self.expect([
-                    TokenKind::Ident,
-                    TokenKind::Eq,
-                    TokenKind::PlusEq,
-                    TokenKind::MinusEq,
-                    TokenKind::StarEq,
-                    TokenKind::SlashEq,
-                    TokenKind::PercentEq,
-                    TokenKind::PowEq,
-                    TokenKind::AndEq,
-                    TokenKind::OrEq,
-                    TokenKind::XorEq,
-                    TokenKind::LShiftEq,
-                    TokenKind::RShiftEq,
-                    TokenKind::PlusPlus,
-                    TokenKind::MinusMinus,
-                ])?;
-                match second_token.kind {
-                    TokenKind::Ident => self.parse_var_decl(first_token, second_token),
-                    kind if kind.is_assign_op() => {
-                        let name = first_token.ident_value()?.to_string();
-                        self.parse_var_assign(name, &kind)
+                if self.peek().is_some_and(|t| t.kind == TokenKind::LParen) {
+                    // Ident followed by `(` is a function call statement
+                    let call_expr = self.parse_call(first_token.ident_value()?.to_string())?;
+                    self.expect(TokenKind::Semicolon)?;
+                    Ok(Stmt::Expr(Box::new(call_expr)))
+                } else {
+                    let second_token = self.expect([
+                        TokenKind::Ident,
+                        TokenKind::Eq,
+                        TokenKind::PlusEq,
+                        TokenKind::MinusEq,
+                        TokenKind::StarEq,
+                        TokenKind::SlashEq,
+                        TokenKind::PercentEq,
+                        TokenKind::PowEq,
+                        TokenKind::AndEq,
+                        TokenKind::OrEq,
+                        TokenKind::XorEq,
+                        TokenKind::LShiftEq,
+                        TokenKind::RShiftEq,
+                        TokenKind::PlusPlus,
+                        TokenKind::MinusMinus,
+                    ])?;
+                    match second_token.kind {
+                        TokenKind::Ident => self.parse_var_decl(first_token, second_token),
+                        kind if kind.is_assign_op() => {
+                            let name = first_token.ident_value()?.to_string();
+                            self.parse_var_assign(name, &kind)
+                        }
+                        _ => unreachable!("expect guarantees valid second token"),
                     }
-                    _ => unreachable!("expect guarantees valid second token"),
                 }
             }
             TokenKind::If => self.parse_if(),
