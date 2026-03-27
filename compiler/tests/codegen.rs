@@ -1,4 +1,6 @@
+use inkwell::OptimizationLevel;
 use inkwell::context::Context;
+use inkwell::targets::{CodeModel, InitializationConfig, RelocMode, Target, TargetMachine};
 use xenonc::backend::codegen::CodeGen;
 use xenonc::frontend::lexer::lex;
 use xenonc::frontend::parser::Parser;
@@ -12,8 +14,26 @@ fn compile_to_ir(src: &str) -> String {
     let mut parser = Parser::new(&tokens);
     let program = parser.parse_program().expect("parsing should succeed");
     let program = fold_constants(program);
+
+    Target::initialize_native(&InitializationConfig::default())
+        .expect("native target init should succeed");
+    let triple = TargetMachine::get_default_triple();
+    let target = Target::from_triple(&triple).expect("target from triple should succeed");
+    let cpu = TargetMachine::get_host_cpu_name().to_string();
+    let features = TargetMachine::get_host_cpu_features().to_string();
+    let tm = target
+        .create_target_machine(
+            &triple,
+            &cpu,
+            &features,
+            OptimizationLevel::None,
+            RelocMode::Default,
+            CodeModel::Default,
+        )
+        .expect("target machine creation should succeed");
+
     let context = Context::create();
-    let cg = CodeGen::new(&context, "test");
+    let cg = CodeGen::new(&context, "test", tm.get_target_data());
     let module = cg
         .compile_program(&program)
         .expect("codegen should succeed");
@@ -173,8 +193,26 @@ fn missing_return_yields_codegen_error() {
     let mut parser = Parser::new(&tokens);
     let program = parser.parse_program().expect("parsing should succeed");
     let program = fold_constants(program);
+
+    Target::initialize_native(&InitializationConfig::default())
+        .expect("native target init should succeed");
+    let triple = TargetMachine::get_default_triple();
+    let target = Target::from_triple(&triple).expect("target from triple should succeed");
+    let cpu = TargetMachine::get_host_cpu_name().to_string();
+    let features = TargetMachine::get_host_cpu_features().to_string();
+    let tm = target
+        .create_target_machine(
+            &triple,
+            &cpu,
+            &features,
+            OptimizationLevel::None,
+            RelocMode::Default,
+            CodeModel::Default,
+        )
+        .expect("target machine creation should succeed");
+
     let context = Context::create();
-    let cg = CodeGen::new(&context, "test");
+    let cg = CodeGen::new(&context, "test", tm.get_target_data());
     let err = cg
         .compile_program(&program)
         .expect_err("codegen should fail with MissingReturn");
@@ -324,4 +362,38 @@ fn do_until_loop_emits_cond_after_body() {
         cond_pos > body_pos,
         "loop_cond should appear after loop_body in the IR:\n{ir}"
     );
+}
+
+// ── usize / isize (pointer-sized integers) ────────────────────────────────────
+
+/// `usize` lowers to the pointer-sized integer type reported by the target's
+/// data layout — the same type LLVM uses for pointer arithmetic on that target.
+#[test]
+fn usize_lowers_to_pointer_sized_int() {
+    let ir = compile_to_ir("fn f(usize x)->usize { return x; }");
+    // On a 64-bit host this is i64; on 32-bit it's i32. Either way the IR
+    // must contain the right LLVM integer type for the target.
+    let ptr_bits = std::mem::size_of::<*const ()>() * 8;
+    assert!(
+        ir.contains(&format!("i{ptr_bits}")),
+        "expected i{ptr_bits} in IR for usize:\n{ir}"
+    );
+}
+
+/// `isize` lowers to the same pointer-sized integer type as `usize`; there is
+/// no sign distinction at the LLVM type level.
+#[test]
+fn isize_lowers_to_pointer_sized_int() {
+    let ir = compile_to_ir("fn f(isize x)->isize { return x; }");
+    let ptr_bits = std::mem::size_of::<*const ()>() * 8;
+    assert!(
+        ir.contains(&format!("i{ptr_bits}")),
+        "expected i{ptr_bits} in IR for isize:\n{ir}"
+    );
+}
+
+/// Arithmetic on `usize` values produces valid IR without errors.
+#[test]
+fn usize_arithmetic_compiles() {
+    compile_to_ir("fn add(usize a, usize b)->usize { return a + b; }");
 }
