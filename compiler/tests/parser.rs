@@ -350,6 +350,85 @@ fn parse_call_arg_can_be_expression() {
     }
 }
 
+// ── Call statements ───────────────────────────────────────────────────────────
+
+#[test]
+fn parse_call_stmt_no_args() {
+    let src = "fn f()->u32{ foo(); return 0; }";
+    let tokens = lex(src).expect("lexing should succeed");
+    let mut parser = Parser::new(&tokens);
+    let program = parser.parse_program().expect("parsing should succeed");
+
+    match &program.functions[0].body[0] {
+        Stmt::Expr(expr) => match expr.as_ref() {
+            Expr::Call { name, args } => {
+                assert_eq!(name, "foo");
+                assert!(args.is_empty());
+            }
+            other => panic!("expected Call, got {:?}", other),
+        },
+        other => panic!("expected Expr(Call), got {:?}", other),
+    }
+}
+
+#[test]
+fn parse_call_stmt_with_args() {
+    let src = "fn f()->u32{ log(1, 2); return 0; }";
+    let tokens = lex(src).expect("lexing should succeed");
+    let mut parser = Parser::new(&tokens);
+    let program = parser.parse_program().expect("parsing should succeed");
+
+    match &program.functions[0].body[0] {
+        Stmt::Expr(expr) => match expr.as_ref() {
+            Expr::Call { name, args } => {
+                assert_eq!(name, "log");
+                assert_eq!(args.len(), 2);
+                assert!(matches!(args[0], Expr::Int(1)));
+                assert!(matches!(args[1], Expr::Int(2)));
+            }
+            other => panic!("expected Call, got {:?}", other),
+        },
+        other => panic!("expected Expr(Call), got {:?}", other),
+    }
+}
+
+#[test]
+fn parse_call_stmt_arg_can_be_expression() {
+    let src = "fn f()->u32{ sink(x + 1); return 0; }";
+    let tokens = lex(src).expect("lexing should succeed");
+    let mut parser = Parser::new(&tokens);
+    let program = parser.parse_program().expect("parsing should succeed");
+
+    match &program.functions[0].body[0] {
+        Stmt::Expr(expr) => match expr.as_ref() {
+            Expr::Call { name, args } => {
+                assert_eq!(name, "sink");
+                assert_eq!(args.len(), 1);
+                assert!(matches!(&args[0], Expr::BinOp { op: BinOp::Add, .. }));
+            }
+            other => panic!("expected Call, got {:?}", other),
+        },
+        other => panic!("expected Expr(Call), got {:?}", other),
+    }
+}
+
+#[test]
+fn parse_call_stmt_can_appear_multiple_times_in_body() {
+    let src = "fn f()->u32{ a(); b(); return 0; }";
+    let tokens = lex(src).expect("lexing should succeed");
+    let mut parser = Parser::new(&tokens);
+    let program = parser.parse_program().expect("parsing should succeed");
+
+    let body = &program.functions[0].body;
+    assert_eq!(body.len(), 3);
+    assert!(
+        matches!(&body[0], Stmt::Expr(e) if matches!(e.as_ref(), Expr::Call { name, .. } if name == "a"))
+    );
+    assert!(
+        matches!(&body[1], Stmt::Expr(e) if matches!(e.as_ref(), Expr::Call { name, .. } if name == "b"))
+    );
+}
+
 #[test]
 fn parse_call_as_rhs_of_var_decl() {
     let src = "fn f()->u32{ u32 y = compute(5); return y; }";
