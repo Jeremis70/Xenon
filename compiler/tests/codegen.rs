@@ -397,3 +397,60 @@ fn isize_lowers_to_pointer_sized_int() {
 fn usize_arithmetic_compiles() {
     compile_to_ir("fn add(usize a, usize b)->usize { return a + b; }");
 }
+
+// ── Unsigned integer semantics ────────────────────────────────────────────────
+
+/// Comparing two `u32` values must use the unsigned `ult` predicate.
+#[test]
+fn unsigned_lt_uses_ult() {
+    let ir = compile_to_ir("fn f(u32 a, u32 b)->bool { return a < b; }");
+    assert!(
+        ir.contains("icmp ult"),
+        "expected `icmp ult` for unsigned comparison:\n{ir}"
+    );
+}
+
+/// Comparing two `i32` values must use the signed `slt` predicate.
+#[test]
+fn signed_lt_uses_slt() {
+    let ir = compile_to_ir("fn f(i32 a, i32 b)->bool { return a < b; }");
+    assert!(
+        ir.contains("icmp slt"),
+        "expected `icmp slt` for signed comparison:\n{ir}"
+    );
+}
+
+/// Dividing two `u32` values must use the unsigned `udiv` instruction.
+#[test]
+fn unsigned_div_uses_udiv() {
+    let ir = compile_to_ir("fn f(u32 a, u32 b)->u32 { return a / b; }");
+    assert!(
+        ir.contains("udiv"),
+        "expected `udiv` for unsigned division:\n{ir}"
+    );
+}
+
+/// Right-shifting a `u32` must use the logical shift right (`lshr`).
+#[test]
+fn unsigned_shr_uses_lshr() {
+    let ir = compile_to_ir("fn f(u32 a, u32 b)->u32 { return a >> b; }");
+    assert!(
+        ir.contains("lshr"),
+        "expected `lshr` for unsigned right shift:\n{ir}"
+    );
+}
+
+/// A narrow unsigned variable compared against a wide literal must widen the
+/// variable with `zext`, not truncate the literal.
+#[test]
+fn narrow_unsigned_vs_wide_literal() {
+    let ir = compile_to_ir("fn f(u8 x)->bool { return x < 200; }");
+    assert!(
+        ir.contains("zext"),
+        "expected `zext` to widen u8 before comparison:\n{ir}"
+    );
+    assert!(
+        ir.contains("icmp ult"),
+        "expected unsigned comparison (`icmp ult`):\n{ir}"
+    );
+}
