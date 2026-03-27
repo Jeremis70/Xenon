@@ -482,7 +482,8 @@ impl<'ctx> CodeGen<'ctx> {
                 for (arg_expr, param) in args.iter().zip(callee.get_param_iter()) {
                     let val = self.codegen_expr(arg_expr)?;
                     let target = param.get_type();
-                    compiled_args.push(self.cast_int_to_type(val, target, false)?.into());
+                    let arg_unsigned = self.infer_expr_unsigned(arg_expr);
+                    compiled_args.push(self.cast_int_to_type(val, target, arg_unsigned)?.into());
                 }
                 let call = self
                     .builder
@@ -569,14 +570,18 @@ impl<'ctx> CodeGen<'ctx> {
                 // Emit the widening cast for `then` at the end of then_end_bb
                 // (before its branch terminator).
                 self.builder.position_at_end(then_end_bb);
-                let then_val = self.cast_int_to_type(then_val_raw, common_ty.into(), false)?;
+                let then_unsigned = self.infer_expr_unsigned(then_branch);
+                let then_val =
+                    self.cast_int_to_type(then_val_raw, common_ty.into(), then_unsigned)?;
                 self.builder
                     .build_unconditional_branch(merge_bb)
                     .map_err(llvm_err!("build_unconditional_branch (ife then->merge)"))?;
 
                 // Emit the widening cast for `else` at the end of else_end_bb.
                 self.builder.position_at_end(else_end_bb);
-                let else_val = self.cast_int_to_type(else_val_raw, common_ty.into(), false)?;
+                let else_unsigned = self.infer_expr_unsigned(else_branch);
+                let else_val =
+                    self.cast_int_to_type(else_val_raw, common_ty.into(), else_unsigned)?;
                 self.builder
                     .build_unconditional_branch(merge_bb)
                     .map_err(llvm_err!("build_unconditional_branch (ife else->merge)"))?;
@@ -772,11 +777,7 @@ impl<'ctx> CodeGen<'ctx> {
                 ..
             } => {
                 // Propagate unsignedness from either branch.
-                self.infer_expr_unsigned(then_branch)
-                    || else_branch
-                        .as_ref()
-                        .map(|expr| self.infer_expr_unsigned(expr))
-                        .unwrap_or(false)
+                self.infer_expr_unsigned(then_branch) || self.infer_expr_unsigned(else_branch)
             }
             Expr::Call { .. } | Expr::Loop { .. } | Expr::CondLoop { .. } => false,
         }
@@ -821,6 +822,11 @@ impl<'ctx> CodeGen<'ctx> {
         };
         let wt = lhs.get_type();
 
+        // Combined unsigned flag: if either operand is unsigned, the operation
+        // is treated as unsigned. This handles cases like `200 < x` where the
+        // literal on the LHS is sign-neutral but `x` is `u32`.
+        let is_unsigned = lhs_unsigned || rhs_unsigned;
+
         match op {
             BinOp::Add => self
                 .builder
@@ -834,7 +840,7 @@ impl<'ctx> CodeGen<'ctx> {
                 .builder
                 .build_int_mul(lhs, rhs, "mul")
                 .map_err(llvm_err!("build_int_mul")),
-            BinOp::Div if lhs_unsigned => self
+            BinOp::Div if is_unsigned => self
                 .builder
                 .build_int_unsigned_div(lhs, rhs, "udiv")
                 .map_err(llvm_err!("build_int_unsigned_div")),
@@ -842,7 +848,7 @@ impl<'ctx> CodeGen<'ctx> {
                 .builder
                 .build_int_signed_div(lhs, rhs, "sdiv")
                 .map_err(llvm_err!("build_int_signed_div")),
-            BinOp::Mod if lhs_unsigned => self
+            BinOp::Mod if is_unsigned => self
                 .builder
                 .build_int_unsigned_rem(lhs, rhs, "urem")
                 .map_err(llvm_err!("build_int_unsigned_rem")),
@@ -887,7 +893,7 @@ impl<'ctx> CodeGen<'ctx> {
                     .map_err(llvm_err!("build_phi"))?;
 
                 let exp_val = exp_phi.as_basic_value().into_int_value();
-                let exp_pred = if lhs_unsigned {
+                let exp_pred = if rhs_unsigned {
                     IntPredicate::UGT
                 } else {
                     IntPredicate::SGT
@@ -935,7 +941,7 @@ impl<'ctx> CodeGen<'ctx> {
                 .build_int_compare(IntPredicate::NE, lhs, rhs, "ne")
                 .map_err(llvm_err!("build_int_compare")),
             BinOp::Lt => {
-                let pred = if lhs_unsigned {
+                let pred = if is_unsigned {
                     IntPredicate::ULT
                 } else {
                     IntPredicate::SLT
@@ -945,7 +951,7 @@ impl<'ctx> CodeGen<'ctx> {
                     .map_err(llvm_err!("build_int_compare"))
             }
             BinOp::Gt => {
-                let pred = if lhs_unsigned {
+                let pred = if is_unsigned {
                     IntPredicate::UGT
                 } else {
                     IntPredicate::SGT
@@ -955,7 +961,7 @@ impl<'ctx> CodeGen<'ctx> {
                     .map_err(llvm_err!("build_int_compare"))
             }
             BinOp::LtEq => {
-                let pred = if lhs_unsigned {
+                let pred = if is_unsigned {
                     IntPredicate::ULE
                 } else {
                     IntPredicate::SLE
@@ -965,7 +971,7 @@ impl<'ctx> CodeGen<'ctx> {
                     .map_err(llvm_err!("build_int_compare"))
             }
             BinOp::GtEq => {
-                let pred = if lhs_unsigned {
+                let pred = if is_unsigned {
                     IntPredicate::UGE
                 } else {
                     IntPredicate::SGE
@@ -1037,7 +1043,7 @@ impl<'ctx> CodeGen<'ctx> {
                 .map_err(llvm_err!("build_left_shift")),
             BinOp::RShift => self
                 .builder
-                .build_right_shift(lhs, rhs, !lhs_unsigned, "rshift")
+                .build_right_shift(lhs, rhs, !is_unsigned, "rshift")
                 .map_err(llvm_err!("build_right_shift")),
         }
     }
