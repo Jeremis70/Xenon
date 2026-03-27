@@ -6,11 +6,16 @@ use std::str::FromStr;
 pub enum Type {
     Int(u32),  // Any bit-width integer
     UInt(u32), // Any bit-width integer
+
+    USize,
+    ISize,
+
     Float16,
     BFloat16,
     Float32,
     Float64,
     Float128,
+
     Bool,
 }
 
@@ -19,6 +24,8 @@ impl FromStr for Type {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
+            "usize" => return Ok(Type::USize),
+            "isize" => return Ok(Type::ISize),
             "bool" => return Ok(Type::Bool),
             "f16" => return Ok(Type::Float16),
             "bf16" => return Ok(Type::BFloat16),
