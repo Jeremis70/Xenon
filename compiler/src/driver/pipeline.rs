@@ -10,6 +10,8 @@ use crate::backend::link::link_executable;
 
 use crate::middle::constant_fold::fold_constants;
 
+use crate::middle::validate::validate_program;
+
 pub fn compile(session: &Session) -> i32 {
     let mut tokens: Vec<Token> = Vec::new();
     for source in &session.source {
@@ -92,6 +94,11 @@ pub fn compile(session: &Session) -> i32 {
     };
 
     let program = fold_constants(program);
+
+    if let Err(e) = validate_program(&program) {
+        eprintln!("Semantic error: {e}");
+        return 1;
+    }
 
     // Output dir choice
     let out_dir: PathBuf = session

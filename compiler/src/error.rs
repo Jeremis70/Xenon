@@ -73,3 +73,16 @@ pub enum CodegenError {
 }
 
 pub type CodegenResult<T> = Result<T, CodegenError>;
+
+#[derive(Debug, thiserror::Error)]
+pub enum SemanticError {
+    #[error("constant {value} is out of range for type `{ty}` in binding `{name}` (span {}..{})", span.start, span.end)]
+    ConstantOutOfRange {
+        name: String,
+        value: i64,
+        ty: crate::frontend::ast::Type,
+        span: Span,
+    },
+}
+
+pub type SemanticResult<T> = Result<T, SemanticError>;
