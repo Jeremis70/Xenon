@@ -40,7 +40,7 @@ pub struct CodeGen<'ctx> {
     context: &'ctx Context,
     module: Module<'ctx>,
     builder: Builder<'ctx>,
-    variables: HashMap<String, (PointerValue<'ctx>, BasicTypeEnum<'ctx>)>,
+    variables: HashMap<String, (PointerValue<'ctx>, BasicTypeEnum<'ctx>, Type)>,
     /// Stack of frames pushed when entering a loop, popped on exit.
     loop_stack: Vec<LoopFrame<'ctx>>,
     /// The function currently being compiled; set at the start of
@@ -153,8 +153,10 @@ impl<'ctx> CodeGen<'ctx> {
             self.builder
                 .build_store(alloca, incoming)
                 .map_err(llvm_err!("build_store (param)"))?;
-            self.variables
-                .insert(param.name.clone().unwrap_or_default(), (alloca, llvm_ty));
+            self.variables.insert(
+                param.name.clone().unwrap_or_default(),
+                (alloca, llvm_ty, param.ty.clone()),
+            );
         }
 
         // If the return type has a named binding (e.g. `-> u32 sum`), allocate a
@@ -174,7 +176,8 @@ impl<'ctx> CodeGen<'ctx> {
             self.builder
                 .build_store(alloca, zero)
                 .map_err(llvm_err!("build_store (named return init)"))?;
-            self.variables.insert(ret_name.clone(), (alloca, ret_ty));
+            self.variables
+                .insert(ret_name.clone(), (alloca, ret_ty, f.return_type.ty.clone()));
         }
 
         for stmt in &f.body {
@@ -197,7 +200,7 @@ impl<'ctx> CodeGen<'ctx> {
                     name: f.name.clone(),
                 });
             };
-            let &(ptr, ty) =
+            let (ptr, ty, _) =
                 self.variables
                     .get(ret_name.as_str())
                     .ok_or(CodegenError::InvalidIrState(
@@ -205,10 +208,10 @@ impl<'ctx> CodeGen<'ctx> {
                     ))?;
             let val = self
                 .builder
-                .build_load(ty, ptr, ret_name)
+                .build_load(*ty, *ptr, ret_name)
                 .map_err(llvm_err!("build_load (implicit return)"))?
                 .into_int_value();
-            let val = self.cast_int_to_type(val, ret_ty)?;
+            let val = self.cast_int_to_type(val, ret_ty, false)?;
             self.builder
                 .build_return(Some(&val))
                 .map_err(llvm_err!("build_return (implicit)"))?;
@@ -229,7 +232,7 @@ impl<'ctx> CodeGen<'ctx> {
         match stmt {
             Stmt::Return(inner) => {
                 let value = self.codegen_expr(inner)?;
-                let value = self.cast_int_to_type(value, ret_ty)?;
+                let value = self.cast_int_to_type(value, ret_ty, false)?;
                 self.builder
                     .build_return(Some(&value))
                     .map_err(llvm_err!("build_return"))?;
@@ -242,27 +245,33 @@ impl<'ctx> CodeGen<'ctx> {
                     .builder
                     .build_alloca(llvm_ty, var_name)
                     .map_err(llvm_err!("build_alloca"))?;
-                self.variables
-                    .insert(binding.name.clone().unwrap_or_default(), (alloca, llvm_ty));
+                self.variables.insert(
+                    binding.name.clone().unwrap_or_default(),
+                    (alloca, llvm_ty, binding.ty.clone()),
+                );
                 let init_val = self.codegen_expr(
                     binding
                         .default
                         .as_ref()
                         .expect("VarDecl binding must have a default"),
                 )?;
-                let init_val = self.cast_int_to_type(init_val, llvm_ty)?;
+                let is_unsigned = matches!(binding.ty, Type::UInt(_) | Type::USize);
+                let init_val = self.cast_int_to_type(init_val, llvm_ty, is_unsigned)?;
                 self.builder
                     .build_store(alloca, init_val)
                     .map_err(llvm_err!("build_store"))?;
                 Ok(false)
             }
             Stmt::Assign { name, value } => {
-                let (var_ptr, var_ty) = *self
-                    .variables
-                    .get(name)
-                    .ok_or_else(|| CodegenError::UndefinedVariable { name: name.clone() })?;
+                let (var_ptr, var_ty, is_unsigned) = {
+                    let (ptr, ty, ast_ty) = self
+                        .variables
+                        .get(name)
+                        .ok_or_else(|| CodegenError::UndefinedVariable { name: name.clone() })?;
+                    (*ptr, *ty, matches!(ast_ty, Type::UInt(_) | Type::USize))
+                };
                 let val = self.codegen_expr(value)?;
-                let val = self.cast_int_to_type(val, var_ty)?;
+                let val = self.cast_int_to_type(val, var_ty, is_unsigned)?;
                 self.builder
                     .build_store(var_ptr, val)
                     .map_err(llvm_err!("build_store"))?;
@@ -287,7 +296,7 @@ impl<'ctx> CodeGen<'ctx> {
                 };
                 if let Some(expr) = opt_expr {
                     let val = self.codegen_expr(expr)?;
-                    let val = self.cast_int_to_type(val, self.context.i64_type().into())?;
+                    let val = self.cast_int_to_type(val, self.context.i64_type().into(), false)?;
                     self.builder
                         .build_store(result_slot, val)
                         .map_err(llvm_err!("build_store (break value)"))?;
@@ -396,12 +405,15 @@ impl<'ctx> CodeGen<'ctx> {
         }
     }
 
-    /// Casts `val` to `target` via truncation or zero-extension as needed.
-    /// If the bit widths are already equal no instruction is emitted.
+    /// Casts `val` to `target` via truncation or sign/zero-extension as needed.
+    /// When `is_unsigned` is true, widening uses zero-extension; otherwise
+    /// sign-extension. If the bit widths are already equal no instruction is
+    /// emitted.
     fn cast_int_to_type(
         &self,
         val: inkwell::values::IntValue<'ctx>,
         target: BasicTypeEnum<'ctx>,
+        is_unsigned: bool,
     ) -> CodegenResult<inkwell::values::IntValue<'ctx>> {
         let BasicTypeEnum::IntType(target_ty) = target else {
             return Ok(val);
@@ -416,10 +428,14 @@ impl<'ctx> CodeGen<'ctx> {
                 .builder
                 .build_int_truncate(val, target_ty, "trunc")
                 .map_err(llvm_err!("build_int_truncate")),
-            std::cmp::Ordering::Less => self
+            std::cmp::Ordering::Less if is_unsigned => self
                 .builder
                 .build_int_z_extend(val, target_ty, "zext")
                 .map_err(llvm_err!("build_int_z_extend")),
+            std::cmp::Ordering::Less => self
+                .builder
+                .build_int_s_extend(val, target_ty, "sext")
+                .map_err(llvm_err!("build_int_s_extend")),
         }
     }
 
@@ -427,19 +443,21 @@ impl<'ctx> CodeGen<'ctx> {
         match e {
             Expr::Int(v) => Ok(self.context.i64_type().const_int(*v as u64, true)),
             Expr::Ident(name) => {
-                let (ptr, ty) = self
+                let &(ref ptr, ty, ref _ast_ty) = self
                     .variables
                     .get(name)
                     .ok_or_else(|| CodegenError::UndefinedVariable { name: name.clone() })?;
                 self.builder
-                    .build_load(*ty, *ptr, name.as_str())
+                    .build_load(ty, *ptr, name.as_str())
                     .map_err(llvm_err!("build_load"))
                     .map(|v| v.into_int_value())
             }
             Expr::BinOp { lhs, op, rhs } => {
+                let lhs_unsigned = self.infer_expr_unsigned(lhs);
+                let rhs_unsigned = self.infer_expr_unsigned(rhs);
                 let lhs_val = self.codegen_expr(lhs)?;
                 let rhs_val = self.codegen_expr(rhs)?;
-                self.codegen_binop(op, lhs_val, rhs_val)
+                self.codegen_binop(op, lhs_val, rhs_val, lhs_unsigned, rhs_unsigned)
             }
             Expr::UnaryOp { op, operand } => {
                 let val = self.codegen_expr(operand)?;
@@ -463,7 +481,7 @@ impl<'ctx> CodeGen<'ctx> {
                 for (arg_expr, param) in args.iter().zip(callee.get_param_iter()) {
                     let val = self.codegen_expr(arg_expr)?;
                     let target = param.get_type();
-                    compiled_args.push(self.cast_int_to_type(val, target)?.into());
+                    compiled_args.push(self.cast_int_to_type(val, target, false)?.into());
                 }
                 let call = self
                     .builder
@@ -550,14 +568,14 @@ impl<'ctx> CodeGen<'ctx> {
                 // Emit the widening cast for `then` at the end of then_end_bb
                 // (before its branch terminator).
                 self.builder.position_at_end(then_end_bb);
-                let then_val = self.cast_int_to_type(then_val_raw, common_ty.into())?;
+                let then_val = self.cast_int_to_type(then_val_raw, common_ty.into(), false)?;
                 self.builder
                     .build_unconditional_branch(merge_bb)
                     .map_err(llvm_err!("build_unconditional_branch (ife then->merge)"))?;
 
                 // Emit the widening cast for `else` at the end of else_end_bb.
                 self.builder.position_at_end(else_end_bb);
-                let else_val = self.cast_int_to_type(else_val_raw, common_ty.into())?;
+                let else_val = self.cast_int_to_type(else_val_raw, common_ty.into(), false)?;
                 self.builder
                     .build_unconditional_branch(merge_bb)
                     .map_err(llvm_err!("build_unconditional_branch (ife else->merge)"))?;
@@ -732,18 +750,37 @@ impl<'ctx> CodeGen<'ctx> {
         Ok(())
     }
 
+    /// Returns `true` when the expression is known to produce an unsigned value.
+    /// Integer literals are considered sign-neutral (`false`), so the other
+    /// operand in a binary operation decides the signedness.
+    fn infer_expr_unsigned(&self, e: &Expr) -> bool {
+        match e {
+            Expr::Ident(name) => self
+                .variables
+                .get(name.as_str())
+                .is_some_and(|(_, _, ty)| matches!(ty, Type::UInt(_) | Type::USize)),
+            Expr::Int(_) => false,
+            Expr::BinOp { lhs, .. } => self.infer_expr_unsigned(lhs),
+            Expr::UnaryOp { operand, .. } => self.infer_expr_unsigned(operand),
+            Expr::IfElse { then_branch, .. } => self.infer_expr_unsigned(then_branch),
+            Expr::Call { .. } | Expr::Loop { .. } | Expr::CondLoop { .. } => false,
+        }
+    }
+
     fn codegen_binop(
         &self,
         op: &BinOp,
         lhs: inkwell::values::IntValue<'ctx>,
         rhs: inkwell::values::IntValue<'ctx>,
+        lhs_unsigned: bool,
+        rhs_unsigned: bool,
     ) -> CodegenResult<inkwell::values::IntValue<'ctx>> {
         // Normalize operand widths. When one side is i1 (the result of a
         // comparison used in arithmetic like `(x == 0) + 2`), promote it to
         // the other side's width so we never accidentally truncate an integer
-        // down to 1 bit. For all other mismatches we keep the existing rule of
-        // truncating the wider operand (typically a literal) to the variable's
-        // declared width.
+        // down to 1 bit. For other mismatches the narrower operand is extended
+        // to the wider type (typically a literal stays at i64 and the variable
+        // is widened) so no information is lost.
         let (lhs, rhs) = {
             let lw = lhs.get_type().get_bit_width();
             let rw = rhs.get_type().get_bit_width();
@@ -751,19 +788,19 @@ impl<'ctx> CodeGen<'ctx> {
                 (lhs, rhs)
             } else if lw == 1 {
                 // Boolean result on the left: promote it to the integer's width.
-                let lhs = self.cast_int_to_type(lhs, rhs.get_type().into())?;
+                let lhs = self.cast_int_to_type(lhs, rhs.get_type().into(), true)?;
                 (lhs, rhs)
             } else if rw == 1 {
                 // Boolean result on the right: promote it to the integer's width.
-                let rhs = self.cast_int_to_type(rhs, lhs.get_type().into())?;
+                let rhs = self.cast_int_to_type(rhs, lhs.get_type().into(), true)?;
                 (lhs, rhs)
-            } else if lw <= rw {
-                // General rule: truncate the wider operand to the narrower type
-                // (the narrower side is typically the declared variable width).
-                let rhs = self.cast_int_to_type(rhs, lhs.get_type().into())?;
+            } else if lw < rw {
+                // Extend the narrower (lhs) to the wider type (rhs).
+                let lhs = self.cast_int_to_type(lhs, rhs.get_type().into(), lhs_unsigned)?;
                 (lhs, rhs)
             } else {
-                let lhs = self.cast_int_to_type(lhs, rhs.get_type().into())?;
+                // lw > rw: extend the narrower (rhs) to the wider type (lhs).
+                let rhs = self.cast_int_to_type(rhs, lhs.get_type().into(), rhs_unsigned)?;
                 (lhs, rhs)
             }
         };
@@ -782,13 +819,21 @@ impl<'ctx> CodeGen<'ctx> {
                 .builder
                 .build_int_mul(lhs, rhs, "mul")
                 .map_err(llvm_err!("build_int_mul")),
+            BinOp::Div if lhs_unsigned => self
+                .builder
+                .build_int_unsigned_div(lhs, rhs, "udiv")
+                .map_err(llvm_err!("build_int_unsigned_div")),
             BinOp::Div => self
                 .builder
-                .build_int_signed_div(lhs, rhs, "div")
+                .build_int_signed_div(lhs, rhs, "sdiv")
                 .map_err(llvm_err!("build_int_signed_div")),
+            BinOp::Mod if lhs_unsigned => self
+                .builder
+                .build_int_unsigned_rem(lhs, rhs, "urem")
+                .map_err(llvm_err!("build_int_unsigned_rem")),
             BinOp::Mod => self
                 .builder
-                .build_int_signed_rem(lhs, rhs, "mod")
+                .build_int_signed_rem(lhs, rhs, "srem")
                 .map_err(llvm_err!("build_int_signed_rem")),
             BinOp::Pow => {
                 // Integer exponentiation via a countdown loop:
@@ -827,9 +872,14 @@ impl<'ctx> CodeGen<'ctx> {
                     .map_err(llvm_err!("build_phi"))?;
 
                 let exp_val = exp_phi.as_basic_value().into_int_value();
+                let exp_pred = if lhs_unsigned {
+                    IntPredicate::UGT
+                } else {
+                    IntPredicate::SGT
+                };
                 let cond = self
                     .builder
-                    .build_int_compare(IntPredicate::SGT, exp_val, zero, "exp_gt_zero")
+                    .build_int_compare(exp_pred, exp_val, zero, "exp_gt_zero")
                     .map_err(llvm_err!("build_int_compare"))?;
                 self.builder
                     .build_conditional_branch(cond, loop_body, loop_exit)
@@ -869,22 +919,46 @@ impl<'ctx> CodeGen<'ctx> {
                 .builder
                 .build_int_compare(IntPredicate::NE, lhs, rhs, "ne")
                 .map_err(llvm_err!("build_int_compare")),
-            BinOp::Lt => self
-                .builder
-                .build_int_compare(IntPredicate::SLT, lhs, rhs, "lt")
-                .map_err(llvm_err!("build_int_compare")),
-            BinOp::Gt => self
-                .builder
-                .build_int_compare(IntPredicate::SGT, lhs, rhs, "gt")
-                .map_err(llvm_err!("build_int_compare")),
-            BinOp::LtEq => self
-                .builder
-                .build_int_compare(IntPredicate::SLE, lhs, rhs, "le")
-                .map_err(llvm_err!("build_int_compare")),
-            BinOp::GtEq => self
-                .builder
-                .build_int_compare(IntPredicate::SGE, lhs, rhs, "ge")
-                .map_err(llvm_err!("build_int_compare")),
+            BinOp::Lt => {
+                let pred = if lhs_unsigned {
+                    IntPredicate::ULT
+                } else {
+                    IntPredicate::SLT
+                };
+                self.builder
+                    .build_int_compare(pred, lhs, rhs, "lt")
+                    .map_err(llvm_err!("build_int_compare"))
+            }
+            BinOp::Gt => {
+                let pred = if lhs_unsigned {
+                    IntPredicate::UGT
+                } else {
+                    IntPredicate::SGT
+                };
+                self.builder
+                    .build_int_compare(pred, lhs, rhs, "gt")
+                    .map_err(llvm_err!("build_int_compare"))
+            }
+            BinOp::LtEq => {
+                let pred = if lhs_unsigned {
+                    IntPredicate::ULE
+                } else {
+                    IntPredicate::SLE
+                };
+                self.builder
+                    .build_int_compare(pred, lhs, rhs, "le")
+                    .map_err(llvm_err!("build_int_compare"))
+            }
+            BinOp::GtEq => {
+                let pred = if lhs_unsigned {
+                    IntPredicate::UGE
+                } else {
+                    IntPredicate::SGE
+                };
+                self.builder
+                    .build_int_compare(pred, lhs, rhs, "ge")
+                    .map_err(llvm_err!("build_int_compare"))
+            }
             BinOp::BitwiseAnd => self
                 .builder
                 .build_and(lhs, rhs, "and")
@@ -948,7 +1022,7 @@ impl<'ctx> CodeGen<'ctx> {
                 .map_err(llvm_err!("build_left_shift")),
             BinOp::RShift => self
                 .builder
-                .build_right_shift(lhs, rhs, true, "rshift")
+                .build_right_shift(lhs, rhs, !lhs_unsigned, "rshift")
                 .map_err(llvm_err!("build_right_shift")),
         }
     }
