@@ -211,7 +211,8 @@ impl<'ctx> CodeGen<'ctx> {
                 .build_load(*ty, *ptr, ret_name)
                 .map_err(llvm_err!("build_load (implicit return)"))?
                 .into_int_value();
-            let val = self.cast_int_to_type(val, ret_ty, false)?;
+            let is_unsigned = matches!(f.return_type.ty, Type::UInt(_) | Type::USize);
+            let val = self.cast_int_to_type(val, ret_ty, is_unsigned)?;
             self.builder
                 .build_return(Some(&val))
                 .map_err(llvm_err!("build_return (implicit)"))?;
