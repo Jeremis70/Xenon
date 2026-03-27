@@ -761,9 +761,23 @@ impl<'ctx> CodeGen<'ctx> {
                 .get(name.as_str())
                 .is_some_and(|(_, _, ty)| matches!(ty, Type::UInt(_) | Type::USize)),
             Expr::Int(_) => false,
-            Expr::BinOp { lhs, .. } => self.infer_expr_unsigned(lhs),
+            Expr::BinOp { lhs, rhs, .. } => {
+                // Propagate unsignedness from either operand.
+                self.infer_expr_unsigned(lhs) || self.infer_expr_unsigned(rhs)
+            }
             Expr::UnaryOp { operand, .. } => self.infer_expr_unsigned(operand),
-            Expr::IfElse { then_branch, .. } => self.infer_expr_unsigned(then_branch),
+            Expr::IfElse {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                // Propagate unsignedness from either branch.
+                self.infer_expr_unsigned(then_branch)
+                    || else_branch
+                        .as_ref()
+                        .map(|expr| self.infer_expr_unsigned(expr))
+                        .unwrap_or(false)
+            }
             Expr::Call { .. } | Expr::Loop { .. } | Expr::CondLoop { .. } => false,
         }
     }
