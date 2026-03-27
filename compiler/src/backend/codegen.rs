@@ -8,7 +8,7 @@ use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module;
 use inkwell::targets::{
-    CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine,
+    CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetData, TargetMachine,
 };
 use inkwell::types::{BasicType, BasicTypeEnum};
 use inkwell::values::{FunctionValue, PointerValue};
@@ -48,10 +48,13 @@ pub struct CodeGen<'ctx> {
     /// access the function value and return type without threading extra
     /// parameters through `codegen_expr`.
     current_fn: Option<(FunctionValue<'ctx>, BasicTypeEnum<'ctx>)>,
+    /// Data layout of the compilation target. Used to resolve `usize`/`isize`
+    /// to their pointer-sized LLVM integer type via `ptr_sized_int_type`.
+    target_data: TargetData,
 }
 
 impl<'ctx> CodeGen<'ctx> {
-    pub fn new(context: &'ctx Context, module_name: &str) -> Self {
+    pub fn new(context: &'ctx Context, module_name: &str, target_data: TargetData) -> Self {
         let module = context.create_module(module_name);
         let builder = context.create_builder();
         Self {
@@ -61,6 +64,7 @@ impl<'ctx> CodeGen<'ctx> {
             variables: HashMap::new(),
             loop_stack: Vec::new(),
             current_fn: None,
+            target_data,
         }
     }
 
@@ -71,6 +75,13 @@ impl<'ctx> CodeGen<'ctx> {
                 .context
                 .custom_width_int_type(std::num::NonZero::new(*w).expect("bit width is non-zero"))
                 .expect("custom_width_int_type failed")
+                .into(),
+            // usize/isize lower to the pointer-sized integer type for this target.
+            // ptr_sized_int_type queries the data layout directly, so it's always
+            // correct for any target triple the user passes at compile time.
+            Type::USize | Type::ISize => self
+                .context
+                .ptr_sized_int_type(&self.target_data, None)
                 .into(),
             Type::Float16 => self.context.f16_type().into(),
             Type::BFloat16 => self.context.bf16_type().into(),
@@ -979,26 +990,12 @@ pub fn emit_object_and_ir(
     out_obj: &Path,
     out_ll: Option<&Path>,
 ) -> CodegenResult<()> {
-    // 1) Init target (native backend)
+    // 1) Init target and build the TargetMachine upfront so the data layout
+    //    is available before IR generation (required for usize/isize types).
     Target::initialize_native(&InitializationConfig::default())
         .map_err(CodegenError::TargetInit)?;
 
-    // 2) Build IR module
-    let context = Context::create();
-    let cg = CodeGen::new(&context, "xenon_mvp");
-    let module = cg.compile_program(program)?;
-
-    // Optional: write LLVM IR text for debugging
-    if let Some(ll_path) = out_ll {
-        module
-            .print_to_file(ll_path)
-            .map_err(|e| CodegenError::OutputFile(format!("print_to_file(.ll) failed: {e}")))?;
-    }
-
-    // 3) Configure triple + target machine
     let triple = TargetMachine::get_default_triple();
-    module.set_triple(&triple);
-
     let target =
         Target::from_triple(&triple).map_err(|e| CodegenError::TargetError(e.to_string()))?;
 
@@ -1016,7 +1013,21 @@ pub fn emit_object_and_ir(
         )
         .ok_or(CodegenError::TargetMachineCreation)?;
 
-    // 4) Emit object file using write_to_file (TargetMachine API)
+    // 2) Build IR module, passing the data layout so that usize/isize resolve
+    //    to the correct pointer-sized integer type for this target.
+    let context = Context::create();
+    let cg = CodeGen::new(&context, "xenon_mvp", tm.get_target_data());
+    let module = cg.compile_program(program)?;
+    module.set_triple(&triple);
+
+    // Optional: write LLVM IR text for debugging
+    if let Some(ll_path) = out_ll {
+        module
+            .print_to_file(ll_path)
+            .map_err(|e| CodegenError::OutputFile(format!("print_to_file(.ll) failed: {e}")))?;
+    }
+
+    // 3) Emit object file
     tm.write_to_file(&module, FileType::Object, out_obj)
         .map_err(|e| CodegenError::OutputFile(format!("write_to_file(.o) failed: {e}")))?;
 
