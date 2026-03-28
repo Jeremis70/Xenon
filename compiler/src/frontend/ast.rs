@@ -1,5 +1,6 @@
 use crate::error::TypeError;
 use crate::frontend::tokens::TokenKind;
+use num_bigint::BigInt;
 use std::str::FromStr;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -17,6 +18,25 @@ pub enum Type {
     Float128,
 
     Bool,
+}
+
+impl Type {
+    /// Returns `(min, max)` bounds for integer types using BigInt.
+    /// Returns `None` for non-integer types.
+    pub fn bounds(&self) -> Option<(BigInt, BigInt)> {
+        match self {
+            Type::UInt(n) => {
+                let max = (BigInt::from(1) << n) - 1;
+                Some((BigInt::ZERO, max))
+            }
+            Type::Int(n) => {
+                let min = -(BigInt::from(1) << (n - 1));
+                let max = (BigInt::from(1) << (n - 1)) - 1;
+                Some((min, max))
+            }
+            _ => None,
+        }
+    }
 }
 
 impl FromStr for Type {
@@ -122,7 +142,7 @@ pub enum Stmt {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     // Literals
-    Int(i64),
+    Int(BigInt),
 
     // Variable reference
     Ident(String),

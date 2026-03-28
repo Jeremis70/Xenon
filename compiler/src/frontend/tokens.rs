@@ -1,5 +1,6 @@
 use crate::error::{ParseError, ParseResult};
 use logos::Logos;
+use num_bigint::BigInt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Span {
@@ -119,7 +120,7 @@ impl AsRef<[TokenKind]> for TokenKind {
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenValue {
     Ident(String),
-    Int(i64),
+    Int(BigInt),
     Str(String),
 }
 
@@ -138,9 +139,9 @@ impl Token {
         }
     }
 
-    pub fn int_value(&self) -> ParseResult<i64> {
+    pub fn int_value(&self) -> ParseResult<&BigInt> {
         match &self.value {
-            Some(TokenValue::Int(v)) => Ok(*v),
+            Some(TokenValue::Int(v)) => Ok(v),
             _ => Err(ParseError::new("expected integer value", self.span)),
         }
     }
@@ -285,9 +286,9 @@ enum RawKind {
     Xor,
 
     // ---------- Literals ----------
-    // Integer (decimal only for MVP)
-    #[regex(r"[0-9]+", |lex| lex.slice().parse::<i64>().ok())]
-    Int(i64),
+    // Integer: decimal, hex (0x), binary (0b), octal (0o)
+    #[regex(r"0[xX][0-9a-fA-F]+|0[bB][01]+|0[oO][0-7]+|[0-9]+", parse_int)]
+    Int(BigInt),
 
     // String literal with basic escapes allowed (we keep the raw content for MVP).
     // If you want decoded escapes, do it in the callback.
@@ -304,6 +305,19 @@ enum RawKind {
     // Line comment: skip
     #[regex(r"//[^\n]*", logos::skip, allow_greedy = true)]
     LineComment,
+}
+
+fn parse_int(lex: &mut logos::Lexer<RawKind>) -> Option<BigInt> {
+    let s = lex.slice();
+    if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+        BigInt::parse_bytes(hex.as_bytes(), 16)
+    } else if let Some(bin) = s.strip_prefix("0b").or_else(|| s.strip_prefix("0B")) {
+        BigInt::parse_bytes(bin.as_bytes(), 2)
+    } else if let Some(oct) = s.strip_prefix("0o").or_else(|| s.strip_prefix("0O")) {
+        BigInt::parse_bytes(oct.as_bytes(), 8)
+    } else {
+        BigInt::parse_bytes(s.as_bytes(), 10)
+    }
 }
 
 fn parse_string(lex: &mut logos::Lexer<RawKind>) -> Option<String> {
