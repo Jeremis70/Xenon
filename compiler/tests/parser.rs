@@ -1,7 +1,12 @@
+use num_bigint::BigInt;
 use xenonc::frontend::ast::{BinOp, Binding, Expr, Stmt, Type};
 use xenonc::frontend::lexer::lex;
 use xenonc::frontend::parser::Parser;
 use xenonc::frontend::tokens::Span;
+
+fn bi(n: i64) -> BigInt {
+    BigInt::from(n)
+}
 
 // ── Variable declarations ────────────────────────────────────────────────────
 
@@ -16,7 +21,7 @@ fn parse_var_decl_produces_correct_name_type_and_value() {
         Stmt::VarDecl(binding) => {
             assert_eq!(binding.name.as_deref(), Some("x"));
             assert_eq!(binding.ty, Type::UInt(32));
-            assert!(matches!(binding.default.as_deref(), Some(Expr::Int(5))));
+            assert!(matches!(binding.default.as_deref(), Some(Expr::Int(v)) if *v == bi(5)));
         }
         other => panic!("expected VarDecl, got {:?}", other),
     }
@@ -66,7 +71,7 @@ fn parse_plain_assignment_produces_assign_stmt() {
     match &program.functions[0].body[0] {
         Stmt::Assign { name, value } => {
             assert_eq!(name, "x");
-            assert!(matches!(value.as_ref(), Expr::Int(10)));
+            assert!(matches!(value.as_ref(), Expr::Int(v) if *v == bi(10)));
         }
         other => panic!("expected Assign, got {:?}", other),
     }
@@ -89,7 +94,7 @@ fn assert_desugared(stmt: &Stmt, var: &str, expected_op: BinOp, rhs_val: i64) {
                 Expr::BinOp { lhs, op, rhs } => {
                     assert!(matches!(lhs.as_ref(), Expr::Ident(s) if s == var));
                     assert_eq!(*op, expected_op);
-                    assert!(matches!(rhs.as_ref(), Expr::Int(v) if *v == rhs_val));
+                    assert!(matches!(rhs.as_ref(), Expr::Int(v) if *v == bi(rhs_val)));
                 }
                 other => panic!("expected BinOp in desugared value, got {:?}", other),
             }
@@ -188,7 +193,7 @@ fn parse_program_parses_minimal_function() {
 
     assert!(matches!(
         &function.body[0],
-        Stmt::Return(expr) if matches!(expr.as_ref(), Expr::Int(42))
+        Stmt::Return(expr) if matches!(expr.as_ref(), Expr::Int(v) if *v == bi(42))
     ));
 }
 
@@ -299,7 +304,7 @@ fn parse_call_single_arg() {
             Expr::Call { name, args } => {
                 assert_eq!(name, "inc");
                 assert_eq!(args.len(), 1);
-                assert!(matches!(args[0], Expr::Int(1)));
+                assert!(matches!(&args[0], Expr::Int(v) if *v == bi(1)));
             }
             other => panic!("expected Call, got {:?}", other),
         },
@@ -319,9 +324,9 @@ fn parse_call_multiple_args() {
             Expr::Call { name, args } => {
                 assert_eq!(name, "add");
                 assert_eq!(args.len(), 3);
-                assert!(matches!(args[0], Expr::Int(1)));
-                assert!(matches!(args[1], Expr::Int(2)));
-                assert!(matches!(args[2], Expr::Int(3)));
+                assert!(matches!(&args[0], Expr::Int(v) if *v == bi(1)));
+                assert!(matches!(&args[1], Expr::Int(v) if *v == bi(2)));
+                assert!(matches!(&args[2], Expr::Int(v) if *v == bi(3)));
             }
             other => panic!("expected Call, got {:?}", other),
         },
@@ -383,8 +388,8 @@ fn parse_call_stmt_with_args() {
             Expr::Call { name, args } => {
                 assert_eq!(name, "log");
                 assert_eq!(args.len(), 2);
-                assert!(matches!(args[0], Expr::Int(1)));
-                assert!(matches!(args[1], Expr::Int(2)));
+                assert!(matches!(&args[0], Expr::Int(v) if *v == bi(1)));
+                assert!(matches!(&args[1], Expr::Int(v) if *v == bi(2)));
             }
             other => panic!("expected Call, got {:?}", other),
         },
@@ -772,7 +777,7 @@ fn parse_break_with_value_carries_the_expression() {
     };
     match &body[0] {
         Stmt::Break(Some(expr)) => {
-            assert!(matches!(expr.as_ref(), Expr::Int(42)));
+            assert!(matches!(expr.as_ref(), Expr::Int(v) if *v == bi(42)));
         }
         other => panic!("expected Break(Some(Int(42))), got {:?}", other),
     }
@@ -805,7 +810,7 @@ fn parse_return_integer_literal() {
 
     assert!(matches!(
         &program.functions[0].body[0],
-        Stmt::Return(expr) if matches!(expr.as_ref(), Expr::Int(0))
+        Stmt::Return(expr) if matches!(expr.as_ref(), Expr::Int(v) if *v == bi(0))
     ));
 }
 

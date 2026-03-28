@@ -1,3 +1,4 @@
+use num_bigint::BigInt;
 use xenonc::frontend::lexer::lex;
 use xenonc::frontend::tokens::{Span, TokenKind};
 
@@ -27,7 +28,7 @@ fn lex_emits_kinds_and_spans_point_to_source() {
 
     assert_eq!(tokens[1].ident_value().unwrap(), "x");
     assert_eq!(tokens[5].ident_value().unwrap(), "u32");
-    assert_eq!(tokens[8].int_value().unwrap(), 42);
+    assert_eq!(*tokens[8].int_value().unwrap(), BigInt::from(42));
 
     // Verify that the spans point to the correct substrings in the source
     assert_eq!(&src[tokens[0].span.start..tokens[0].span.end], "fn");
