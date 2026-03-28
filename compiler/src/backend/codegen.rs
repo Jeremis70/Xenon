@@ -1082,9 +1082,13 @@ impl<'ctx> CodeGen<'ctx> {
     }
 }
 
-/// Converts a `BigInt` to an LLVM `i64` constant. For values that fit in an
-/// `i64`, uses the fast `const_int` path. For larger values, converts to a
-/// `u64` word array and uses `const_int_arbitrary_precision`.
+/// Converts a [`BigInt`] to an LLVM integer constant of appropriate width.
+///
+/// For values that fit in an `i64`, uses the fast [`const_int`] path and
+/// returns an `i64` constant. For larger values, computes the minimum bit
+/// width required to represent the value in two's complement, builds a
+/// `u64` word array, and returns a constant of that custom `iN` type via
+/// [`const_int_arbitrary_precision`].
 fn bigint_to_llvm_const<'ctx>(
     context: &'ctx Context,
     value: &BigInt,
