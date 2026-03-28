@@ -136,20 +136,8 @@ fn eval_binop(op: &BinOp, a: &BigInt, b: &BigInt) -> Option<BigInt> {
             }
         }
         BinOp::Pow => b.to_u32().map(|e| a.pow(e)),
-        BinOp::LShift => {
-            let shift = b.to_u64();
-            match shift {
-                Some(s) if s < 1024 => Some(a << s),
-                _ => None, // shift amount out of range — leave for runtime/error pass
-            }
-        }
-        BinOp::RShift => {
-            let shift = b.to_u64();
-            match shift {
-                Some(s) if s < 1024 => Some(a >> s),
-                _ => None,
-            }
-        }
+        BinOp::LShift => b.to_u64().map(|s| a << s),
+        BinOp::RShift => b.to_u64().map(|s| a >> s),
         BinOp::BitwiseAnd => Some(a & b),
         BinOp::BitwiseOr => Some(a | b),
         BinOp::BitwiseXor => Some(a ^ b),
