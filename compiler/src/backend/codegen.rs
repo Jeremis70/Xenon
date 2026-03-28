@@ -17,6 +17,8 @@ use inkwell::IntPredicate;
 
 use crate::error::{CodegenError, CodegenResult};
 use crate::frontend::ast::{BinOp, Expr, Function, Program, Stmt, UnaryOp};
+use num_bigint::BigInt;
+use num_traits::ToPrimitive;
 
 /// Maps an inkwell builder error to [`CodegenError::LlvmBuilder`].
 macro_rules! llvm_err {
@@ -442,7 +444,7 @@ impl<'ctx> CodeGen<'ctx> {
 
     fn codegen_expr(&mut self, e: &Expr) -> CodegenResult<inkwell::values::IntValue<'ctx>> {
         match e {
-            Expr::Int(v) => Ok(self.context.i64_type().const_int(*v as u64, true)),
+            Expr::Int(v) => Ok(bigint_to_llvm_const(self.context, v)),
             Expr::Ident(name) => {
                 let &(ref ptr, ty, ref _ast_ty) = self
                     .variables
@@ -1077,6 +1079,55 @@ impl<'ctx> CodeGen<'ctx> {
                 .build_not(val, "bitwise_not")
                 .map_err(llvm_err!("build_not")),
         }
+    }
+}
+
+/// Converts a `BigInt` to an LLVM `i64` constant. For values that fit in an
+/// `i64`, uses the fast `const_int` path. For larger values, converts to a
+/// `u64` word array and uses `const_int_arbitrary_precision`.
+fn bigint_to_llvm_const<'ctx>(
+    context: &'ctx Context,
+    value: &BigInt,
+) -> inkwell::values::IntValue<'ctx> {
+    if let Some(v) = value.to_i64() {
+        context.i64_type().const_int(v as u64, true)
+    } else {
+        // Convert to sign-magnitude u64 words for const_int_arbitrary_precision.
+        // LLVM expects two's complement in a u64 word array.
+        let (sign, bytes) = value.to_bytes_le();
+        // Compute the minimum number of bits needed (extra sign bit for negative).
+        let bit_len = bytes.len() * 8
+            + if sign == num_bigint::Sign::Minus {
+                1
+            } else {
+                0
+            };
+        let width = std::cmp::max(bit_len as u32, 64);
+        let int_ty = context
+            .custom_width_int_type(std::num::NonZero::new(width).expect("width is non-zero"))
+            .expect("custom_width_int_type failed");
+        // Pack bytes into u64 words (little-endian).
+        let num_words = (width as usize).div_ceil(64);
+        let mut words = vec![0u64; num_words];
+        for (i, &byte) in bytes.iter().enumerate() {
+            let word_idx = i / 8;
+            let bit_offset = (i % 8) * 8;
+            words[word_idx] |= (byte as u64) << bit_offset;
+        }
+        // If negative, convert from magnitude to two's complement.
+        if sign == num_bigint::Sign::Minus {
+            // Invert all bits and add 1.
+            for w in &mut words {
+                *w = !*w;
+            }
+            let mut carry = 1u64;
+            for w in &mut words {
+                let (sum, overflow) = w.overflowing_add(carry);
+                *w = sum;
+                carry = if overflow { 1 } else { 0 };
+            }
+        }
+        int_ty.const_int_arbitrary_precision(&words)
     }
 }
 
