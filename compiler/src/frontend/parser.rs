@@ -1,6 +1,7 @@
 use crate::error::{ParseError, ParseResult, TypeError};
 use crate::frontend::ast::{BinOp, Binding, Expr, Function, Program, Stmt, Type, UnaryOp};
 use crate::frontend::tokens::{Span, Token, TokenKind};
+use num_bigint::BigInt;
 
 /// Returns the left binding power for an infix operator token.
 fn lbp(kind: &TokenKind) -> Option<u8> {
@@ -358,7 +359,7 @@ impl<'a> Parser<'a> {
 
     fn parse_var_assign(&mut self, name: String, kind: &TokenKind) -> ParseResult<Stmt> {
         let rhs = match kind {
-            TokenKind::PlusPlus | TokenKind::MinusMinus => Expr::Int(1),
+            TokenKind::PlusPlus | TokenKind::MinusMinus => Expr::Int(BigInt::from(1)),
             _ => self.parse_expression()?,
         };
         let value = match BinOp::from_assign_token(kind) {
@@ -422,7 +423,7 @@ impl<'a> Parser<'a> {
                     operand: Box::new(self.parse_expr(bp)?),
                 })
             }
-            TokenKind::Int => Ok(Expr::Int(token.int_value()?)),
+            TokenKind::Int => Ok(Expr::Int(token.int_value()?.clone())),
             TokenKind::Ident => {
                 let name = token.ident_value()?.to_string();
                 // Peek for `(` to distinguish a call from a plain identifier.
