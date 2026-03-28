@@ -1,4 +1,6 @@
 use crate::frontend::ast::{BinOp, Binding, Expr, Function, Program, Stmt, UnaryOp};
+use num_bigint::BigInt;
+use num_traits::{ToPrimitive, Zero};
 
 pub fn fold_constants(program: Program) -> Program {
     Program {
@@ -49,7 +51,7 @@ fn fold_expr(expr: Expr) -> Expr {
             let rhs = fold_expr(*rhs);
 
             if let (Expr::Int(a), Expr::Int(b)) = (&lhs, &rhs)
-                && let Some(result) = eval_binop(&op, *a, *b)
+                && let Some(result) = eval_binop(&op, a, b)
             {
                 return Expr::Int(result);
             }
@@ -65,8 +67,8 @@ fn fold_expr(expr: Expr) -> Expr {
             let operand = fold_expr(*operand);
 
             match (&op, &operand) {
-                (UnaryOp::Neg, Expr::Int(n)) => Expr::Int(n.wrapping_neg()),
-                (UnaryOp::BitwiseNot, Expr::Int(n)) => Expr::Int(!n),
+                (UnaryOp::Neg, Expr::Int(n)) => Expr::Int(-n),
+                (UnaryOp::BitwiseNot, Expr::Int(n)) => Expr::Int(!(n)),
                 // TODO : Once bools are supported handle logical not
                 _ => Expr::UnaryOp {
                     op,
@@ -114,44 +116,38 @@ fn fold_expr(expr: Expr) -> Expr {
     }
 }
 
-fn eval_binop(op: &BinOp, a: i64, b: i64) -> Option<i64> {
+fn eval_binop(op: &BinOp, a: &BigInt, b: &BigInt) -> Option<BigInt> {
     match op {
         BinOp::Add => Some(a + b),
         BinOp::Sub => Some(a - b),
         BinOp::Mul => Some(a * b),
         BinOp::Div => {
-            if b != 0 {
+            if !b.is_zero() {
                 Some(a / b)
             } else {
                 None
             }
-        } // TODO : leave x/0 for runtime or an error pass
+        }
         BinOp::Mod => {
-            if b != 0 {
+            if !b.is_zero() {
                 Some(a % b)
             } else {
                 None
             }
         }
-        BinOp::Pow => {
-            if b >= 0 && b <= u32::MAX as i64 {
-                Some(a.wrapping_pow(b as u32))
-            } else {
-                None // negative or out-of-range exponent — leave for runtime
-            }
-        }
+        BinOp::Pow => b.to_u32().map(|e| a.pow(e)),
         BinOp::LShift => {
-            if b >= 0 && b < i64::BITS as i64 {
-                Some(a << b)
-            } else {
-                None // shift amount out of range — leave for runtime/error pass
+            let shift = b.to_u64();
+            match shift {
+                Some(s) if s < 1024 => Some(a << s),
+                _ => None, // shift amount out of range — leave for runtime/error pass
             }
         }
         BinOp::RShift => {
-            if b >= 0 && b < i64::BITS as i64 {
-                Some(a >> b)
-            } else {
-                None
+            let shift = b.to_u64();
+            match shift {
+                Some(s) if s < 1024 => Some(a >> s),
+                _ => None,
             }
         }
         BinOp::BitwiseAnd => Some(a & b),

@@ -1,6 +1,7 @@
 use crate::error::{SemanticError, SemanticResult};
 use crate::frontend::ast::{Expr, Program, Stmt, Type};
 use crate::frontend::tokens::Span;
+use num_bigint::BigInt;
 
 /// Walks the program and checks that integer literal constants fit within the
 /// declared type of their binding. Returns an error on the first violation.
@@ -19,7 +20,7 @@ fn validate_stmt(stmt: &Stmt) -> SemanticResult<()> {
             if let Some(default) = &binding.default
                 && let Expr::Int(v) = default.as_ref()
             {
-                check_constant_range(binding.name.as_deref().unwrap_or("_"), *v, &binding.ty)?;
+                check_constant_range(binding.name.as_deref().unwrap_or("_"), v, &binding.ty)?;
             }
             // Also walk the default expression for nested declarations.
             if let Some(default) = &binding.default {
@@ -92,39 +93,17 @@ fn validate_expr(expr: &Expr) -> SemanticResult<()> {
     }
 }
 
-fn check_constant_range(name: &str, value: i64, ty: &Type) -> SemanticResult<()> {
-    let fits = match ty {
-        Type::UInt(n) => {
-            let n = *n;
-            if value < 0 {
-                false
-            } else if n >= 64 {
-                true
-            } else {
-                let v = value as u128;
-                let max = (1u128 << n) - 1;
-                v <= max
-            }
-        }
-        Type::Int(n) => {
-            let n = *n;
-            if n >= 64 {
-                true
-            } else {
-                let min = -(1i128 << (n - 1));
-                let max = (1i128 << (n - 1)) - 1;
-                let v = value as i128;
-                v >= min && v <= max
-            }
-        }
-        _ => true,
+fn check_constant_range(name: &str, value: &BigInt, ty: &Type) -> SemanticResult<()> {
+    let fits = match ty.bounds() {
+        Some((min, max)) => value >= &min && value <= &max,
+        None => true,
     };
     if fits {
         Ok(())
     } else {
         Err(SemanticError::ConstantOutOfRange {
             name: name.to_owned(),
-            value,
+            value: value.clone(),
             ty: ty.clone(),
             span: Span { start: 0, end: 0 },
         })
