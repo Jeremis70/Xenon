@@ -1,3 +1,4 @@
+use num_bigint::BigInt;
 use xenonc::frontend::ast::{BinOp, Expr, Stmt, UnaryOp};
 
 fn ternary(then_branch: Expr, condition: Expr, else_branch: Expr) -> Expr {
@@ -24,7 +25,7 @@ fn parse_expr(expr_src: &str) -> Expr {
 }
 
 fn int(n: i64) -> Expr {
-    Expr::Int(n)
+    Expr::Int(BigInt::from(n))
 }
 
 fn binop(lhs: Expr, op: BinOp, rhs: Expr) -> Expr {

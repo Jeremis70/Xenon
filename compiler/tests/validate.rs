@@ -1,3 +1,4 @@
+use num_bigint::BigInt;
 use xenonc::error::SemanticError;
 use xenonc::frontend::lexer::lex;
 use xenonc::frontend::parser::Parser;
@@ -21,7 +22,7 @@ fn u2_out_of_range_literal_is_error() {
     let err = validate_src("fn f()->u2 { u2 x = 10; return x; }")
         .expect_err("expected ConstantOutOfRange");
     assert!(
-        matches!(err, SemanticError::ConstantOutOfRange { ref name, value: 10, .. } if name == "x"),
+        matches!(err, SemanticError::ConstantOutOfRange { ref name, ref value, .. } if name == "x" && *value == BigInt::from(10)),
         "unexpected error: {err}"
     );
 }
@@ -44,7 +45,7 @@ fn i2_out_of_range_literal_is_error() {
     let err = validate_src("fn f()->i2 { i2 x = 2; return x; }")
         .expect_err("expected ConstantOutOfRange");
     assert!(
-        matches!(err, SemanticError::ConstantOutOfRange { ref name, value: 2, .. } if name == "x"),
+        matches!(err, SemanticError::ConstantOutOfRange { ref name, ref value, .. } if name == "x" && *value == BigInt::from(2)),
         "unexpected error: {err}"
     );
 }

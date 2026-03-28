@@ -1,3 +1,4 @@
+use num_bigint::BigInt;
 use xenonc::frontend::ast::{BinOp, Binding, Expr, Function, Program, Stmt, Type, UnaryOp};
 use xenonc::middle::constant_fold::fold_constants;
 
@@ -51,7 +52,7 @@ fn unary(op: UnaryOp, operand: Expr) -> Expr {
 }
 
 fn int(n: i64) -> Expr {
-    Expr::Int(n)
+    Expr::Int(BigInt::from(n))
 }
 
 fn ident(s: &str) -> Expr {
@@ -125,15 +126,16 @@ fn folds_right_shift() {
 }
 
 #[test]
-fn left_shift_out_of_range_not_folded() {
-    let expr = binop(int(1), BinOp::LShift, int(64));
-    assert_eq!(fold(expr.clone()), expr);
+fn left_shift_large_amount_folds_with_bigint() {
+    // BigInt handles arbitrary shifts — 1 << 64 = 2^64
+    let result = fold(binop(int(1), BinOp::LShift, int(64)));
+    assert_eq!(result, Expr::Int(BigInt::from(1u128) << 64));
 }
 
 #[test]
-fn right_shift_out_of_range_not_folded() {
-    let expr = binop(int(1), BinOp::RShift, int(64));
-    assert_eq!(fold(expr.clone()), expr);
+fn right_shift_large_amount_folds_with_bigint() {
+    // 1 >> 64 = 0
+    assert_eq!(fold(binop(int(1), BinOp::RShift, int(64))), int(0));
 }
 
 #[test]
@@ -181,9 +183,13 @@ fn folds_unary_bitwise_not() {
 }
 
 #[test]
-fn unary_neg_min_i64_wraps() {
-    // i64::MIN.wrapping_neg() == i64::MIN (no panic)
-    assert_eq!(fold(unary(UnaryOp::Neg, int(i64::MIN))), int(i64::MIN));
+fn unary_neg_large_value_is_correct() {
+    // BigInt negation is mathematically correct — no wrapping.
+    let min = BigInt::from(i64::MIN);
+    assert_eq!(
+        fold(unary(UnaryOp::Neg, Expr::Int(min.clone()))),
+        Expr::Int(-min)
+    );
 }
 
 // ── Nested / bottom-up folding ────────────────────────────────────────────────
