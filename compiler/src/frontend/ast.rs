@@ -1,5 +1,5 @@
 use crate::error::TypeError;
-use crate::frontend::tokens::TokenKind;
+use crate::frontend::tokens::{Span, TokenKind};
 use num_bigint::BigInt;
 use std::str::FromStr;
 
@@ -110,15 +110,22 @@ impl std::fmt::Display for Type {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct Binding {
     pub name: Option<String>,
     pub ty: Type,
     pub default: Option<Box<Expr>>,
+    pub span: Span,
+}
+
+impl PartialEq for Binding {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name && self.ty == other.ty && self.default == other.default
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Stmt {
+pub enum StmtKind {
     Return(Box<Expr>),
     Expr(Box<Expr>),
 
@@ -139,8 +146,20 @@ pub enum Stmt {
     Continue,
 }
 
+#[derive(Debug, Clone)]
+pub struct Stmt {
+    pub kind: StmtKind,
+    pub span: Span,
+}
+
+impl PartialEq for Stmt {
+    fn eq(&self, other: &Self) -> bool {
+        self.kind == other.kind
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
-pub enum Expr {
+pub enum ExprKind {
     // Literals
     Int(BigInt),
 
@@ -178,6 +197,18 @@ pub enum Expr {
         condition: Box<Expr>,
         body: Vec<Stmt>,
     },
+}
+
+#[derive(Debug, Clone)]
+pub struct Expr {
+    pub kind: ExprKind,
+    pub span: Span,
+}
+
+impl PartialEq for Expr {
+    fn eq(&self, other: &Self) -> bool {
+        self.kind == other.kind
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -251,12 +282,22 @@ impl UnaryOp {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct Function {
     pub name: String,
     pub params: Vec<Binding>,
     pub return_type: Binding,
     pub body: Vec<Stmt>,
+    pub span: Span,
+}
+
+impl PartialEq for Function {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.params == other.params
+            && self.return_type == other.return_type
+            && self.body == other.body
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
