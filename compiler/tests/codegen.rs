@@ -33,7 +33,7 @@ fn compile_to_ir(src: &str) -> String {
         .expect("target machine creation should succeed");
 
     let context = Context::create();
-    let cg = CodeGen::new(&context, "test", tm.get_target_data());
+    let cg = CodeGen::new(&context, "test", tm.get_target_data(), false);
     let module = cg
         .compile_program(&program)
         .expect("codegen should succeed");
@@ -212,7 +212,7 @@ fn missing_return_yields_codegen_error() {
         .expect("target machine creation should succeed");
 
     let context = Context::create();
-    let cg = CodeGen::new(&context, "test", tm.get_target_data());
+    let cg = CodeGen::new(&context, "test", tm.get_target_data(), false);
     let err = cg
         .compile_program(&program)
         .expect_err("codegen should fail with MissingReturn");
@@ -452,5 +452,432 @@ fn narrow_unsigned_vs_wide_literal() {
     assert!(
         ir.contains("icmp ult"),
         "expected unsigned comparison (`icmp ult`):\n{ir}"
+    );
+}
+
+// ── Helpers for debug-checks tests ───────────────────────────────────────────
+
+/// Like `compile_to_ir` but passes `debug_checks = true` to `CodeGen::new`.
+fn compile_to_ir_debug(src: &str) -> String {
+    let tokens = lex(src).expect("lexing should succeed");
+    let mut parser = Parser::new(&tokens);
+    let program = parser.parse_program().expect("parsing should succeed");
+    let program = fold_constants(program).expect("fold should succeed");
+
+    Target::initialize_native(&InitializationConfig::default())
+        .expect("native target init should succeed");
+    let triple = TargetMachine::get_default_triple();
+    let target = Target::from_triple(&triple).expect("target from triple should succeed");
+    let cpu = TargetMachine::get_host_cpu_name().to_string();
+    let features = TargetMachine::get_host_cpu_features().to_string();
+    let tm = target
+        .create_target_machine(
+            &triple,
+            &cpu,
+            &features,
+            OptimizationLevel::None,
+            RelocMode::Default,
+            CodeModel::Default,
+        )
+        .expect("target machine creation should succeed");
+
+    let context = Context::create();
+    let cg = CodeGen::new(&context, "test", tm.get_target_data(), true);
+    let module = cg
+        .compile_program(&program)
+        .expect("codegen should succeed");
+    module.print_to_string().to_string()
+}
+
+// ── Block-scoped variables ────────────────────────────────────────────────────
+
+/// A variable declared inside an `if` body must not be visible after the block.
+/// Attempting to use `x` (declared inside the `if`) after it must fail with
+/// `UndefinedVariable`.
+#[test]
+fn if_body_variable_is_not_visible_after_block() {
+    use xenonc::error::CodegenError;
+
+    // `x` is declared inside the if-branch but referenced after the if — this
+    // must be a compile error, not silently succeed with a dangling pointer.
+    let tokens = lex("fn f(u1 cond)->u32 { if cond { u32 x = 1; } return x; }")
+        .expect("lexing should succeed");
+    let mut parser = Parser::new(&tokens);
+    let program = parser.parse_program().expect("parsing should succeed");
+    let program = fold_constants(program).expect("fold should succeed");
+
+    Target::initialize_native(&InitializationConfig::default())
+        .expect("native target init should succeed");
+    let triple = TargetMachine::get_default_triple();
+    let target = Target::from_triple(&triple).expect("target from triple should succeed");
+    let cpu = TargetMachine::get_host_cpu_name().to_string();
+    let features = TargetMachine::get_host_cpu_features().to_string();
+    let tm = target
+        .create_target_machine(
+            &triple,
+            &cpu,
+            &features,
+            OptimizationLevel::None,
+            RelocMode::Default,
+            CodeModel::Default,
+        )
+        .expect("target machine creation should succeed");
+
+    let context = Context::create();
+    let cg = CodeGen::new(&context, "test", tm.get_target_data(), false);
+    let err = cg
+        .compile_program(&program)
+        .expect_err("should fail: `x` is out of scope");
+
+    assert!(
+        matches!(err, CodegenError::UndefinedVariable { ref name, .. } if name == "x"),
+        "expected UndefinedVariable for `x`, got: {err}"
+    );
+}
+
+/// A variable declared inside the `then` branch must not shadow identically
+/// named variables in the outer scope — the outer variable must still hold its
+/// original value after the `if` merges.
+#[test]
+fn outer_variable_is_unchanged_after_if_block() {
+    // `result` is in outer scope.  Inside the if, a *new* `result` is declared
+    // but it is scoped to the branch and must not overwrite the outer one.
+    // After the if, the outer `result` (= 99) is what gets returned.
+    let ir =
+        compile_to_ir("fn f(u1 cond)->u32 result { result = 99; if cond { u32 result = 42; } }");
+    // The function must still compile and contain a `ret i32`.
+    assert!(
+        ir.contains("ret i32"),
+        "expected function to compile and emit ret:\n{ir}"
+    );
+}
+
+/// A variable declared inside a loop body must not be visible after the loop.
+#[test]
+fn loop_body_variable_is_not_visible_after_loop() {
+    use xenonc::error::CodegenError;
+
+    let tokens = lex("fn f()->u32 { loop { u32 x = 1; break x; } return x; }")
+        .expect("lexing should succeed");
+    let mut parser = Parser::new(&tokens);
+    let program = parser.parse_program().expect("parsing should succeed");
+    let program = fold_constants(program).expect("fold should succeed");
+
+    Target::initialize_native(&InitializationConfig::default())
+        .expect("native target init should succeed");
+    let triple = TargetMachine::get_default_triple();
+    let target = Target::from_triple(&triple).expect("target from triple should succeed");
+    let cpu = TargetMachine::get_host_cpu_name().to_string();
+    let features = TargetMachine::get_host_cpu_features().to_string();
+    let tm = target
+        .create_target_machine(
+            &triple,
+            &cpu,
+            &features,
+            OptimizationLevel::None,
+            RelocMode::Default,
+            CodeModel::Default,
+        )
+        .expect("target machine creation should succeed");
+
+    let context = Context::create();
+    let cg = CodeGen::new(&context, "test", tm.get_target_data(), false);
+    let err = cg
+        .compile_program(&program)
+        .expect_err("should fail: `x` is out of scope after loop");
+
+    assert!(
+        matches!(err, CodegenError::UndefinedVariable { ref name, .. } if name == "x"),
+        "expected UndefinedVariable for `x`, got: {err}"
+    );
+}
+
+/// An inner scope variable may shadow an outer-scope variable; the inner
+/// assignment must not affect the outer binding.
+#[test]
+fn inner_scope_does_not_pollute_outer() {
+    // After the if, `result` (named return, outer scope) must still be 10.
+    let ir =
+        compile_to_ir("fn f(u1 cond)->u32 result { result = 10; if cond { u32 result = 99; } }");
+    assert!(
+        ir.contains("ret i32"),
+        "expected function to compile:\n{ir}"
+    );
+    // The outer store of 10 must be present.
+    assert!(
+        ir.contains("store i32 10"),
+        "outer store of 10 missing:\n{ir}"
+    );
+    // The inner store of 99 must also appear (in the then block).
+    assert!(
+        ir.contains("store i32 99"),
+        "inner store of 99 missing:\n{ir}"
+    );
+}
+
+// ── Division by zero protection ───────────────────────────────────────────────
+
+/// Division of a signed integer must emit a zero-check before `sdiv`.
+/// The IR must contain a `div_trap` block and an `llvm.trap` call.
+#[test]
+fn signed_div_emits_zero_check() {
+    let ir = compile_to_ir("fn f(i32 a, i32 b)->i32 { return a / b; }");
+    assert!(
+        ir.contains("div_trap"),
+        "expected div_trap block for signed division:\n{ir}"
+    );
+    assert!(
+        ir.contains("llvm.trap"),
+        "expected llvm.trap call in div_trap:\n{ir}"
+    );
+    assert!(ir.contains("sdiv"), "expected sdiv instruction:\n{ir}");
+}
+
+/// Division of an unsigned integer must emit a zero-check before `udiv`.
+#[test]
+fn unsigned_div_emits_zero_check() {
+    let ir = compile_to_ir("fn f(u32 a, u32 b)->u32 { return a / b; }");
+    assert!(
+        ir.contains("div_trap"),
+        "expected div_trap block for unsigned division:\n{ir}"
+    );
+    assert!(ir.contains("llvm.trap"), "expected llvm.trap call:\n{ir}");
+    assert!(ir.contains("udiv"), "expected udiv instruction:\n{ir}");
+}
+
+/// Signed remainder must also emit a zero-check before `srem`.
+#[test]
+fn signed_rem_emits_zero_check() {
+    let ir = compile_to_ir("fn f(i32 a, i32 b)->i32 { return a % b; }");
+    assert!(ir.contains("div_trap"), "expected div_trap block:\n{ir}");
+    assert!(ir.contains("srem"), "expected srem instruction:\n{ir}");
+}
+
+/// Unsigned remainder must also emit a zero-check before `urem`.
+#[test]
+fn unsigned_rem_emits_zero_check() {
+    let ir = compile_to_ir("fn f(u32 a, u32 b)->u32 { return a % b; }");
+    assert!(ir.contains("div_trap"), "expected div_trap block:\n{ir}");
+    assert!(ir.contains("urem"), "expected urem instruction:\n{ir}");
+}
+
+/// The div_ok block must be present and the division instruction placed in it
+/// (i.e. after the zero-check guard), not before.
+#[test]
+fn div_ok_block_contains_division() {
+    let ir = compile_to_ir("fn f(i32 a, i32 b)->i32 { return a / b; }");
+    assert!(ir.contains("div_ok"), "expected div_ok block:\n{ir}");
+    // div_ok must appear before sdiv in the textual IR.
+    let ok_pos = ir.find("div_ok").expect("div_ok must exist");
+    let div_pos = ir.find("sdiv").expect("sdiv must exist");
+    assert!(
+        div_pos > ok_pos,
+        "sdiv should appear after div_ok in the IR:\n{ir}"
+    );
+}
+
+// ── Shift count validation ────────────────────────────────────────────────────
+
+/// A left-shift must emit a shift-count validation before the `shl` instruction.
+#[test]
+fn left_shift_emits_shift_check() {
+    let ir = compile_to_ir("fn f(i32 a, i32 b)->i32 { return a << b; }");
+    assert!(
+        ir.contains("shift_trap"),
+        "expected shift_trap block for left shift:\n{ir}"
+    );
+    assert!(
+        ir.contains("llvm.trap"),
+        "expected llvm.trap in shift_trap:\n{ir}"
+    );
+    assert!(ir.contains("shl"), "expected shl instruction:\n{ir}");
+}
+
+/// A right-shift of a signed integer must emit a shift-count check before `ashr`.
+#[test]
+fn signed_right_shift_emits_shift_check() {
+    let ir = compile_to_ir("fn f(i32 a, i32 b)->i32 { return a >> b; }");
+    assert!(
+        ir.contains("shift_trap"),
+        "expected shift_trap block for right shift:\n{ir}"
+    );
+    assert!(
+        ir.contains("ashr"),
+        "expected ashr (arithmetic shift right):\n{ir}"
+    );
+}
+
+/// A right-shift of an unsigned integer emits a shift-count check before `lshr`.
+#[test]
+fn unsigned_right_shift_emits_shift_check() {
+    let ir = compile_to_ir("fn f(u32 a, u32 b)->u32 { return a >> b; }");
+    assert!(
+        ir.contains("shift_trap"),
+        "expected shift_trap block for unsigned right shift:\n{ir}"
+    );
+    assert!(
+        ir.contains("lshr"),
+        "expected lshr (logical shift right):\n{ir}"
+    );
+}
+
+/// The shift_ok block must appear and the shift instruction must follow it.
+#[test]
+fn shift_ok_block_contains_shift_instruction() {
+    let ir = compile_to_ir("fn f(u32 a, u32 b)->u32 { return a << b; }");
+    assert!(ir.contains("shift_ok"), "expected shift_ok block:\n{ir}");
+    let ok_pos = ir.find("shift_ok").expect("shift_ok must exist");
+    let shl_pos = ir.find("shl").expect("shl must exist");
+    assert!(
+        shl_pos > ok_pos,
+        "shl should appear after shift_ok in the IR:\n{ir}"
+    );
+}
+
+// ── Integer overflow checks (debug mode) ─────────────────────────────────────
+
+/// In debug mode, signed addition must use the `llvm.sadd.with.overflow`
+/// intrinsic and emit an overflow trap block.
+#[test]
+fn debug_signed_add_uses_overflow_intrinsic() {
+    let ir = compile_to_ir_debug("fn f(i32 a, i32 b)->i32 { return a + b; }");
+    assert!(
+        ir.contains("sadd.with.overflow"),
+        "expected sadd.with.overflow intrinsic in debug mode:\n{ir}"
+    );
+    assert!(
+        ir.contains("overflow_trap"),
+        "expected overflow_trap block:\n{ir}"
+    );
+    assert!(
+        ir.contains("llvm.trap"),
+        "expected llvm.trap in overflow_trap:\n{ir}"
+    );
+}
+
+/// In debug mode, signed subtraction must use `llvm.ssub.with.overflow`.
+#[test]
+fn debug_signed_sub_uses_overflow_intrinsic() {
+    let ir = compile_to_ir_debug("fn f(i32 a, i32 b)->i32 { return a - b; }");
+    assert!(
+        ir.contains("ssub.with.overflow"),
+        "expected ssub.with.overflow intrinsic in debug mode:\n{ir}"
+    );
+    assert!(
+        ir.contains("overflow_trap"),
+        "expected overflow_trap block:\n{ir}"
+    );
+}
+
+/// In debug mode, signed multiplication must use `llvm.smul.with.overflow`.
+#[test]
+fn debug_signed_mul_uses_overflow_intrinsic() {
+    let ir = compile_to_ir_debug("fn f(i32 a, i32 b)->i32 { return a * b; }");
+    assert!(
+        ir.contains("smul.with.overflow"),
+        "expected smul.with.overflow intrinsic in debug mode:\n{ir}"
+    );
+    assert!(
+        ir.contains("overflow_trap"),
+        "expected overflow_trap block:\n{ir}"
+    );
+}
+
+/// In debug mode, unsigned addition must use `llvm.uadd.with.overflow`.
+#[test]
+fn debug_unsigned_add_uses_overflow_intrinsic() {
+    let ir = compile_to_ir_debug("fn f(u32 a, u32 b)->u32 { return a + b; }");
+    assert!(
+        ir.contains("uadd.with.overflow"),
+        "expected uadd.with.overflow intrinsic in debug mode:\n{ir}"
+    );
+    assert!(
+        ir.contains("overflow_trap"),
+        "expected overflow_trap block:\n{ir}"
+    );
+}
+
+/// In debug mode, unsigned subtraction must use `llvm.usub.with.overflow`.
+#[test]
+fn debug_unsigned_sub_uses_overflow_intrinsic() {
+    let ir = compile_to_ir_debug("fn f(u32 a, u32 b)->u32 { return a - b; }");
+    assert!(
+        ir.contains("usub.with.overflow"),
+        "expected usub.with.overflow intrinsic in debug mode:\n{ir}"
+    );
+    assert!(
+        ir.contains("overflow_trap"),
+        "expected overflow_trap block:\n{ir}"
+    );
+}
+
+/// In debug mode, unsigned multiplication must use `llvm.umul.with.overflow`.
+#[test]
+fn debug_unsigned_mul_uses_overflow_intrinsic() {
+    let ir = compile_to_ir_debug("fn f(u32 a, u32 b)->u32 { return a * b; }");
+    assert!(
+        ir.contains("umul.with.overflow"),
+        "expected umul.with.overflow intrinsic in debug mode:\n{ir}"
+    );
+    assert!(
+        ir.contains("overflow_trap"),
+        "expected overflow_trap block:\n{ir}"
+    );
+}
+
+/// In release mode (`debug_checks = false`), plain `add` must be emitted —
+/// no overflow intrinsic, no trap block.
+#[test]
+fn release_add_is_plain_wrapping() {
+    let ir = compile_to_ir("fn f(i32 a, i32 b)->i32 { return a + b; }");
+    assert!(
+        !ir.contains("with.overflow"),
+        "release mode must not use overflow intrinsic:\n{ir}"
+    );
+    assert!(
+        !ir.contains("overflow_trap"),
+        "release mode must not have overflow_trap block:\n{ir}"
+    );
+    assert!(ir.contains("add"), "expected plain add instruction:\n{ir}");
+}
+
+/// In release mode, plain `sub` is emitted (no overflow intrinsic).
+#[test]
+fn release_sub_is_plain_wrapping() {
+    let ir = compile_to_ir("fn f(i32 a, i32 b)->i32 { return a - b; }");
+    assert!(
+        !ir.contains("with.overflow"),
+        "release mode must not use overflow intrinsic:\n{ir}"
+    );
+    assert!(ir.contains("sub"), "expected plain sub instruction:\n{ir}");
+}
+
+/// In release mode, plain `mul` is emitted (no overflow intrinsic).
+#[test]
+fn release_mul_is_plain_wrapping() {
+    let ir = compile_to_ir("fn f(i32 a, i32 b)->i32 { return a * b; }");
+    assert!(
+        !ir.contains("with.overflow"),
+        "release mode must not use overflow intrinsic:\n{ir}"
+    );
+    assert!(ir.contains("mul"), "expected plain mul instruction:\n{ir}");
+}
+
+/// The overflow_ok block must come after the overflow extraction, and the
+/// result value produced by the intrinsic must be extracted before the trap
+/// guard — so the `extractvalue` for the result precedes `overflow_ok`.
+#[test]
+fn debug_overflow_ok_block_is_present() {
+    let ir = compile_to_ir_debug("fn f(i32 a, i32 b)->i32 { return a + b; }");
+    assert!(
+        ir.contains("overflow_ok"),
+        "expected overflow_ok block:\n{ir}"
+    );
+    let trap_pos = ir.find("overflow_trap").expect("overflow_trap must exist");
+    let ok_pos = ir.find("overflow_ok").expect("overflow_ok must exist");
+    // trap block is defined before ok block in textual IR order.
+    assert!(
+        ok_pos > trap_pos,
+        "overflow_ok should appear after overflow_trap in the IR:\n{ir}"
     );
 }
