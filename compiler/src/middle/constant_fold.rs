@@ -1,147 +1,182 @@
-use crate::frontend::ast::{BinOp, Binding, Expr, Function, Program, Stmt, UnaryOp};
+use crate::error::{FoldError, FoldResult};
+use crate::frontend::ast::{
+    BinOp, Binding, Expr, ExprKind, Function, Program, Stmt, StmtKind, UnaryOp,
+};
+use crate::frontend::tokens::Span;
 use num_bigint::BigInt;
 use num_traits::{ToPrimitive, Zero};
 
-pub fn fold_constants(program: Program) -> Program {
-    Program {
-        functions: program.functions.into_iter().map(fold_function).collect(),
-    }
+pub fn fold_constants(program: Program) -> FoldResult<Program> {
+    Ok(Program {
+        functions: program
+            .functions
+            .into_iter()
+            .map(fold_function)
+            .collect::<FoldResult<_>>()?,
+    })
 }
 
-fn fold_function(func: Function) -> Function {
-    Function {
+fn fold_function(func: Function) -> FoldResult<Function> {
+    Ok(Function {
         name: func.name,
         params: func.params,
         return_type: func.return_type,
-        body: func.body.into_iter().map(fold_stmt).collect(),
-    }
+        body: func
+            .body
+            .into_iter()
+            .map(fold_stmt)
+            .collect::<FoldResult<_>>()?,
+        span: func.span,
+    })
 }
 
-fn fold_stmt(stmt: Stmt) -> Stmt {
-    match stmt {
-        Stmt::Return(inner) => Stmt::Return(Box::new(fold_expr(*inner))),
-        Stmt::Expr(inner) => Stmt::Expr(Box::new(fold_expr(*inner))),
-        Stmt::VarDecl(binding) => Stmt::VarDecl(Binding {
-            default: binding.default.map(|v| Box::new(fold_expr(*v))),
+fn fold_stmt(stmt: Stmt) -> FoldResult<Stmt> {
+    let span = stmt.span;
+    let kind = match stmt.kind {
+        StmtKind::Return(inner) => StmtKind::Return(Box::new(fold_expr(*inner)?)),
+        StmtKind::Expr(inner) => StmtKind::Expr(Box::new(fold_expr(*inner)?)),
+        StmtKind::VarDecl(binding) => StmtKind::VarDecl(Binding {
+            default: binding
+                .default
+                .map(|v| fold_expr(*v).map(Box::new))
+                .transpose()?,
             ..binding
         }),
-        Stmt::Assign { name, value } => Stmt::Assign {
+        StmtKind::Assign { name, value } => StmtKind::Assign {
             name,
-            value: Box::new(fold_expr(*value)),
+            value: Box::new(fold_expr(*value)?),
         },
-        Stmt::If {
+        StmtKind::If {
             condition,
             then_branch,
             else_branch,
-        } => Stmt::If {
-            condition: Box::new(fold_expr(*condition)),
-            then_branch: then_branch.into_iter().map(fold_stmt).collect(),
-            else_branch: else_branch.map(|branch| branch.into_iter().map(fold_stmt).collect()),
+        } => StmtKind::If {
+            condition: Box::new(fold_expr(*condition)?),
+            then_branch: then_branch
+                .into_iter()
+                .map(fold_stmt)
+                .collect::<FoldResult<_>>()?,
+            else_branch: else_branch
+                .map(|branch| branch.into_iter().map(fold_stmt).collect::<FoldResult<_>>())
+                .transpose()?,
         },
-        Stmt::Break(opt) => Stmt::Break(opt.map(|e| Box::new(fold_expr(*e)))),
-        Stmt::Continue => Stmt::Continue,
-    }
+        StmtKind::Break(opt) => {
+            StmtKind::Break(opt.map(|e| fold_expr(*e).map(Box::new)).transpose()?)
+        }
+        StmtKind::Continue => StmtKind::Continue,
+    };
+    Ok(Stmt { kind, span })
 }
 
-fn fold_expr(expr: Expr) -> Expr {
-    match expr {
-        Expr::BinOp { lhs, op, rhs } => {
-            // Bottom-up: fold children first
-            let lhs = fold_expr(*lhs);
-            let rhs = fold_expr(*rhs);
+fn fold_expr(expr: Expr) -> FoldResult<Expr> {
+    let span = expr.span;
+    let kind = match expr.kind {
+        ExprKind::BinOp { lhs, op, rhs } => {
+            let lhs = fold_expr(*lhs)?;
+            let rhs = fold_expr(*rhs)?;
 
-            if let (Expr::Int(a), Expr::Int(b)) = (&lhs, &rhs)
-                && let Some(result) = eval_binop(&op, a, b)
+            if let (ExprKind::Int(a), ExprKind::Int(b)) = (&lhs.kind, &rhs.kind)
+                && let Some(result) = eval_binop(&op, a, b, span)?
             {
-                return Expr::Int(result);
+                return Ok(Expr {
+                    kind: ExprKind::Int(result),
+                    span,
+                });
             }
 
-            Expr::BinOp {
+            ExprKind::BinOp {
                 lhs: Box::new(lhs),
                 op,
                 rhs: Box::new(rhs),
             }
         }
 
-        Expr::UnaryOp { op, operand } => {
-            let operand = fold_expr(*operand);
+        ExprKind::UnaryOp { op, operand } => {
+            let operand = fold_expr(*operand)?;
 
-            match (&op, &operand) {
-                (UnaryOp::Neg, Expr::Int(n)) => Expr::Int(-n),
-                (UnaryOp::BitwiseNot, Expr::Int(n)) => Expr::Int(!(n)),
-                // TODO : Once bools are supported handle logical not
-                _ => Expr::UnaryOp {
-                    op,
-                    operand: Box::new(operand),
-                },
+            match (&op, &operand.kind) {
+                (UnaryOp::Neg, ExprKind::Int(n)) => {
+                    return Ok(Expr {
+                        kind: ExprKind::Int(-n),
+                        span,
+                    });
+                }
+                (UnaryOp::BitwiseNot, ExprKind::Int(n)) => {
+                    return Ok(Expr {
+                        kind: ExprKind::Int(!n),
+                        span,
+                    });
+                }
+                _ => {}
+            }
+
+            ExprKind::UnaryOp {
+                op,
+                operand: Box::new(operand),
             }
         }
 
-        Expr::Int(_) | Expr::Ident(_) => expr,
+        ExprKind::Int(_) | ExprKind::Ident(_) => expr.kind,
 
-        // Fold branches and condition but do not evaluate at compile time.
-        Expr::IfElse {
+        ExprKind::IfElse {
             condition,
             then_branch,
             else_branch,
-        } => Expr::IfElse {
-            condition: Box::new(fold_expr(*condition)),
-            then_branch: Box::new(fold_expr(*then_branch)),
-            else_branch: Box::new(fold_expr(*else_branch)),
+        } => ExprKind::IfElse {
+            condition: Box::new(fold_expr(*condition)?),
+            then_branch: Box::new(fold_expr(*then_branch)?),
+            else_branch: Box::new(fold_expr(*else_branch)?),
         },
 
-        // Fold the body but never evaluate the loop at compile time.
-        Expr::Loop { body } => Expr::Loop {
-            body: body.into_iter().map(fold_stmt).collect(),
+        ExprKind::Loop { body } => ExprKind::Loop {
+            body: body.into_iter().map(fold_stmt).collect::<FoldResult<_>>()?,
         },
 
-        // Fold the condition and body but never evaluate the loop at compile time.
-        Expr::CondLoop {
+        ExprKind::CondLoop {
             post,
             inverted,
             condition,
             body,
-        } => Expr::CondLoop {
+        } => ExprKind::CondLoop {
             post,
             inverted,
-            condition: Box::new(fold_expr(*condition)),
-            body: body.into_iter().map(fold_stmt).collect(),
+            condition: Box::new(fold_expr(*condition)?),
+            body: body.into_iter().map(fold_stmt).collect::<FoldResult<_>>()?,
         },
 
-        // Fold arguments but never fold the call itself away.
-        Expr::Call { name, args } => Expr::Call {
+        ExprKind::Call { name, args } => ExprKind::Call {
             name,
-            args: args.into_iter().map(fold_expr).collect(),
+            args: args.into_iter().map(fold_expr).collect::<FoldResult<_>>()?,
         },
-    }
+    };
+    Ok(Expr { kind, span })
 }
 
-fn eval_binop(op: &BinOp, a: &BigInt, b: &BigInt) -> Option<BigInt> {
+fn eval_binop(op: &BinOp, a: &BigInt, b: &BigInt, span: Span) -> FoldResult<Option<BigInt>> {
     match op {
-        BinOp::Add => Some(a + b),
-        BinOp::Sub => Some(a - b),
-        BinOp::Mul => Some(a * b),
+        BinOp::Add => Ok(Some(a + b)),
+        BinOp::Sub => Ok(Some(a - b)),
+        BinOp::Mul => Ok(Some(a * b)),
         BinOp::Div => {
-            if !b.is_zero() {
-                Some(a / b)
+            if b.is_zero() {
+                Err(FoldError::DivisionByZero { span })
             } else {
-                None
+                Ok(Some(a / b))
             }
         }
         BinOp::Mod => {
-            if !b.is_zero() {
-                Some(a % b)
+            if b.is_zero() {
+                Err(FoldError::DivisionByZero { span })
             } else {
-                None
+                Ok(Some(a % b))
             }
         }
-        BinOp::Pow => b.to_u32().map(|e| a.pow(e)),
-        BinOp::LShift => b.to_u64().map(|s| a << s),
-        BinOp::RShift => b.to_u64().map(|s| a >> s),
-        BinOp::BitwiseAnd => Some(a & b),
-        BinOp::BitwiseOr => Some(a | b),
-        BinOp::BitwiseXor => Some(a ^ b),
-        // TODO: Once bools are supported handle logical ops
+        BinOp::Pow => Ok(b.to_u32().map(|e| a.pow(e))),
+        BinOp::LShift => Ok(b.to_u64().map(|s| a << s)),
+        BinOp::RShift => Ok(b.to_u64().map(|s| a >> s)),
+        BinOp::BitwiseAnd => Ok(Some(a & b)),
+        BinOp::BitwiseOr => Ok(Some(a | b)),
+        BinOp::BitwiseXor => Ok(Some(a ^ b)),
         BinOp::Eq
         | BinOp::NotEq
         | BinOp::Lt
@@ -150,6 +185,6 @@ fn eval_binop(op: &BinOp, a: &BigInt, b: &BigInt) -> Option<BigInt> {
         | BinOp::GtEq
         | BinOp::LogicalAnd
         | BinOp::LogicalOr
-        | BinOp::LogicalXor => None,
+        | BinOp::LogicalXor => Ok(None),
     }
 }
