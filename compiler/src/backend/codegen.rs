@@ -42,7 +42,9 @@ pub struct CodeGen<'ctx> {
     context: &'ctx Context,
     module: Module<'ctx>,
     builder: Builder<'ctx>,
-    variables: HashMap<String, (PointerValue<'ctx>, BasicTypeEnum<'ctx>, Type)>,
+    /// Block-scoped variable map. Each entry is a scope level; variable
+    /// lookup walks the stack top-down so inner scopes shadow outer ones.
+    variables: Vec<HashMap<String, (PointerValue<'ctx>, BasicTypeEnum<'ctx>, Type)>>,
     /// Stack of frames pushed when entering a loop, popped on exit.
     loop_stack: Vec<LoopFrame<'ctx>>,
     /// The function currently being compiled; set at the start of
@@ -53,31 +55,46 @@ pub struct CodeGen<'ctx> {
     /// Data layout of the compilation target. Used to resolve `usize`/`isize`
     /// to their pointer-sized LLVM integer type via `ptr_sized_int_type`.
     target_data: TargetData,
+    /// When true, emit runtime checks for overflow, division by zero, and
+    /// invalid shift amounts. Typically enabled at `-O0` (debug builds).
+    debug_checks: bool,
 }
 
 impl<'ctx> CodeGen<'ctx> {
-    pub fn new(context: &'ctx Context, module_name: &str, target_data: TargetData) -> Self {
+    pub fn new(
+        context: &'ctx Context,
+        module_name: &str,
+        target_data: TargetData,
+        debug_checks: bool,
+    ) -> Self {
         let module = context.create_module(module_name);
         let builder = context.create_builder();
         Self {
             context,
             module,
             builder,
-            variables: HashMap::new(),
+            variables: vec![HashMap::new()],
             loop_stack: Vec::new(),
             current_fn: None,
             target_data,
+            debug_checks,
         }
     }
 
     fn llvm_type(&self, ty: &crate::frontend::ast::Type) -> CodegenResult<BasicTypeEnum<'ctx>> {
         Ok(match ty {
             Type::Bool => self.context.bool_type().into(),
-            Type::Int(w) | Type::UInt(w) => self
-                .context
-                .custom_width_int_type(std::num::NonZero::new(*w).expect("bit width is non-zero"))
-                .expect("custom_width_int_type failed")
-                .into(),
+            Type::Int(w) | Type::UInt(w) => {
+                let nz = std::num::NonZero::new(*w).ok_or(CodegenError::InvalidIrState(
+                    "integer type with zero bit width",
+                ))?;
+                self.context
+                    .custom_width_int_type(nz)
+                    .map_err(|_| {
+                        CodegenError::InvalidIrState("LLVM rejected custom_width_int_type")
+                    })?
+                    .into()
+            }
             // usize/isize lower to the pointer-sized integer type for this target.
             // ptr_sized_int_type queries the data layout directly, so it's always
             // correct for any target triple the user passes at compile time.
@@ -91,6 +108,165 @@ impl<'ctx> CodeGen<'ctx> {
             Type::Float64 => self.context.f64_type().into(),
             Type::Float128 => self.context.f128_type().into(),
         })
+    }
+
+    // ── Scope management ─────────────────────────────────────────────────
+
+    fn push_scope(&mut self) {
+        self.variables.push(HashMap::new());
+    }
+
+    fn pop_scope(&mut self) {
+        self.variables.pop();
+    }
+
+    fn lookup_variable(
+        &self,
+        name: &str,
+    ) -> Option<&(PointerValue<'ctx>, BasicTypeEnum<'ctx>, Type)> {
+        for scope in self.variables.iter().rev() {
+            if let Some(entry) = scope.get(name) {
+                return Some(entry);
+            }
+        }
+        None
+    }
+
+    fn insert_variable(
+        &mut self,
+        name: String,
+        val: (PointerValue<'ctx>, BasicTypeEnum<'ctx>, Type),
+    ) {
+        if let Some(scope) = self.variables.last_mut() {
+            scope.insert(name, val);
+        }
+    }
+
+    // ── Runtime-check helpers ────────────────────────────────────────────
+
+    fn parent_function(&self) -> CodegenResult<FunctionValue<'ctx>> {
+        self.current_fn
+            .map(|(f, _)| f)
+            .ok_or(CodegenError::InvalidIrState("no current function"))
+    }
+
+    fn get_trap_function(&self) -> FunctionValue<'ctx> {
+        if let Some(f) = self.module.get_function("llvm.trap") {
+            return f;
+        }
+        let void_ty = self.context.void_type();
+        let fn_ty = void_ty.fn_type(&[], false);
+        self.module.add_function("llvm.trap", fn_ty, None)
+    }
+
+    fn emit_trap(&self) -> CodegenResult<()> {
+        let trap_fn = self.get_trap_function();
+        self.builder
+            .build_call(trap_fn, &[], "")
+            .map_err(llvm_err!("build_call (trap)"))?;
+        self.builder
+            .build_unreachable()
+            .map_err(llvm_err!("build_unreachable"))?;
+        Ok(())
+    }
+
+    fn emit_div_zero_check(&self, divisor: inkwell::values::IntValue<'ctx>) -> CodegenResult<()> {
+        let fn_val = self.parent_function()?;
+        let zero = divisor.get_type().const_zero();
+        let is_zero = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, divisor, zero, "div_zero_check")
+            .map_err(llvm_err!("build_int_compare (div zero check)"))?;
+        let trap_bb = self.context.append_basic_block(fn_val, "div_trap");
+        let ok_bb = self.context.append_basic_block(fn_val, "div_ok");
+        self.builder
+            .build_conditional_branch(is_zero, trap_bb, ok_bb)
+            .map_err(llvm_err!("build_conditional_branch (div zero)"))?;
+        self.builder.position_at_end(trap_bb);
+        self.emit_trap()?;
+        self.builder.position_at_end(ok_bb);
+        Ok(())
+    }
+
+    fn emit_shift_check(
+        &self,
+        shift_amt: inkwell::values::IntValue<'ctx>,
+        bit_width: u32,
+    ) -> CodegenResult<()> {
+        let fn_val = self.parent_function()?;
+        let limit = shift_amt.get_type().const_int(bit_width as u64, false);
+        let too_large = self
+            .builder
+            .build_int_compare(IntPredicate::UGE, shift_amt, limit, "shift_check")
+            .map_err(llvm_err!("build_int_compare (shift check)"))?;
+        let trap_bb = self.context.append_basic_block(fn_val, "shift_trap");
+        let ok_bb = self.context.append_basic_block(fn_val, "shift_ok");
+        self.builder
+            .build_conditional_branch(too_large, trap_bb, ok_bb)
+            .map_err(llvm_err!("build_conditional_branch (shift)"))?;
+        self.builder.position_at_end(trap_bb);
+        self.emit_trap()?;
+        self.builder.position_at_end(ok_bb);
+        Ok(())
+    }
+
+    fn get_overflow_intrinsic(
+        &self,
+        name: &str,
+        int_ty: inkwell::types::IntType<'ctx>,
+    ) -> FunctionValue<'ctx> {
+        let fn_name = format!("{name}.i{}", int_ty.get_bit_width());
+        if let Some(f) = self.module.get_function(&fn_name) {
+            return f;
+        }
+        let bool_ty = self.context.bool_type();
+        let struct_ty = self
+            .context
+            .struct_type(&[int_ty.into(), bool_ty.into()], false);
+        let fn_ty = struct_ty.fn_type(&[int_ty.into(), int_ty.into()], false);
+        self.module.add_function(&fn_name, fn_ty, None)
+    }
+
+    fn emit_checked_arithmetic(
+        &self,
+        intrinsic_name: &str,
+        lhs: inkwell::values::IntValue<'ctx>,
+        rhs: inkwell::values::IntValue<'ctx>,
+    ) -> CodegenResult<inkwell::values::IntValue<'ctx>> {
+        let int_ty = lhs.get_type();
+        let intrinsic = self.get_overflow_intrinsic(intrinsic_name, int_ty);
+        let call = self
+            .builder
+            .build_call(intrinsic, &[lhs.into(), rhs.into()], "checked")
+            .map_err(llvm_err!("build_call (overflow intrinsic)"))?;
+        let result_struct = call
+            .try_as_basic_value()
+            .basic()
+            .ok_or(CodegenError::InvalidIrState(
+                "overflow intrinsic returned void",
+            ))?
+            .into_struct_value();
+        let result = self
+            .builder
+            .build_extract_value(result_struct, 0, "result")
+            .map_err(llvm_err!("build_extract_value (result)"))?
+            .into_int_value();
+        let overflow = self
+            .builder
+            .build_extract_value(result_struct, 1, "overflow")
+            .map_err(llvm_err!("build_extract_value (overflow)"))?
+            .into_int_value();
+
+        let fn_val = self.parent_function()?;
+        let trap_bb = self.context.append_basic_block(fn_val, "overflow_trap");
+        let ok_bb = self.context.append_basic_block(fn_val, "overflow_ok");
+        self.builder
+            .build_conditional_branch(overflow, trap_bb, ok_bb)
+            .map_err(llvm_err!("build_conditional_branch (overflow)"))?;
+        self.builder.position_at_end(trap_bb);
+        self.emit_trap()?;
+        self.builder.position_at_end(ok_bb);
+        Ok(result)
     }
 
     fn collect_param_types(&self, f: &Function) -> CodegenResult<Vec<BasicTypeEnum<'ctx>>> {
@@ -130,7 +306,9 @@ impl<'ctx> CodeGen<'ctx> {
         let fn_val = self
             .module
             .get_function(&f.name)
-            .expect("declare_function must be called before compile_function");
+            .ok_or(CodegenError::InvalidIrState(
+                "declare_function must be called before compile_function",
+            ))?;
 
         let param_types: Vec<BasicTypeEnum> = self.collect_param_types(f)?;
         let ret_ty = self.llvm_type(&f.return_type.ty)?;
@@ -138,7 +316,7 @@ impl<'ctx> CodeGen<'ctx> {
         let entry = self.context.append_basic_block(fn_val, "entry");
         self.builder.position_at_end(entry);
 
-        self.variables.clear();
+        self.variables = vec![HashMap::new()];
 
         // Allocate a stack slot for each parameter and store the incoming value.
         for (i, param) in f.params.iter().enumerate() {
@@ -155,7 +333,7 @@ impl<'ctx> CodeGen<'ctx> {
             self.builder
                 .build_store(alloca, incoming)
                 .map_err(llvm_err!("build_store (param)"))?;
-            self.variables.insert(
+            self.insert_variable(
                 param.name.clone().unwrap_or_default(),
                 (alloca, llvm_ty, param.ty.clone()),
             );
@@ -178,8 +356,7 @@ impl<'ctx> CodeGen<'ctx> {
             self.builder
                 .build_store(alloca, zero)
                 .map_err(llvm_err!("build_store (named return init)"))?;
-            self.variables
-                .insert(ret_name.clone(), (alloca, ret_ty, f.return_type.ty.clone()));
+            self.insert_variable(ret_name.clone(), (alloca, ret_ty, f.return_type.ty.clone()));
         }
 
         for stmt in &f.body {
@@ -204,8 +381,7 @@ impl<'ctx> CodeGen<'ctx> {
                 });
             };
             let (ptr, ty, _) =
-                self.variables
-                    .get(ret_name.as_str())
+                self.lookup_variable(ret_name.as_str())
                     .ok_or(CodegenError::InvalidIrState(
                         "named return variable missing from variable map",
                     ))?;
@@ -249,16 +425,13 @@ impl<'ctx> CodeGen<'ctx> {
                     .builder
                     .build_alloca(llvm_ty, var_name)
                     .map_err(llvm_err!("build_alloca"))?;
-                self.variables.insert(
+                self.insert_variable(
                     binding.name.clone().unwrap_or_default(),
                     (alloca, llvm_ty, binding.ty.clone()),
                 );
-                let init_val = self.codegen_expr(
-                    binding
-                        .default
-                        .as_ref()
-                        .expect("VarDecl binding must have a default"),
-                )?;
+                let init_val = self.codegen_expr(binding.default.as_ref().ok_or(
+                    CodegenError::InvalidIrState("VarDecl binding must have a default value"),
+                )?)?;
                 let is_unsigned = matches!(binding.ty, Type::UInt(_) | Type::USize);
                 let init_val = self.cast_int_to_type(init_val, llvm_ty, is_unsigned)?;
                 self.builder
@@ -268,7 +441,7 @@ impl<'ctx> CodeGen<'ctx> {
             }
             StmtKind::Assign { name, value } => {
                 let (var_ptr, var_ty, is_unsigned) = {
-                    let (ptr, ty, ast_ty) = self.variables.get(name).ok_or_else(|| {
+                    let (ptr, ty, ast_ty) = self.lookup_variable(name).ok_or_else(|| {
                         CodegenError::UndefinedVariable {
                             name: name.clone(),
                             span: stmt.span,
@@ -351,11 +524,13 @@ impl<'ctx> CodeGen<'ctx> {
 
                 // Then branch
                 self.builder.position_at_end(then_block);
+                self.push_scope();
                 for s in then_branch {
                     if self.compile_stmt(s, fn_val, ret_ty)? {
                         break;
                     }
                 }
+                self.pop_scope();
                 let then_end =
                     self.builder
                         .get_insert_block()
@@ -366,6 +541,7 @@ impl<'ctx> CodeGen<'ctx> {
 
                 // Else branch
                 self.builder.position_at_end(else_block);
+                self.push_scope();
                 if let Some(else_stmts) = else_branch {
                     for s in else_stmts {
                         if self.compile_stmt(s, fn_val, ret_ty)? {
@@ -373,6 +549,7 @@ impl<'ctx> CodeGen<'ctx> {
                         }
                     }
                 }
+                self.pop_scope();
                 let else_end =
                     self.builder
                         .get_insert_block()
@@ -450,8 +627,7 @@ impl<'ctx> CodeGen<'ctx> {
             ExprKind::Int(v) => Ok(bigint_to_llvm_const(self.context, v)),
             ExprKind::Ident(name) => {
                 let &(ref ptr, ty, ref _ast_ty) =
-                    self.variables
-                        .get(name)
+                    self.lookup_variable(name)
                         .ok_or_else(|| CodegenError::UndefinedVariable {
                             name: name.clone(),
                             span: e.span,
@@ -690,11 +866,13 @@ impl<'ctx> CodeGen<'ctx> {
             break_bb: loop_after,
             result_slot,
         });
+        self.push_scope();
         for s in body {
             if self.compile_stmt(s, fn_val, ret_ty)? {
                 break;
             }
         }
+        self.pop_scope();
         self.loop_stack.pop();
 
         // If the body falls through (no terminator), branch to the back-edge
@@ -773,8 +951,7 @@ impl<'ctx> CodeGen<'ctx> {
     fn infer_expr_unsigned(&self, e: &Expr) -> bool {
         match &e.kind {
             ExprKind::Ident(name) => self
-                .variables
-                .get(name.as_str())
+                .lookup_variable(name.as_str())
                 .is_some_and(|(_, _, ty)| matches!(ty, Type::UInt(_) | Type::USize)),
             ExprKind::Int(_) => false,
             ExprKind::BinOp { lhs, rhs, .. } => {
@@ -839,34 +1016,60 @@ impl<'ctx> CodeGen<'ctx> {
         let is_unsigned = lhs_unsigned || rhs_unsigned;
 
         match op {
+            BinOp::Add if self.debug_checks && is_unsigned => {
+                self.emit_checked_arithmetic("llvm.uadd.with.overflow", lhs, rhs)
+            }
+            BinOp::Add if self.debug_checks => {
+                self.emit_checked_arithmetic("llvm.sadd.with.overflow", lhs, rhs)
+            }
             BinOp::Add => self
                 .builder
                 .build_int_add(lhs, rhs, "add")
                 .map_err(llvm_err!("build_int_add")),
+            BinOp::Sub if self.debug_checks && is_unsigned => {
+                self.emit_checked_arithmetic("llvm.usub.with.overflow", lhs, rhs)
+            }
+            BinOp::Sub if self.debug_checks => {
+                self.emit_checked_arithmetic("llvm.ssub.with.overflow", lhs, rhs)
+            }
             BinOp::Sub => self
                 .builder
                 .build_int_sub(lhs, rhs, "sub")
                 .map_err(llvm_err!("build_int_sub")),
+            BinOp::Mul if self.debug_checks && is_unsigned => {
+                self.emit_checked_arithmetic("llvm.umul.with.overflow", lhs, rhs)
+            }
+            BinOp::Mul if self.debug_checks => {
+                self.emit_checked_arithmetic("llvm.smul.with.overflow", lhs, rhs)
+            }
             BinOp::Mul => self
                 .builder
                 .build_int_mul(lhs, rhs, "mul")
                 .map_err(llvm_err!("build_int_mul")),
-            BinOp::Div if is_unsigned => self
-                .builder
-                .build_int_unsigned_div(lhs, rhs, "udiv")
-                .map_err(llvm_err!("build_int_unsigned_div")),
-            BinOp::Div => self
-                .builder
-                .build_int_signed_div(lhs, rhs, "sdiv")
-                .map_err(llvm_err!("build_int_signed_div")),
-            BinOp::Mod if is_unsigned => self
-                .builder
-                .build_int_unsigned_rem(lhs, rhs, "urem")
-                .map_err(llvm_err!("build_int_unsigned_rem")),
-            BinOp::Mod => self
-                .builder
-                .build_int_signed_rem(lhs, rhs, "srem")
-                .map_err(llvm_err!("build_int_signed_rem")),
+            BinOp::Div if is_unsigned => {
+                self.emit_div_zero_check(rhs)?;
+                self.builder
+                    .build_int_unsigned_div(lhs, rhs, "udiv")
+                    .map_err(llvm_err!("build_int_unsigned_div"))
+            }
+            BinOp::Div => {
+                self.emit_div_zero_check(rhs)?;
+                self.builder
+                    .build_int_signed_div(lhs, rhs, "sdiv")
+                    .map_err(llvm_err!("build_int_signed_div"))
+            }
+            BinOp::Mod if is_unsigned => {
+                self.emit_div_zero_check(rhs)?;
+                self.builder
+                    .build_int_unsigned_rem(lhs, rhs, "urem")
+                    .map_err(llvm_err!("build_int_unsigned_rem"))
+            }
+            BinOp::Mod => {
+                self.emit_div_zero_check(rhs)?;
+                self.builder
+                    .build_int_signed_rem(lhs, rhs, "srem")
+                    .map_err(llvm_err!("build_int_signed_rem"))
+            }
             BinOp::Pow => {
                 // Integer exponentiation via a countdown loop:
                 //   result = 1; while exp > 0 { result *= base; exp -= 1; }
@@ -1048,14 +1251,18 @@ impl<'ctx> CodeGen<'ctx> {
                     .build_xor(lhs_nonzero, rhs_nonzero, "logical_xor")
                     .map_err(llvm_err!("build_xor"))
             }
-            BinOp::LShift => self
-                .builder
-                .build_left_shift(lhs, rhs, "lshift")
-                .map_err(llvm_err!("build_left_shift")),
-            BinOp::RShift => self
-                .builder
-                .build_right_shift(lhs, rhs, !is_unsigned, "rshift")
-                .map_err(llvm_err!("build_right_shift")),
+            BinOp::LShift => {
+                self.emit_shift_check(rhs, wt.get_bit_width())?;
+                self.builder
+                    .build_left_shift(lhs, rhs, "lshift")
+                    .map_err(llvm_err!("build_left_shift"))
+            }
+            BinOp::RShift => {
+                self.emit_shift_check(rhs, wt.get_bit_width())?;
+                self.builder
+                    .build_right_shift(lhs, rhs, !is_unsigned, "rshift")
+                    .map_err(llvm_err!("build_right_shift"))
+            }
         }
     }
 
@@ -1148,7 +1355,7 @@ pub fn emit_object_and_ir(
     program: &Program,
     out_obj: &Path,
     out_ll: Option<&Path>,
-    _debug_checks: bool,
+    debug_checks: bool,
 ) -> CodegenResult<()> {
     // 1) Init target and build the TargetMachine upfront so the data layout
     //    is available before IR generation (required for usize/isize types).
@@ -1176,7 +1383,7 @@ pub fn emit_object_and_ir(
     // 2) Build IR module, passing the data layout so that usize/isize resolve
     //    to the correct pointer-sized integer type for this target.
     let context = Context::create();
-    let cg = CodeGen::new(&context, "xenon_mvp", tm.get_target_data());
+    let cg = CodeGen::new(&context, "xenon_mvp", tm.get_target_data(), debug_checks);
     let module = cg.compile_program(program)?;
     module.set_triple(&triple);
 
