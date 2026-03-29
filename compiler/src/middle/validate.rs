@@ -1,6 +1,5 @@
 use crate::error::{SemanticError, SemanticResult};
-use crate::frontend::ast::{Expr, Program, Stmt, Type};
-use crate::frontend::tokens::Span;
+use crate::frontend::ast::{Expr, ExprKind, Program, Stmt, StmtKind, Type};
 use num_bigint::BigInt;
 
 /// Walks the program and checks that integer literal constants fit within the
@@ -15,22 +14,26 @@ pub fn validate_program(program: &Program) -> SemanticResult<()> {
 }
 
 fn validate_stmt(stmt: &Stmt) -> SemanticResult<()> {
-    match stmt {
-        Stmt::VarDecl(binding) => {
+    match &stmt.kind {
+        StmtKind::VarDecl(binding) => {
             if let Some(default) = &binding.default
-                && let Expr::Int(v) = default.as_ref()
+                && let ExprKind::Int(v) = &default.kind
             {
-                check_constant_range(binding.name.as_deref().unwrap_or("_"), v, &binding.ty)?;
+                check_constant_range(
+                    binding.name.as_deref().unwrap_or("_"),
+                    v,
+                    &binding.ty,
+                    binding.span,
+                )?;
             }
-            // Also walk the default expression for nested declarations.
             if let Some(default) = &binding.default {
                 validate_expr(default)?;
             }
             Ok(())
         }
-        Stmt::Return(expr) => validate_expr(expr),
-        Stmt::Assign { value, .. } => validate_expr(value),
-        Stmt::If {
+        StmtKind::Return(expr) => validate_expr(expr),
+        StmtKind::Assign { value, .. } => validate_expr(value),
+        StmtKind::If {
             condition,
             then_branch,
             else_branch,
@@ -46,21 +49,21 @@ fn validate_stmt(stmt: &Stmt) -> SemanticResult<()> {
             }
             Ok(())
         }
-        Stmt::Expr(expr) => validate_expr(expr),
-        Stmt::Break(Some(expr)) => validate_expr(expr),
-        Stmt::Break(None) | Stmt::Continue => Ok(()),
+        StmtKind::Expr(expr) => validate_expr(expr),
+        StmtKind::Break(Some(expr)) => validate_expr(expr),
+        StmtKind::Break(None) | StmtKind::Continue => Ok(()),
     }
 }
 
 fn validate_expr(expr: &Expr) -> SemanticResult<()> {
-    match expr {
-        Expr::Loop { body } => {
+    match &expr.kind {
+        ExprKind::Loop { body } => {
             for s in body {
                 validate_stmt(s)?;
             }
             Ok(())
         }
-        Expr::CondLoop {
+        ExprKind::CondLoop {
             condition, body, ..
         } => {
             validate_expr(condition)?;
@@ -69,7 +72,7 @@ fn validate_expr(expr: &Expr) -> SemanticResult<()> {
             }
             Ok(())
         }
-        Expr::IfElse {
+        ExprKind::IfElse {
             condition,
             then_branch,
             else_branch,
@@ -78,22 +81,27 @@ fn validate_expr(expr: &Expr) -> SemanticResult<()> {
             validate_expr(then_branch)?;
             validate_expr(else_branch)
         }
-        Expr::BinOp { lhs, rhs, .. } => {
+        ExprKind::BinOp { lhs, rhs, .. } => {
             validate_expr(lhs)?;
             validate_expr(rhs)
         }
-        Expr::UnaryOp { operand, .. } => validate_expr(operand),
-        Expr::Call { args, .. } => {
+        ExprKind::UnaryOp { operand, .. } => validate_expr(operand),
+        ExprKind::Call { args, .. } => {
             for arg in args {
                 validate_expr(arg)?;
             }
             Ok(())
         }
-        Expr::Int(_) | Expr::Ident(_) => Ok(()),
+        ExprKind::Int(_) | ExprKind::Ident(_) => Ok(()),
     }
 }
 
-fn check_constant_range(name: &str, value: &BigInt, ty: &Type) -> SemanticResult<()> {
+fn check_constant_range(
+    name: &str,
+    value: &BigInt,
+    ty: &Type,
+    span: crate::frontend::tokens::Span,
+) -> SemanticResult<()> {
     let fits = match ty.bounds() {
         Some((min, max)) => value >= &min && value <= &max,
         None => true,
@@ -105,7 +113,7 @@ fn check_constant_range(name: &str, value: &BigInt, ty: &Type) -> SemanticResult
             name: name.to_owned(),
             value: value.clone(),
             ty: ty.clone(),
-            span: Span { start: 0, end: 0 },
+            span,
         })
     }
 }
