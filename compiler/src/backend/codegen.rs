@@ -16,7 +16,7 @@ use inkwell::values::{FunctionValue, PointerValue};
 use inkwell::IntPredicate;
 
 use crate::error::{CodegenError, CodegenResult};
-use crate::frontend::ast::{BinOp, Expr, Function, Program, Stmt, UnaryOp};
+use crate::frontend::ast::{BinOp, Expr, ExprKind, Function, Program, Stmt, StmtKind, UnaryOp};
 use num_bigint::BigInt;
 use num_traits::ToPrimitive;
 
@@ -200,6 +200,7 @@ impl<'ctx> CodeGen<'ctx> {
             let Some(ret_name) = &f.return_type.name else {
                 return Err(CodegenError::MissingReturn {
                     name: f.name.clone(),
+                    span: f.span,
                 });
             };
             let (ptr, ty, _) =
@@ -232,8 +233,8 @@ impl<'ctx> CodeGen<'ctx> {
         fn_val: FunctionValue<'ctx>,
         ret_ty: BasicTypeEnum<'ctx>,
     ) -> CodegenResult<bool> {
-        match stmt {
-            Stmt::Return(inner) => {
+        match &stmt.kind {
+            StmtKind::Return(inner) => {
                 let value = self.codegen_expr(inner)?;
                 let value = self.cast_int_to_type(value, ret_ty, false)?;
                 self.builder
@@ -241,7 +242,7 @@ impl<'ctx> CodeGen<'ctx> {
                     .map_err(llvm_err!("build_return"))?;
                 Ok(true)
             }
-            Stmt::VarDecl(binding) => {
+            StmtKind::VarDecl(binding) => {
                 let llvm_ty = self.llvm_type(&binding.ty)?;
                 let var_name = binding.name.as_deref().unwrap_or("_");
                 let alloca = self
@@ -265,12 +266,14 @@ impl<'ctx> CodeGen<'ctx> {
                     .map_err(llvm_err!("build_store"))?;
                 Ok(false)
             }
-            Stmt::Assign { name, value } => {
+            StmtKind::Assign { name, value } => {
                 let (var_ptr, var_ty, is_unsigned) = {
-                    let (ptr, ty, ast_ty) = self
-                        .variables
-                        .get(name)
-                        .ok_or_else(|| CodegenError::UndefinedVariable { name: name.clone() })?;
+                    let (ptr, ty, ast_ty) = self.variables.get(name).ok_or_else(|| {
+                        CodegenError::UndefinedVariable {
+                            name: name.clone(),
+                            span: stmt.span,
+                        }
+                    })?;
                     (*ptr, *ty, matches!(ast_ty, Type::UInt(_) | Type::USize))
                 };
                 let val = self.codegen_expr(value)?;
@@ -280,7 +283,7 @@ impl<'ctx> CodeGen<'ctx> {
                     .map_err(llvm_err!("build_store"))?;
                 Ok(false)
             }
-            Stmt::Expr(expr) => {
+            StmtKind::Expr(expr) => {
                 self.codegen_expr(expr)?;
                 // An expression like an infinite loop may have terminated the
                 // current block; stop emitting further statements if so.
@@ -290,7 +293,7 @@ impl<'ctx> CodeGen<'ctx> {
                     .is_some_and(|b| b.get_terminator().is_some());
                 Ok(terminated)
             }
-            Stmt::Break(opt_expr) => {
+            StmtKind::Break(opt_expr) => {
                 let (break_bb, result_slot) = {
                     let frame = self.loop_stack.last().ok_or(CodegenError::InvalidIrState(
                         "`break` used outside of a loop",
@@ -309,7 +312,7 @@ impl<'ctx> CodeGen<'ctx> {
                     .map_err(llvm_err!("build_unconditional_branch (break)"))?;
                 Ok(true)
             }
-            Stmt::Continue => {
+            StmtKind::Continue => {
                 let continue_bb = self
                     .loop_stack
                     .last()
@@ -322,7 +325,7 @@ impl<'ctx> CodeGen<'ctx> {
                     .map_err(llvm_err!("build_unconditional_branch (continue)"))?;
                 Ok(true)
             }
-            Stmt::If {
+            StmtKind::If {
                 condition,
                 then_branch,
                 else_branch,
@@ -443,40 +446,46 @@ impl<'ctx> CodeGen<'ctx> {
     }
 
     fn codegen_expr(&mut self, e: &Expr) -> CodegenResult<inkwell::values::IntValue<'ctx>> {
-        match e {
-            Expr::Int(v) => Ok(bigint_to_llvm_const(self.context, v)),
-            Expr::Ident(name) => {
-                let &(ref ptr, ty, ref _ast_ty) = self
-                    .variables
-                    .get(name)
-                    .ok_or_else(|| CodegenError::UndefinedVariable { name: name.clone() })?;
+        match &e.kind {
+            ExprKind::Int(v) => Ok(bigint_to_llvm_const(self.context, v)),
+            ExprKind::Ident(name) => {
+                let &(ref ptr, ty, ref _ast_ty) =
+                    self.variables
+                        .get(name)
+                        .ok_or_else(|| CodegenError::UndefinedVariable {
+                            name: name.clone(),
+                            span: e.span,
+                        })?;
                 self.builder
                     .build_load(ty, *ptr, name.as_str())
                     .map_err(llvm_err!("build_load"))
                     .map(|v| v.into_int_value())
             }
-            Expr::BinOp { lhs, op, rhs } => {
+            ExprKind::BinOp { lhs, op, rhs } => {
                 let lhs_unsigned = self.infer_expr_unsigned(lhs);
                 let rhs_unsigned = self.infer_expr_unsigned(rhs);
                 let lhs_val = self.codegen_expr(lhs)?;
                 let rhs_val = self.codegen_expr(rhs)?;
                 self.codegen_binop(op, lhs_val, rhs_val, lhs_unsigned, rhs_unsigned)
             }
-            Expr::UnaryOp { op, operand } => {
+            ExprKind::UnaryOp { op, operand } => {
                 let val = self.codegen_expr(operand)?;
                 self.codegen_unaryop(op, val)
             }
-            Expr::Call { name, args } => {
-                let callee = self
-                    .module
-                    .get_function(name)
-                    .ok_or_else(|| CodegenError::UndefinedFunction { name: name.clone() })?;
+            ExprKind::Call { name, args } => {
+                let callee = self.module.get_function(name).ok_or_else(|| {
+                    CodegenError::UndefinedFunction {
+                        name: name.clone(),
+                        span: e.span,
+                    }
+                })?;
                 let expected = callee.count_params() as usize;
                 if args.len() != expected {
                     return Err(CodegenError::ArgumentCountMismatch {
                         name: name.clone(),
                         expected,
                         got: args.len(),
+                        span: e.span,
                     });
                 }
                 let mut compiled_args: Vec<inkwell::values::BasicMetadataValueEnum> =
@@ -497,7 +506,7 @@ impl<'ctx> CodeGen<'ctx> {
                     .ok_or(CodegenError::InvalidIrState("call returned void"))?;
                 Ok(ret.into_int_value())
             }
-            Expr::IfElse {
+            ExprKind::IfElse {
                 condition,
                 then_branch,
                 else_branch,
@@ -597,8 +606,8 @@ impl<'ctx> CodeGen<'ctx> {
                 phi.add_incoming(&[(&then_val, then_end_bb), (&else_val, else_end_bb)]);
                 Ok(phi.as_basic_value().into_int_value())
             }
-            Expr::Loop { body } => self.compile_loop(body, None, false, false),
-            Expr::CondLoop {
+            ExprKind::Loop { body } => self.compile_loop(body, None, false, false),
+            ExprKind::CondLoop {
                 post,
                 inverted,
                 condition,
@@ -762,18 +771,18 @@ impl<'ctx> CodeGen<'ctx> {
     /// Integer literals are considered sign-neutral (`false`), so the other
     /// operand in a binary operation decides the signedness.
     fn infer_expr_unsigned(&self, e: &Expr) -> bool {
-        match e {
-            Expr::Ident(name) => self
+        match &e.kind {
+            ExprKind::Ident(name) => self
                 .variables
                 .get(name.as_str())
                 .is_some_and(|(_, _, ty)| matches!(ty, Type::UInt(_) | Type::USize)),
-            Expr::Int(_) => false,
-            Expr::BinOp { lhs, rhs, .. } => {
+            ExprKind::Int(_) => false,
+            ExprKind::BinOp { lhs, rhs, .. } => {
                 // Propagate unsignedness from either operand.
                 self.infer_expr_unsigned(lhs) || self.infer_expr_unsigned(rhs)
             }
-            Expr::UnaryOp { operand, .. } => self.infer_expr_unsigned(operand),
-            Expr::IfElse {
+            ExprKind::UnaryOp { operand, .. } => self.infer_expr_unsigned(operand),
+            ExprKind::IfElse {
                 then_branch,
                 else_branch,
                 ..
@@ -781,7 +790,7 @@ impl<'ctx> CodeGen<'ctx> {
                 // Propagate unsignedness from either branch.
                 self.infer_expr_unsigned(then_branch) || self.infer_expr_unsigned(else_branch)
             }
-            Expr::Call { .. } | Expr::Loop { .. } | Expr::CondLoop { .. } => false,
+            ExprKind::Call { .. } | ExprKind::Loop { .. } | ExprKind::CondLoop { .. } => false,
         }
     }
 
@@ -1139,6 +1148,7 @@ pub fn emit_object_and_ir(
     program: &Program,
     out_obj: &Path,
     out_ll: Option<&Path>,
+    _debug_checks: bool,
 ) -> CodegenResult<()> {
     // 1) Init target and build the TargetMachine upfront so the data layout
     //    is available before IR generation (required for usize/isize types).
