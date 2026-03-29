@@ -12,6 +12,7 @@ logos = "0.16.1"
 num-bigint = "0.4.6"
 num-traits = "0.2"
 thiserror = "2.0.18"
+ariadne = "0.6.0"
 
 [target.'cfg(windows)'.dependencies]
 inkwell = { git = "https://github.com/TheDan64/inkwell", rev = "7f5895f414f6972c835d5b7ce6cd709a65a6d192", features = [
