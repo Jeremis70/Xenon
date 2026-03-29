@@ -10,7 +10,7 @@ fn validate_src(src: &str) -> Result<(), SemanticError> {
     let tokens = lex(src).expect("lexing should succeed");
     let mut parser = Parser::new(&tokens);
     let program = parser.parse_program().expect("parsing should succeed");
-    let program = fold_constants(program);
+    let program = fold_constants(program).expect("fold should succeed");
     validate_program(&program)
 }
 

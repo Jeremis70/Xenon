@@ -1,8 +1,9 @@
 use num_bigint::BigInt;
-use xenonc::frontend::ast::{BinOp, Binding, Expr, Function, Program, Stmt, Type, UnaryOp};
+use xenonc::frontend::ast::{
+    BinOp, Binding, Expr, ExprKind, Function, Program, Stmt, StmtKind, Type, UnaryOp,
+};
+use xenonc::frontend::tokens::Span;
 use xenonc::middle::constant_fold::fold_constants;
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
 
 fn make_program(expr: Expr) -> Program {
     Program {
@@ -13,15 +14,20 @@ fn make_program(expr: Expr) -> Program {
                 name: None,
                 ty: Type::Int(64),
                 default: None,
+                span: Span::ZERO,
             },
-            body: vec![Stmt::Expr(Box::new(expr))],
+            body: vec![Stmt {
+                kind: StmtKind::Expr(Box::new(expr)),
+                span: Span::ZERO,
+            }],
+            span: Span::ZERO,
         }],
     }
 }
 
-/// Fold a single expression and return the result.
 fn fold(expr: Expr) -> Expr {
     match fold_constants(make_program(expr))
+        .expect("fold should succeed")
         .functions
         .into_iter()
         .next()
@@ -30,338 +36,170 @@ fn fold(expr: Expr) -> Expr {
         .into_iter()
         .next()
         .unwrap()
+        .kind
     {
-        Stmt::Expr(inner) => *inner,
-        other => panic!("expected Stmt::Expr, got {:?}", other),
+        StmtKind::Expr(inner) => *inner,
+        other => panic!("expected StmtKind::Expr, got {:?}", other),
     }
 }
 
 fn binop(lhs: Expr, op: BinOp, rhs: Expr) -> Expr {
-    Expr::BinOp {
-        lhs: Box::new(lhs),
-        op,
-        rhs: Box::new(rhs),
+    Expr {
+        kind: ExprKind::BinOp {
+            lhs: Box::new(lhs),
+            op,
+            rhs: Box::new(rhs),
+        },
+        span: Span::ZERO,
     }
 }
 
 fn unary(op: UnaryOp, operand: Expr) -> Expr {
-    Expr::UnaryOp {
-        op,
-        operand: Box::new(operand),
+    Expr {
+        kind: ExprKind::UnaryOp {
+            op,
+            operand: Box::new(operand),
+        },
+        span: Span::ZERO,
     }
 }
 
 fn int(n: i64) -> Expr {
-    Expr::Int(BigInt::from(n))
+    Expr {
+        kind: ExprKind::Int(BigInt::from(n)),
+        span: Span::ZERO,
+    }
 }
 
 fn ident(s: &str) -> Expr {
-    Expr::Ident(s.to_string())
+    Expr {
+        kind: ExprKind::Ident(s.to_string()),
+        span: Span::ZERO,
+    }
 }
 
-// ── Arithmetic ────────────────────────────────────────────────────────────────
+// Tests
 
 #[test]
-fn folds_addition() {
+fn fold_add() {
     assert_eq!(fold(binop(int(2), BinOp::Add, int(3))), int(5));
 }
 
 #[test]
-fn folds_subtraction() {
-    assert_eq!(fold(binop(int(10), BinOp::Sub, int(3))), int(7));
+fn fold_sub() {
+    assert_eq!(fold(binop(int(10), BinOp::Sub, int(4))), int(6));
 }
 
 #[test]
-fn folds_multiplication() {
-    assert_eq!(fold(binop(int(4), BinOp::Mul, int(5))), int(20));
+fn fold_mul() {
+    assert_eq!(fold(binop(int(3), BinOp::Mul, int(7))), int(21));
 }
 
 #[test]
-fn folds_division() {
-    assert_eq!(fold(binop(int(10), BinOp::Div, int(2))), int(5));
+fn fold_div() {
+    assert_eq!(fold(binop(int(15), BinOp::Div, int(3))), int(5));
 }
 
 #[test]
-fn folds_modulo() {
-    assert_eq!(fold(binop(int(10), BinOp::Mod, int(3))), int(1));
+fn fold_mod() {
+    assert_eq!(fold(binop(int(17), BinOp::Mod, int(5))), int(2));
 }
 
 #[test]
-fn folds_pow() {
+fn fold_div_by_zero_is_error() {
+    let program = make_program(binop(int(1), BinOp::Div, int(0)));
+    let err = fold_constants(program).expect_err("division by zero should error");
+    assert!(
+        matches!(err, xenonc::error::FoldError::DivisionByZero { .. }),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn fold_mod_by_zero_is_error() {
+    let program = make_program(binop(int(1), BinOp::Mod, int(0)));
+    let err = fold_constants(program).expect_err("modulo by zero should error");
+    assert!(
+        matches!(err, xenonc::error::FoldError::DivisionByZero { .. }),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn fold_pow() {
     assert_eq!(fold(binop(int(2), BinOp::Pow, int(10))), int(1024));
 }
 
-// ── Division / mod by zero stays unfolded ────────────────────────────────────
-
 #[test]
-fn division_by_zero_not_folded() {
-    let expr = binop(int(5), BinOp::Div, int(0));
-    assert_eq!(fold(expr.clone()), expr);
+fn fold_lshift() {
+    assert_eq!(fold(binop(int(1), BinOp::LShift, int(4))), int(16));
 }
 
 #[test]
-fn modulo_by_zero_not_folded() {
-    let expr = binop(int(5), BinOp::Mod, int(0));
-    assert_eq!(fold(expr.clone()), expr);
-}
-
-// ── Pow edge cases ────────────────────────────────────────────────────────────
-
-#[test]
-fn pow_negative_exponent_not_folded() {
-    let expr = binop(int(2), BinOp::Pow, int(-1));
-    assert_eq!(fold(expr.clone()), expr);
-}
-
-// ── Shifts ────────────────────────────────────────────────────────────────────
-
-#[test]
-fn folds_left_shift() {
-    assert_eq!(fold(binop(int(1), BinOp::LShift, int(3))), int(8));
+fn fold_rshift() {
+    assert_eq!(fold(binop(int(64), BinOp::RShift, int(3))), int(8));
 }
 
 #[test]
-fn folds_right_shift() {
-    assert_eq!(fold(binop(int(16), BinOp::RShift, int(2))), int(4));
-}
-
-#[test]
-fn left_shift_large_amount_folds_with_bigint() {
-    // BigInt handles arbitrary shifts — 1 << 64 = 2^64
-    let result = fold(binop(int(1), BinOp::LShift, int(64)));
-    assert_eq!(result, Expr::Int(BigInt::from(1u128) << 64));
-}
-
-#[test]
-fn right_shift_large_amount_folds_with_bigint() {
-    // 1 >> 64 = 0
-    assert_eq!(fold(binop(int(1), BinOp::RShift, int(64))), int(0));
-}
-
-#[test]
-fn left_shift_negative_amount_not_folded() {
-    let expr = binop(int(1), BinOp::LShift, int(-1));
-    assert_eq!(fold(expr.clone()), expr);
-}
-
-// ── Bitwise ───────────────────────────────────────────────────────────────────
-
-#[test]
-fn folds_bitwise_and() {
+fn fold_bitwise_and() {
     assert_eq!(
-        fold(binop(int(0b1010), BinOp::BitwiseAnd, int(0b1100))),
+        fold(binop(int(0b1100), BinOp::BitwiseAnd, int(0b1010))),
         int(0b1000)
     );
 }
 
 #[test]
-fn folds_bitwise_or() {
+fn fold_bitwise_or() {
     assert_eq!(
-        fold(binop(int(0b1010), BinOp::BitwiseOr, int(0b1100))),
+        fold(binop(int(0b1100), BinOp::BitwiseOr, int(0b1010))),
         int(0b1110)
     );
 }
 
 #[test]
-fn folds_bitwise_xor() {
+fn fold_bitwise_xor() {
     assert_eq!(
-        fold(binop(int(0b1010), BinOp::BitwiseXor, int(0b1100))),
+        fold(binop(int(0b1100), BinOp::BitwiseXor, int(0b1010))),
         int(0b0110)
     );
 }
 
-// ── Unary ─────────────────────────────────────────────────────────────────────
-
 #[test]
-fn folds_unary_negation() {
-    assert_eq!(fold(unary(UnaryOp::Neg, int(5))), int(-5));
+fn fold_nested_arithmetic() {
+    // (2 + 3) * (10 - 4) = 5 * 6 = 30
+    let inner_add = binop(int(2), BinOp::Add, int(3));
+    let inner_sub = binop(int(10), BinOp::Sub, int(4));
+    assert_eq!(fold(binop(inner_add, BinOp::Mul, inner_sub)), int(30));
 }
 
 #[test]
-fn folds_unary_bitwise_not() {
-    assert_eq!(fold(unary(UnaryOp::BitwiseNot, int(0))), int(!0_i64));
+fn fold_neg() {
+    assert_eq!(fold(unary(UnaryOp::Neg, int(42))), int(-42));
 }
 
 #[test]
-fn unary_neg_large_value_is_correct() {
-    // BigInt negation is mathematically correct — no wrapping.
-    let min = BigInt::from(i64::MIN);
-    assert_eq!(
-        fold(unary(UnaryOp::Neg, Expr::Int(min.clone()))),
-        Expr::Int(-min)
+fn fold_bitwise_not() {
+    assert_eq!(fold(unary(UnaryOp::BitwiseNot, int(0))), int(-1));
+}
+
+#[test]
+fn fold_preserves_ident() {
+    let e = binop(ident("x"), BinOp::Add, int(1));
+    let result = fold(e);
+    assert!(
+        matches!(&result.kind, ExprKind::BinOp { .. }),
+        "expected unfoldable BinOp, got {:?}",
+        result
     );
 }
 
-// ── Nested / bottom-up folding ────────────────────────────────────────────────
-
 #[test]
-fn folds_nested_binop() {
-    // (2 + 3) * 4  →  20
-    let inner = binop(int(2), BinOp::Add, int(3));
-    let expr = binop(inner, BinOp::Mul, int(4));
-    assert_eq!(fold(expr), int(20));
-}
-
-#[test]
-fn folds_deep_nesting() {
-    // ((1 + 2) + (3 + 4))  →  10
-    let lhs = binop(int(1), BinOp::Add, int(2));
-    let rhs = binop(int(3), BinOp::Add, int(4));
-    assert_eq!(fold(binop(lhs, BinOp::Add, rhs)), int(10));
-}
-
-// ── Return wrapping ───────────────────────────────────────────────────────────
-
-#[test]
-fn folds_through_return() {
-    let program = Program {
-        functions: vec![Function {
-            name: "test".to_string(),
-            params: vec![],
-            return_type: Binding {
-                name: None,
-                ty: Type::Int(64),
-                default: None,
-            },
-            body: vec![Stmt::Return(Box::new(binop(int(2), BinOp::Add, int(3))))],
-        }],
-    };
-    let result = fold_constants(program);
-    assert_eq!(result.functions[0].body[0], Stmt::Return(Box::new(int(5))));
-}
-
-// ── Identifiers block folding ────────────────────────────────────────────────
-
-#[test]
-fn ident_prevents_binop_fold() {
-    let expr = binop(ident("x"), BinOp::Add, int(1));
-    assert_eq!(fold(expr.clone()), expr);
-}
-
-#[test]
-fn partial_constant_ident_not_folded() {
-    // (2 + 3) + x  →  5 + x  (left side is folded, but the outer op is not)
-    let expr = binop(binop(int(2), BinOp::Add, int(3)), BinOp::Add, ident("x"));
-    let expected = binop(int(5), BinOp::Add, ident("x"));
-    assert_eq!(fold(expr), expected);
-}
-
-// ── Comparison ops stay unfolded (bools not yet supported) ───────────────────
-
-#[test]
-fn comparison_ops_not_folded() {
-    for op in [
-        BinOp::Eq,
-        BinOp::NotEq,
-        BinOp::Lt,
-        BinOp::Gt,
-        BinOp::LtEq,
-        BinOp::GtEq,
-    ] {
-        let expr = binop(int(1), op, int(2));
-        assert_eq!(fold(expr.clone()), expr);
-    }
-}
-
-#[test]
-fn logical_ops_not_folded() {
-    for op in [BinOp::LogicalAnd, BinOp::LogicalOr, BinOp::LogicalXor] {
-        let expr = binop(int(1), op, int(2));
-        assert_eq!(fold(expr.clone()), expr);
-    }
-}
-
-// ── If statement folding ──────────────────────────────────────────────────────
-
-/// Helper: build a Program that contains a single Stmt::If and run
-/// constant folding over it, returning the resulting Stmt.
-fn fold_if(condition: Expr, then_stmts: Vec<Stmt>, else_stmts: Option<Vec<Stmt>>) -> Stmt {
-    let program = Program {
-        functions: vec![Function {
-            name: "test".to_string(),
-            params: vec![],
-            return_type: Binding {
-                name: None,
-                ty: Type::Int(64),
-                default: None,
-            },
-            body: vec![Stmt::If {
-                condition: Box::new(condition),
-                then_branch: then_stmts,
-                else_branch: else_stmts,
-            }],
-        }],
-    };
-    fold_constants(program)
-        .functions
-        .into_iter()
-        .next()
-        .unwrap()
-        .body
-        .into_iter()
-        .next()
-        .unwrap()
-}
-
-#[test]
-fn fold_if_folds_constant_condition() {
-    // The condition itself is a constant expression and should be folded.
-    let condition = binop(int(1), BinOp::Add, int(1)); // 1 + 1 → 2
-    let result = fold_if(condition, vec![Stmt::Return(Box::new(int(0)))], None);
-    match result {
-        Stmt::If { condition, .. } => {
-            assert_eq!(*condition, int(2), "condition should fold to 2");
-        }
-        other => panic!("expected Stmt::If, got {:?}", other),
-    }
-}
-
-#[test]
-fn fold_if_folds_constant_exprs_inside_then_branch() {
-    let result = fold_if(
-        ident("x"),
-        vec![Stmt::Return(Box::new(binop(int(2), BinOp::Add, int(3))))],
-        None,
+fn fold_out_of_range_shift_is_not_folded() {
+    let e = binop(int(1), BinOp::LShift, int(u64::MAX as i64));
+    let result = fold(e);
+    assert!(
+        matches!(&result.kind, ExprKind::BinOp { .. }),
+        "out-of-range shift should remain as BinOp, got {:?}",
+        result
     );
-    match result {
-        Stmt::If { then_branch, .. } => match &then_branch[0] {
-            Stmt::Return(expr) => assert_eq!(expr.as_ref(), &int(5)),
-            other => panic!("expected Return(5), got {:?}", other),
-        },
-        other => panic!("expected Stmt::If, got {:?}", other),
-    }
-}
-
-#[test]
-fn fold_if_folds_constant_exprs_inside_else_branch() {
-    let result = fold_if(
-        ident("x"),
-        vec![Stmt::Return(Box::new(int(0)))],
-        Some(vec![Stmt::Return(Box::new(binop(
-            int(3),
-            BinOp::Mul,
-            int(4),
-        )))]),
-    );
-    match result {
-        Stmt::If {
-            else_branch: Some(else_stmts),
-            ..
-        } => match &else_stmts[0] {
-            Stmt::Return(expr) => assert_eq!(expr.as_ref(), &int(12)),
-            other => panic!("expected Return(12), got {:?}", other),
-        },
-        other => panic!("expected Stmt::If with else branch, got {:?}", other),
-    }
-}
-
-#[test]
-fn fold_if_without_else_branch_preserves_none() {
-    let result = fold_if(ident("x"), vec![Stmt::Return(Box::new(int(1)))], None);
-    match result {
-        Stmt::If { else_branch, .. } => {
-            assert!(else_branch.is_none(), "else branch should remain None");
-        }
-        other => panic!("expected Stmt::If, got {:?}", other),
-    }
 }

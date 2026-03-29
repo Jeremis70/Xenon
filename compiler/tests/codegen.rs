@@ -13,7 +13,7 @@ fn compile_to_ir(src: &str) -> String {
     let tokens = lex(src).expect("lexing should succeed");
     let mut parser = Parser::new(&tokens);
     let program = parser.parse_program().expect("parsing should succeed");
-    let program = fold_constants(program);
+    let program = fold_constants(program).expect("fold should succeed");
 
     Target::initialize_native(&InitializationConfig::default())
         .expect("native target init should succeed");
@@ -192,7 +192,7 @@ fn missing_return_yields_codegen_error() {
         .expect("lexing should succeed");
     let mut parser = Parser::new(&tokens);
     let program = parser.parse_program().expect("parsing should succeed");
-    let program = fold_constants(program);
+    let program = fold_constants(program).expect("fold should succeed");
 
     Target::initialize_native(&InitializationConfig::default())
         .expect("native target init should succeed");
@@ -218,7 +218,7 @@ fn missing_return_yields_codegen_error() {
         .expect_err("codegen should fail with MissingReturn");
 
     assert!(
-        matches!(err, CodegenError::MissingReturn { ref name } if name == "bad"),
+        matches!(err, CodegenError::MissingReturn { ref name, .. } if name == "bad"),
         "expected MissingReturn for function `bad`, got: {err}"
     );
 }

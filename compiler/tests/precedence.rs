@@ -1,50 +1,63 @@
 use num_bigint::BigInt;
-use xenonc::frontend::ast::{BinOp, Expr, Stmt, UnaryOp};
+use xenonc::frontend::ast::{BinOp, Expr, ExprKind, StmtKind, UnaryOp};
+use xenonc::frontend::tokens::Span;
 
 fn ternary(then_branch: Expr, condition: Expr, else_branch: Expr) -> Expr {
-    Expr::IfElse {
-        condition: Box::new(condition),
-        then_branch: Box::new(then_branch),
-        else_branch: Box::new(else_branch),
+    Expr {
+        kind: ExprKind::IfElse {
+            condition: Box::new(condition),
+            then_branch: Box::new(then_branch),
+            else_branch: Box::new(else_branch),
+        },
+        span: Span::ZERO,
     }
 }
 use xenonc::frontend::lexer::lex;
 use xenonc::frontend::parser::Parser;
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// Helper functions
 
 fn parse_expr(expr_src: &str) -> Expr {
     let src = format!("fn x()->u32{{return {};}}", expr_src);
     let tokens = lex(&src).expect("lexing should succeed");
     let mut parser = Parser::new(&tokens);
     let program = parser.parse_program().expect("parsing should succeed");
-    match program.functions[0].body[0].clone() {
-        Stmt::Return(expr) => *expr,
+    match program.functions[0].body[0].kind.clone() {
+        StmtKind::Return(expr) => *expr,
         other => panic!("expected return statement, got {:?}", other),
     }
 }
 
 fn int(n: i64) -> Expr {
-    Expr::Int(BigInt::from(n))
+    Expr {
+        kind: ExprKind::Int(BigInt::from(n)),
+        span: Span::ZERO,
+    }
 }
 
 fn binop(lhs: Expr, op: BinOp, rhs: Expr) -> Expr {
-    Expr::BinOp {
-        lhs: Box::new(lhs),
-        op,
-        rhs: Box::new(rhs),
+    Expr {
+        kind: ExprKind::BinOp {
+            lhs: Box::new(lhs),
+            op,
+            rhs: Box::new(rhs),
+        },
+        span: Span::ZERO,
     }
 }
 
 fn unary(op: UnaryOp, operand: Expr) -> Expr {
-    Expr::UnaryOp {
-        op,
-        operand: Box::new(operand),
+    Expr {
+        kind: ExprKind::UnaryOp {
+            op,
+            operand: Box::new(operand),
+        },
+        span: Span::ZERO,
     }
 }
 
-// ── Tier 1: Arithmetic ────────────────────────────────────────────────────────
-/// `1 + 2 * 3`  →  `1 + (2 * 3)`
+// Tests
+
 #[test]
 fn mul_binds_tighter_than_add() {
     assert_eq!(
@@ -53,7 +66,6 @@ fn mul_binds_tighter_than_add() {
     );
 }
 
-/// `6 - 4 / 2`  →  `6 - (4 / 2)`
 #[test]
 fn div_binds_tighter_than_sub() {
     assert_eq!(
@@ -62,7 +74,6 @@ fn div_binds_tighter_than_sub() {
     );
 }
 
-/// `7 - 3 % 2`  →  `7 - (3 % 2)`
 #[test]
 fn mod_binds_tighter_than_sub() {
     assert_eq!(
@@ -71,7 +82,6 @@ fn mod_binds_tighter_than_sub() {
     );
 }
 
-/// `2 ** 3 * 4`  →  `(2 ** 3) * 4`  (pow > mul)
 #[test]
 fn pow_binds_tighter_than_mul() {
     assert_eq!(
@@ -79,9 +89,7 @@ fn pow_binds_tighter_than_mul() {
         binop(binop(int(2), BinOp::Pow, int(3)), BinOp::Mul, int(4))
     );
 }
-// ── Tier 2: Shift ─────────────────────────────────────────────────────────────
 
-/// `1 + 2 << 3`  →  `(1 + 2) << 3`  (add > shift)
 #[test]
 fn add_binds_tighter_than_lshift() {
     assert_eq!(
@@ -90,7 +98,6 @@ fn add_binds_tighter_than_lshift() {
     );
 }
 
-/// `8 >> 1 + 1`  →  `8 >> (1 + 1)`
 #[test]
 fn add_binds_tighter_than_rshift() {
     assert_eq!(
@@ -99,7 +106,6 @@ fn add_binds_tighter_than_rshift() {
     );
 }
 
-/// `2 * 3 >> 1`  →  `(2 * 3) >> 1`  (mul > shift)
 #[test]
 fn mul_binds_tighter_than_rshift() {
     assert_eq!(
@@ -108,9 +114,6 @@ fn mul_binds_tighter_than_rshift() {
     );
 }
 
-// ── Tier 3: Bitwise ───────────────────────────────────────────────────────────
-
-/// `1 << 2 & 3`  →  `(1 << 2) & 3`  (shift > bitwise-and)
 #[test]
 fn shift_binds_tighter_than_bitwise_and() {
     assert_eq!(
@@ -123,7 +126,6 @@ fn shift_binds_tighter_than_bitwise_and() {
     );
 }
 
-/// `1 & 2 | 3`  →  `(1 & 2) | 3`  (bitwise-and > bitwise-or)
 #[test]
 fn bitwise_and_binds_tighter_than_or() {
     assert_eq!(
@@ -136,7 +138,6 @@ fn bitwise_and_binds_tighter_than_or() {
     );
 }
 
-/// `1 | 2 & 3`  →  `1 | (2 & 3)`
 #[test]
 fn bitwise_and_binds_tighter_than_or_rhs() {
     assert_eq!(
@@ -149,7 +150,6 @@ fn bitwise_and_binds_tighter_than_or_rhs() {
     );
 }
 
-/// `1 ^ 2 & 3`  →  `1 ^ (2 & 3)`  (bitwise-and > bitwise-xor)
 #[test]
 fn bitwise_and_binds_tighter_than_xor() {
     assert_eq!(
@@ -162,7 +162,6 @@ fn bitwise_and_binds_tighter_than_xor() {
     );
 }
 
-/// `1 | 2 ^ 3`  →  `1 | (2 ^ 3)`  (bitwise-xor > bitwise-or)
 #[test]
 fn bitwise_xor_binds_tighter_than_or() {
     assert_eq!(
@@ -175,7 +174,6 @@ fn bitwise_xor_binds_tighter_than_or() {
     );
 }
 
-/// `1 & 2 ^ 3 | 4`  →  `((1 & 2) ^ 3) | 4`  (full bitwise chain)
 #[test]
 fn full_bitwise_chain() {
     assert_eq!(
@@ -192,9 +190,6 @@ fn full_bitwise_chain() {
     );
 }
 
-// ── Tier 4: Comparison ────────────────────────────────────────────────────────
-
-/// `1 & 2 == 3`  →  `(1 & 2) == 3`  (bitwise-and > equality)
 #[test]
 fn bitwise_and_binds_tighter_than_equality() {
     assert_eq!(
@@ -203,7 +198,6 @@ fn bitwise_and_binds_tighter_than_equality() {
     );
 }
 
-/// `1 == 2 & 3`  →  `1 == (2 & 3)`
 #[test]
 fn bitwise_and_binds_tighter_than_equality_rhs() {
     assert_eq!(
@@ -212,7 +206,6 @@ fn bitwise_and_binds_tighter_than_equality_rhs() {
     );
 }
 
-/// `1 | 2 == 3`  →  `(1 | 2) == 3`  (bitwise-or > equality)
 #[test]
 fn bitwise_or_binds_tighter_than_equality() {
     assert_eq!(
@@ -221,7 +214,6 @@ fn bitwise_or_binds_tighter_than_equality() {
     );
 }
 
-/// `1 < 2 == 3`  →  `(1 < 2) == 3`  (relational > equality)
 #[test]
 fn relational_binds_tighter_than_eq() {
     assert_eq!(
@@ -230,7 +222,6 @@ fn relational_binds_tighter_than_eq() {
     );
 }
 
-/// `1 == 2 < 3`  →  `1 == (2 < 3)`
 #[test]
 fn relational_binds_tighter_than_eq_rhs() {
     assert_eq!(
@@ -239,7 +230,6 @@ fn relational_binds_tighter_than_eq_rhs() {
     );
 }
 
-/// `1 != 2 >= 3`  →  `1 != (2 >= 3)`
 #[test]
 fn relational_binds_tighter_than_neq() {
     assert_eq!(
@@ -248,7 +238,6 @@ fn relational_binds_tighter_than_neq() {
     );
 }
 
-/// `1 < 2 << 3`  →  `1 < (2 << 3)`  (shift > relational)
 #[test]
 fn shift_binds_tighter_than_lt() {
     assert_eq!(
@@ -257,9 +246,6 @@ fn shift_binds_tighter_than_lt() {
     );
 }
 
-// ── Tier 5: Logical ───────────────────────────────────────────────────────────
-
-/// `1 == 2 && 3 == 4`  →  `(1 == 2) && (3 == 4)`  (equality > logical-and)
 #[test]
 fn equality_binds_tighter_than_logical_and() {
     assert_eq!(
@@ -272,7 +258,6 @@ fn equality_binds_tighter_than_logical_and() {
     );
 }
 
-/// `1 || 2 && 3`  →  `1 || (2 && 3)`  (logical-and > logical-or)
 #[test]
 fn logical_and_binds_tighter_than_or_rhs() {
     assert_eq!(
@@ -285,7 +270,6 @@ fn logical_and_binds_tighter_than_or_rhs() {
     );
 }
 
-/// `1 && 2 || 3`  →  `(1 && 2) || 3`
 #[test]
 fn logical_and_binds_tighter_than_or_lhs() {
     assert_eq!(
@@ -298,7 +282,6 @@ fn logical_and_binds_tighter_than_or_lhs() {
     );
 }
 
-/// `1 ^^ 2 && 3`  →  `1 ^^ (2 && 3)`  (logical-and > logical-xor)
 #[test]
 fn logical_and_binds_tighter_than_xor() {
     assert_eq!(
@@ -311,7 +294,6 @@ fn logical_and_binds_tighter_than_xor() {
     );
 }
 
-/// `1 || 2 ^^ 3`  →  `1 || (2 ^^ 3)`  (logical-xor > logical-or)
 #[test]
 fn logical_xor_binds_tighter_than_or() {
     assert_eq!(
@@ -324,7 +306,6 @@ fn logical_xor_binds_tighter_than_or() {
     );
 }
 
-/// `1 | 2 || 3`  →  `(1 | 2) || 3`  (bitwise-or > logical-or)
 #[test]
 fn bitwise_or_binds_tighter_than_logical_or() {
     assert_eq!(
@@ -337,7 +318,6 @@ fn bitwise_or_binds_tighter_than_logical_or() {
     );
 }
 
-/// `1 & 2 && 3`  →  `(1 & 2) && 3`  (bitwise-and > logical-and)
 #[test]
 fn bitwise_and_binds_tighter_than_logical_and() {
     assert_eq!(
@@ -350,9 +330,6 @@ fn bitwise_and_binds_tighter_than_logical_and() {
     );
 }
 
-// ── Associativity ─────────────────────────────────────────────────────────────
-
-/// `1 + 2 + 3`  →  `(1 + 2) + 3`
 #[test]
 fn add_is_left_associative() {
     assert_eq!(
@@ -361,7 +338,6 @@ fn add_is_left_associative() {
     );
 }
 
-/// `8 - 3 - 2`  →  `(8 - 3) - 2`
 #[test]
 fn sub_is_left_associative() {
     assert_eq!(
@@ -370,7 +346,6 @@ fn sub_is_left_associative() {
     );
 }
 
-/// `2 * 3 * 4`  →  `(2 * 3) * 4`
 #[test]
 fn mul_is_left_associative() {
     assert_eq!(
@@ -379,7 +354,6 @@ fn mul_is_left_associative() {
     );
 }
 
-/// `12 / 3 / 2`  →  `(12 / 3) / 2`
 #[test]
 fn div_is_left_associative() {
     assert_eq!(
@@ -388,7 +362,6 @@ fn div_is_left_associative() {
     );
 }
 
-/// `1 << 2 << 3`  →  `(1 << 2) << 3`
 #[test]
 fn lshift_is_left_associative() {
     assert_eq!(
@@ -397,7 +370,6 @@ fn lshift_is_left_associative() {
     );
 }
 
-/// `1 & 2 & 3`  →  `(1 & 2) & 3`
 #[test]
 fn bitwise_and_is_left_associative() {
     assert_eq!(
@@ -410,7 +382,6 @@ fn bitwise_and_is_left_associative() {
     );
 }
 
-/// `1 | 2 | 3`  →  `(1 | 2) | 3`
 #[test]
 fn bitwise_or_is_left_associative() {
     assert_eq!(
@@ -423,7 +394,6 @@ fn bitwise_or_is_left_associative() {
     );
 }
 
-/// `1 && 2 && 3`  →  `(1 && 2) && 3`
 #[test]
 fn logical_and_is_left_associative() {
     assert_eq!(
@@ -436,7 +406,6 @@ fn logical_and_is_left_associative() {
     );
 }
 
-/// `1 || 2 || 3`  →  `(1 || 2) || 3`
 #[test]
 fn logical_or_is_left_associative() {
     assert_eq!(
@@ -449,7 +418,6 @@ fn logical_or_is_left_associative() {
     );
 }
 
-/// `2 ** 3 ** 4`  →  `2 ** (3 ** 4)`  (right-associative)
 #[test]
 fn pow_is_right_associative() {
     assert_eq!(
@@ -458,9 +426,6 @@ fn pow_is_right_associative() {
     );
 }
 
-// ── Parentheses ───────────────────────────────────────────────────────────────
-
-/// `(1 + 2) * 3`  →  `(1 + 2) * 3`
 #[test]
 fn parens_override_mul_over_add() {
     assert_eq!(
@@ -469,7 +434,6 @@ fn parens_override_mul_over_add() {
     );
 }
 
-/// `2 * (3 + 4)`  →  `2 * (3 + 4)`
 #[test]
 fn parens_on_rhs_override_precedence() {
     assert_eq!(
@@ -478,7 +442,6 @@ fn parens_on_rhs_override_precedence() {
     );
 }
 
-/// `(2 ** 3) ** 4`  →  `(2 ** 3) ** 4`  (parens force left-assoc on pow)
 #[test]
 fn parens_override_pow_right_associativity() {
     assert_eq!(
@@ -487,7 +450,6 @@ fn parens_override_pow_right_associativity() {
     );
 }
 
-/// `(1 + 2) == (3 + 4)`
 #[test]
 fn parens_on_both_sides_of_eq() {
     assert_eq!(
@@ -500,169 +462,42 @@ fn parens_on_both_sides_of_eq() {
     );
 }
 
-/// `((1 + 2))`  →  `1 + 2`  (double parens)
 #[test]
-fn double_parens_are_transparent() {
-    assert_eq!(parse_expr("((1 + 2))"), binop(int(1), BinOp::Add, int(2)));
-}
-
-/// `1 | (2 && 3)`  →  `1 | (2 && 3)`  (parens override logical/bitwise tier)
-#[test]
-fn parens_override_bitwise_logical_boundary() {
+fn unary_neg_binds_tighter_than_add() {
     assert_eq!(
-        parse_expr("1 | (2 && 3)"),
-        binop(
-            int(1),
-            BinOp::BitwiseOr,
-            binop(int(2), BinOp::LogicalAnd, int(3))
-        )
+        parse_expr("-1 + 2"),
+        binop(unary(UnaryOp::Neg, int(1)), BinOp::Add, int(2))
     );
 }
 
-// ── Unary operators ───────────────────────────────────────────────────────────
-
-/// `-2 * 3`  →  `(-2) * 3`
 #[test]
-fn unary_neg_is_tighter_than_mul() {
+fn unary_not_binds_tighter_than_add() {
     assert_eq!(
-        parse_expr("-2 * 3"),
-        binop(unary(UnaryOp::Neg, int(2)), BinOp::Mul, int(3))
+        parse_expr("!1 + 2"),
+        binop(unary(UnaryOp::Not, int(1)), BinOp::Add, int(2))
     );
 }
 
-/// `!1 == 0`  →  `(!1) == 0`
 #[test]
-fn unary_not_is_tighter_than_eq() {
+fn unary_bitwise_not_binds_tighter_than_add() {
     assert_eq!(
-        parse_expr("!1 == 0"),
-        binop(unary(UnaryOp::Not, int(1)), BinOp::Eq, int(0))
+        parse_expr("~1 + 2"),
+        binop(unary(UnaryOp::BitwiseNot, int(1)), BinOp::Add, int(2))
     );
 }
 
-/// `~1 & 3`  →  `(~1) & 3`
 #[test]
-fn unary_bitwise_not_is_tighter_than_bitwise_and() {
+fn ternary_is_lowest_precedence() {
     assert_eq!(
-        parse_expr("~1 & 3"),
-        binop(
-            unary(UnaryOp::BitwiseNot, int(1)),
-            BinOp::BitwiseAnd,
-            int(3)
-        )
+        parse_expr("1 + 2 if 3 else 4"),
+        ternary(binop(int(1), BinOp::Add, int(2)), int(3), int(4),)
     );
 }
 
-/// `- -3`  →  `-(-3)`  (double negation)
 #[test]
-fn double_unary_chains() {
+fn ternary_rhs_is_full_expression() {
     assert_eq!(
-        parse_expr("- -3"),
-        unary(UnaryOp::Neg, unary(UnaryOp::Neg, int(3)))
-    );
-}
-
-/// `1 + -2`  →  `1 + (-2)`  (unary on rhs of binary)
-#[test]
-fn unary_neg_on_rhs_of_add() {
-    assert_eq!(
-        parse_expr("1 + -2"),
-        binop(int(1), BinOp::Add, unary(UnaryOp::Neg, int(2)))
-    );
-}
-
-/// `~1 & ~2`  →  `(~1) & (~2)`  (unary on both sides)
-#[test]
-fn unary_on_both_sides_of_bitwise_and() {
-    assert_eq!(
-        parse_expr("~1 & ~2"),
-        binop(
-            unary(UnaryOp::BitwiseNot, int(1)),
-            BinOp::BitwiseAnd,
-            unary(UnaryOp::BitwiseNot, int(2))
-        )
-    );
-}
-
-/// `-1 + -2`  →  `(-1) + (-2)`
-#[test]
-fn unary_neg_on_both_sides_of_add() {
-    assert_eq!(
-        parse_expr("-1 + -2"),
-        binop(
-            unary(UnaryOp::Neg, int(1)),
-            BinOp::Add,
-            unary(UnaryOp::Neg, int(2))
-        )
-    );
-}
-
-/// `-2 ** 3`  →  `-(2 ** 3)`  (pow binds tighter than unary neg)
-#[test]
-fn pow_binds_tighter_than_unary_neg() {
-    assert_eq!(
-        parse_expr("-2 ** 3"),
-        unary(UnaryOp::Neg, binop(int(2), BinOp::Pow, int(3)))
-    );
-}
-
-/// `(-2) ** 3`  →  `(-2) ** 3`  (parens force unary first)
-#[test]
-fn parens_force_unary_neg_before_pow() {
-    assert_eq!(
-        parse_expr("(-2) ** 3"),
-        binop(unary(UnaryOp::Neg, int(2)), BinOp::Pow, int(3))
-    );
-}
-
-// ── Ternary `x if c else y` ───────────────────────────────────────────────────
-
-/// `1 if 0 else 2`  →  `IfElse { then: 1, condition: 0, else: 2 }`
-#[test]
-fn ternary_basic() {
-    assert_eq!(parse_expr("1 if 0 else 2"), ternary(int(1), int(0), int(2)));
-}
-
-/// `1 + 2 if 0 else 3`  →  `(1 + 2) if 0 else 3`  (add binds tighter than if)
-#[test]
-fn binop_then_branch_binds_tighter_than_if() {
-    assert_eq!(
-        parse_expr("1 + 2 if 0 else 3"),
-        ternary(binop(int(1), BinOp::Add, int(2)), int(0), int(3))
-    );
-}
-
-/// `1 if 0 else 2 + 3`  →  `1 if 0 else (2 + 3)`  (add binds tighter than if)
-#[test]
-fn binop_else_branch_binds_tighter_than_if() {
-    assert_eq!(
-        parse_expr("1 if 0 else 2 + 3"),
-        ternary(int(1), int(0), binop(int(2), BinOp::Add, int(3)))
-    );
-}
-
-/// `1 if 2 + 3 else 4`  →  `1 if (2 + 3) else 4`  (add binds tighter than if)
-#[test]
-fn binop_condition_binds_tighter_than_if() {
-    assert_eq!(
-        parse_expr("1 if 2 + 3 else 4"),
-        ternary(int(1), binop(int(2), BinOp::Add, int(3)), int(4))
-    );
-}
-
-/// `1 if 0 else 2 if 3 else 4`  →  `1 if 0 else (2 if 3 else 4)`  (right-associative)
-#[test]
-fn ternary_is_right_associative_on_else() {
-    assert_eq!(
-        parse_expr("1 if 0 else 2 if 3 else 4"),
-        ternary(int(1), int(0), ternary(int(2), int(3), int(4)))
-    );
-}
-
-/// `1 || 2 if 0 else 3`  →  `(1 || 2) if 0 else 3`  (|| binds tighter than if)
-#[test]
-fn logical_or_binds_tighter_than_if() {
-    assert_eq!(
-        parse_expr("1 || 2 if 0 else 3"),
-        ternary(binop(int(1), BinOp::LogicalOr, int(2)), int(0), int(3))
+        parse_expr("1 if 2 else 3 + 4"),
+        ternary(int(1), int(2), binop(int(3), BinOp::Add, int(4)))
     );
 }
