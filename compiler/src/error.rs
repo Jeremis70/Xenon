@@ -39,15 +39,16 @@ pub enum CodegenError {
     UnsupportedType { ty: String, span: Span },
     #[error("unsupported operator: `{op}` at {span:?}")]
     UnsupportedOperator { op: String, span: Span },
-    #[error("undefined variable: `{name}`")]
-    UndefinedVariable { name: String },
-    #[error("undefined function: `{name}`")]
-    UndefinedFunction { name: String },
-    #[error("function `{name}` expects {expected} argument(s), got {got}")]
+    #[error("undefined variable: `{name}` at {span:?}")]
+    UndefinedVariable { name: String, span: Span },
+    #[error("undefined function: `{name}` at {span:?}")]
+    UndefinedFunction { name: String, span: Span },
+    #[error("function `{name}` expects {expected} argument(s), got {got} at {span:?}")]
     ArgumentCountMismatch {
         name: String,
         expected: usize,
         got: usize,
+        span: Span,
     },
     /// An inkwell builder call returned an error.
     #[error("LLVM builder error in `{operation}`: {message}")]
@@ -66,8 +67,14 @@ pub enum CodegenError {
     TargetMachineCreation,
     #[error("output file error: {0}")]
     OutputFile(String),
-    #[error("function `{name}` has no return statement and no named return variable")]
-    MissingReturn { name: String },
+    #[error("function `{name}` has no return statement and no named return variable at {span:?}")]
+    MissingReturn { name: String, span: Span },
+    #[error("division by zero at {span:?}")]
+    DivisionByZero { span: Span },
+    #[error("shift amount exceeds bit width at {span:?}")]
+    ShiftOverflow { span: Span },
+    #[error("integer overflow at {span:?}")]
+    IntegerOverflow { span: Span },
     #[error("{0}")]
     Other(String),
 }
@@ -86,3 +93,11 @@ pub enum SemanticError {
 }
 
 pub type SemanticResult<T> = Result<T, SemanticError>;
+
+#[derive(Debug, thiserror::Error)]
+pub enum FoldError {
+    #[error("division by zero in constant expression at {span:?}")]
+    DivisionByZero { span: Span },
+}
+
+pub type FoldResult<T> = Result<T, FoldError>;
