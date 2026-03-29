@@ -8,6 +8,12 @@ pub struct Span {
     pub end: usize,
 }
 
+impl Span {
+    /// A zero-width span at position 0, used as a placeholder when no source
+    /// location is available (e.g. synthetic AST nodes in tests).
+    pub const ZERO: Span = Span { start: 0, end: 0 };
+}
+
 impl TokenKind {
     /// Returns `true` for all assignment operator tokens (`=`, `+=`, `-=`, …).
     pub fn is_assign_op(self) -> bool {
