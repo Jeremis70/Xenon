@@ -496,6 +496,9 @@ impl<'a> Parser<'a> {
     fn parse_expr(&mut self, min_bp: u8) -> ParseResult<Expr> {
         let token = self.expect([
             TokenKind::Int,
+            TokenKind::Float,
+            TokenKind::True,
+            TokenKind::False,
             TokenKind::Ident,
             TokenKind::Minus,
             TokenKind::Bang,
@@ -549,6 +552,18 @@ impl<'a> Parser<'a> {
             }
             TokenKind::Int => Ok(Expr {
                 kind: ExprKind::Int(token.int_value()?.clone()),
+                span: token.span,
+            }),
+            TokenKind::Float => Ok(Expr {
+                kind: ExprKind::Float(token.float_value()?),
+                span: token.span,
+            }),
+            TokenKind::True => Ok(Expr {
+                kind: ExprKind::Bool(true),
+                span: token.span,
+            }),
+            TokenKind::False => Ok(Expr {
+                kind: ExprKind::Bool(false),
                 span: token.span,
             }),
             TokenKind::Ident => {

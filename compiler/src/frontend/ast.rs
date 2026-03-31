@@ -162,6 +162,10 @@ impl PartialEq for Stmt {
 pub enum ExprKind {
     // Literals
     Int(BigInt),
+    /// Boolean literal (`true` / `false`).
+    Bool(bool),
+    /// Floating-point literal; lowered to the context type (e.g. `f32`, `f64`).
+    Float(f64),
 
     // Variable reference
     Ident(String),
