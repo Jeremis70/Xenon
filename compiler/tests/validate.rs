@@ -49,3 +49,27 @@ fn i2_out_of_range_literal_is_error() {
         "unexpected error: {err}"
     );
 }
+
+#[test]
+fn bool_literal_and_return_ok() {
+    validate_src("fn f()->bool { return false; }").expect("bool return");
+}
+
+#[test]
+fn while_condition_must_be_bool() {
+    let err =
+        validate_src("fn f(u32 x)->u32 { while x { } return 0; }").expect_err("non-bool condition");
+    assert!(
+        matches!(err, SemanticError::ConditionNotBool { .. }),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn logical_ops_require_bool_operands() {
+    let err = validate_src("fn f(u32 a, u32 b)->u32 { return a && b; }").expect_err("int && int");
+    assert!(
+        matches!(err, SemanticError::InvalidOperands { .. }),
+        "unexpected error: {err}"
+    );
+}
