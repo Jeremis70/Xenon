@@ -11,12 +11,14 @@ use inkwell::targets::{
     CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetData, TargetMachine,
 };
 use inkwell::types::{BasicType, BasicTypeEnum};
-use inkwell::values::{FunctionValue, PointerValue};
+use inkwell::values::{BasicValue, BasicValueEnum, FunctionValue, PointerValue};
 
+use inkwell::FloatPredicate;
 use inkwell::IntPredicate;
 
 use crate::error::{CodegenError, CodegenResult};
 use crate::frontend::ast::{BinOp, Expr, ExprKind, Function, Program, Stmt, StmtKind, UnaryOp};
+use crate::middle::validate::infer_expr_type_after_validate;
 use num_bigint::BigInt;
 use num_traits::ToPrimitive;
 
@@ -36,9 +38,11 @@ struct LoopFrame<'ctx> {
     break_bb: BasicBlock<'ctx>,
     /// Alloca slot that `break <expr>;` stores into; loaded at `loop_after`.
     result_slot: PointerValue<'ctx>,
+    /// AST type of values written to `result_slot` / loaded at loop exit.
+    result_ast_ty: Type,
 }
 
-pub struct CodeGen<'ctx> {
+pub struct CodeGen<'ctx, 'a> {
     context: &'ctx Context,
     module: Module<'ctx>,
     builder: Builder<'ctx>,
@@ -52,6 +56,10 @@ pub struct CodeGen<'ctx> {
     /// access the function value and return type without threading extra
     /// parameters through `codegen_expr`.
     current_fn: Option<(FunctionValue<'ctx>, BasicTypeEnum<'ctx>)>,
+    /// Whole program (for type inference in codegen).
+    ast_program: &'a Program,
+    /// Function whose body is being codegen'd (for type inference).
+    ast_fn: Option<&'a Function>,
     /// Data layout of the compilation target. Used to resolve `usize`/`isize`
     /// to their pointer-sized LLVM integer type via `ptr_sized_int_type`.
     target_data: TargetData,
@@ -60,12 +68,13 @@ pub struct CodeGen<'ctx> {
     debug_checks: bool,
 }
 
-impl<'ctx> CodeGen<'ctx> {
+impl<'ctx, 'a> CodeGen<'ctx, 'a> {
     pub fn new(
         context: &'ctx Context,
         module_name: &str,
         target_data: TargetData,
         debug_checks: bool,
+        ast_program: &'a Program,
     ) -> Self {
         let module = context.create_module(module_name);
         let builder = context.create_builder();
@@ -76,6 +85,8 @@ impl<'ctx> CodeGen<'ctx> {
             variables: vec![HashMap::new()],
             loop_stack: Vec::new(),
             current_fn: None,
+            ast_program,
+            ast_fn: None,
             target_data,
             debug_checks,
         }
@@ -276,14 +287,14 @@ impl<'ctx> CodeGen<'ctx> {
             .collect::<CodegenResult<_>>()
     }
 
-    pub fn compile_program(mut self, program: &Program) -> CodegenResult<Module<'ctx>> {
-        // Declare all functions
-        for f in &program.functions {
+    pub fn compile_program(mut self) -> CodegenResult<Module<'ctx>> {
+        for f in &self.ast_program.functions {
             self.declare_function(f)?;
         }
-        // Then compile function bodies
-        for f in &program.functions {
+        for f in &self.ast_program.functions {
+            self.ast_fn = Some(f);
             self.compile_function(f)?;
+            self.ast_fn = None;
         }
         Ok(self.module)
     }
@@ -328,8 +339,7 @@ impl<'ctx> CodeGen<'ctx> {
                 .map_err(llvm_err!("build_alloca (param)"))?;
             let incoming = fn_val
                 .get_nth_param(i as u32)
-                .ok_or(CodegenError::InvalidIrState("missing param value"))?
-                .into_int_value();
+                .ok_or(CodegenError::InvalidIrState("missing param value"))?;
             self.builder
                 .build_store(alloca, incoming)
                 .map_err(llvm_err!("build_store (param)"))?;
@@ -343,16 +353,19 @@ impl<'ctx> CodeGen<'ctx> {
         // stack slot for it and zero-initialise it so that it can be used as a
         // regular variable inside the body and returned implicitly.
         if let Some(ret_name) = &f.return_type.name {
-            let BasicTypeEnum::IntType(int_ret_ty) = ret_ty else {
-                return Err(CodegenError::InvalidIrState(
-                    "named return variable is only supported for integer types",
-                ));
-            };
             let alloca = self
                 .builder
                 .build_alloca(ret_ty, ret_name)
                 .map_err(llvm_err!("build_alloca (named return)"))?;
-            let zero = int_ret_ty.const_zero();
+            let zero: BasicValueEnum = match ret_ty {
+                BasicTypeEnum::IntType(it) => it.const_zero().into(),
+                BasicTypeEnum::FloatType(ft) => ft.const_float(0.0).into(),
+                _ => {
+                    return Err(CodegenError::InvalidIrState(
+                        "named return: unsupported LLVM type for zero init",
+                    ));
+                }
+            };
             self.builder
                 .build_store(alloca, zero)
                 .map_err(llvm_err!("build_store (named return init)"))?;
@@ -362,7 +375,7 @@ impl<'ctx> CodeGen<'ctx> {
         for stmt in &f.body {
             // compile_stmt returns true when the current block has been terminated
             // (e.g. a return was emitted); stop processing the remaining statements.
-            if self.compile_stmt(stmt, fn_val, ret_ty)? {
+            if self.compile_stmt(stmt, fn_val, ret_ty, &f.return_type.ty)? {
                 break;
             }
         }
@@ -389,9 +402,8 @@ impl<'ctx> CodeGen<'ctx> {
                 .builder
                 .build_load(*ty, *ptr, ret_name)
                 .map_err(llvm_err!("build_load (implicit return)"))?
-                .into_int_value();
-            let is_unsigned = matches!(f.return_type.ty, Type::UInt(_) | Type::USize);
-            let val = self.cast_int_to_type(val, ret_ty, is_unsigned)?;
+                .as_basic_value_enum();
+            let val = self.coerce_basic_to_target(val, ret_ty, &f.return_type.ty)?;
             self.builder
                 .build_return(Some(&val))
                 .map_err(llvm_err!("build_return (implicit)"))?;
@@ -408,11 +420,12 @@ impl<'ctx> CodeGen<'ctx> {
         stmt: &Stmt,
         fn_val: FunctionValue<'ctx>,
         ret_ty: BasicTypeEnum<'ctx>,
+        ret_ast_ty: &Type,
     ) -> CodegenResult<bool> {
         match &stmt.kind {
             StmtKind::Return(inner) => {
                 let value = self.codegen_expr(inner)?;
-                let value = self.cast_int_to_type(value, ret_ty, false)?;
+                let value = self.coerce_basic_to_target(value, ret_ty, ret_ast_ty)?;
                 self.builder
                     .build_return(Some(&value))
                     .map_err(llvm_err!("build_return"))?;
@@ -432,25 +445,24 @@ impl<'ctx> CodeGen<'ctx> {
                 let init_val = self.codegen_expr(binding.default.as_ref().ok_or(
                     CodegenError::InvalidIrState("VarDecl binding must have a default value"),
                 )?)?;
-                let is_unsigned = matches!(binding.ty, Type::UInt(_) | Type::USize);
-                let init_val = self.cast_int_to_type(init_val, llvm_ty, is_unsigned)?;
+                let init_val = self.coerce_basic_to_target(init_val, llvm_ty, &binding.ty)?;
                 self.builder
                     .build_store(alloca, init_val)
                     .map_err(llvm_err!("build_store"))?;
                 Ok(false)
             }
             StmtKind::Assign { name, value } => {
-                let (var_ptr, var_ty, is_unsigned) = {
+                let (var_ptr, var_ty, ast_ty) = {
                     let (ptr, ty, ast_ty) = self.lookup_variable(name).ok_or_else(|| {
                         CodegenError::UndefinedVariable {
                             name: name.clone(),
                             span: stmt.span,
                         }
                     })?;
-                    (*ptr, *ty, matches!(ast_ty, Type::UInt(_) | Type::USize))
+                    (*ptr, *ty, ast_ty.clone())
                 };
                 let val = self.codegen_expr(value)?;
-                let val = self.cast_int_to_type(val, var_ty, is_unsigned)?;
+                let val = self.coerce_basic_to_target(val, var_ty, &ast_ty)?;
                 self.builder
                     .build_store(var_ptr, val)
                     .map_err(llvm_err!("build_store"))?;
@@ -467,15 +479,20 @@ impl<'ctx> CodeGen<'ctx> {
                 Ok(terminated)
             }
             StmtKind::Break(opt_expr) => {
-                let (break_bb, result_slot) = {
+                let (break_bb, result_slot, slot_ast_ty) = {
                     let frame = self.loop_stack.last().ok_or(CodegenError::InvalidIrState(
                         "`break` used outside of a loop",
                     ))?;
-                    (frame.break_bb, frame.result_slot)
+                    (
+                        frame.break_bb,
+                        frame.result_slot,
+                        frame.result_ast_ty.clone(),
+                    )
                 };
                 if let Some(expr) = opt_expr {
                     let val = self.codegen_expr(expr)?;
-                    let val = self.cast_int_to_type(val, self.context.i64_type().into(), false)?;
+                    let slot_ty = self.llvm_type(&slot_ast_ty)?;
+                    let val = self.coerce_basic_to_target(val, slot_ty, &slot_ast_ty)?;
                     self.builder
                         .build_store(result_slot, val)
                         .map_err(llvm_err!("build_store (break value)"))?;
@@ -504,16 +521,7 @@ impl<'ctx> CodeGen<'ctx> {
                 else_branch,
             } => {
                 let cond_val = self.codegen_expr(condition)?;
-                // If the condition is already a 1-bit integer (e.g. the result of a
-                // comparison), use it directly; otherwise treat non-zero as true.
-                let is_true = if cond_val.get_type().get_bit_width() == 1 {
-                    cond_val
-                } else {
-                    let zero = cond_val.get_type().const_zero();
-                    self.builder
-                        .build_int_compare(IntPredicate::NE, cond_val, zero, "if_cond")
-                        .map_err(llvm_err!("build_int_compare"))?
-                };
+                let is_true = self.expr_to_bool_condition(cond_val)?;
 
                 let then_block = self.context.append_basic_block(fn_val, "then");
                 let else_block = self.context.append_basic_block(fn_val, "else");
@@ -526,7 +534,7 @@ impl<'ctx> CodeGen<'ctx> {
                 self.builder.position_at_end(then_block);
                 self.push_scope();
                 for s in then_branch {
-                    if self.compile_stmt(s, fn_val, ret_ty)? {
+                    if self.compile_stmt(s, fn_val, ret_ty, ret_ast_ty)? {
                         break;
                     }
                 }
@@ -544,7 +552,7 @@ impl<'ctx> CodeGen<'ctx> {
                 self.push_scope();
                 if let Some(else_stmts) = else_branch {
                     for s in else_stmts {
-                        if self.compile_stmt(s, fn_val, ret_ty)? {
+                        if self.compile_stmt(s, fn_val, ret_ty, ret_ast_ty)? {
                             break;
                         }
                     }
@@ -622,9 +630,135 @@ impl<'ctx> CodeGen<'ctx> {
         }
     }
 
-    fn codegen_expr(&mut self, e: &Expr) -> CodegenResult<inkwell::values::IntValue<'ctx>> {
+    fn coerce_basic_to_target(
+        &self,
+        val: BasicValueEnum<'ctx>,
+        target: BasicTypeEnum<'ctx>,
+        ast_ty: &Type,
+    ) -> CodegenResult<BasicValueEnum<'ctx>> {
+        if val.get_type() == target {
+            return Ok(val);
+        }
+        match (val, target) {
+            (BasicValueEnum::IntValue(v), BasicTypeEnum::IntType(_)) => {
+                let is_unsigned = matches!(ast_ty, Type::UInt(_) | Type::USize);
+                Ok(self.cast_int_to_type(v, target, is_unsigned)?.into())
+            }
+            (BasicValueEnum::FloatValue(v), BasicTypeEnum::FloatType(ft)) => {
+                if v.get_type() == ft {
+                    Ok(v.into())
+                } else {
+                    Ok(self
+                        .builder
+                        .build_float_cast(v, ft, "float_cast")
+                        .map_err(llvm_err!("build_float_cast"))?
+                        .into())
+                }
+            }
+            (BasicValueEnum::IntValue(v), BasicTypeEnum::FloatType(ft)) => {
+                let is_unsigned = matches!(ast_ty, Type::UInt(_) | Type::USize);
+                if is_unsigned {
+                    Ok(self
+                        .builder
+                        .build_unsigned_int_to_float(v, ft, "uitofp")
+                        .map_err(llvm_err!("build_unsigned_int_to_float"))?
+                        .into())
+                } else {
+                    Ok(self
+                        .builder
+                        .build_signed_int_to_float(v, ft, "sitofp")
+                        .map_err(llvm_err!("build_signed_int_to_float"))?
+                        .into())
+                }
+            }
+            (BasicValueEnum::FloatValue(v), BasicTypeEnum::IntType(it)) => {
+                let is_unsigned = matches!(ast_ty, Type::UInt(_) | Type::USize);
+                if is_unsigned {
+                    Ok(self
+                        .builder
+                        .build_float_to_unsigned_int(v, it, "fptoui")
+                        .map_err(llvm_err!("build_float_to_unsigned_int"))?
+                        .into())
+                } else {
+                    Ok(self
+                        .builder
+                        .build_float_to_signed_int(v, it, "fptosi")
+                        .map_err(llvm_err!("build_float_to_signed_int"))?
+                        .into())
+                }
+            }
+            _ => Err(CodegenError::InvalidIrState(
+                "coerce_basic_to_target: incompatible value and target",
+            )),
+        }
+    }
+
+    /// AST types for every stack slot visible from LLVM scopes (inner scopes shadow outer).
+    fn visible_ast_var_types(&self) -> HashMap<String, Type> {
+        let mut m = HashMap::new();
+        for scope in self.variables.iter().rev() {
+            for (name, (_, _, ty)) in scope {
+                m.entry(name.clone()).or_insert_with(|| ty.clone());
+            }
+        }
+        m
+    }
+
+    fn expr_to_bool_condition(
+        &self,
+        val: BasicValueEnum<'ctx>,
+    ) -> CodegenResult<inkwell::values::IntValue<'ctx>> {
+        match val {
+            BasicValueEnum::IntValue(v) => {
+                if v.get_type().get_bit_width() == 1 {
+                    Ok(v)
+                } else {
+                    let zero = v.get_type().const_zero();
+                    self.builder
+                        .build_int_compare(IntPredicate::NE, v, zero, "cond_i")
+                        .map_err(llvm_err!("build_int_compare (cond)"))
+                }
+            }
+            BasicValueEnum::FloatValue(v) => {
+                let zero = v.get_type().const_float(0.0);
+                self.builder
+                    .build_float_compare(FloatPredicate::ONE, v, zero, "cond_f")
+                    .map_err(llvm_err!("build_float_compare (cond)"))
+            }
+            _ => Err(CodegenError::InvalidIrState(
+                "condition must be bool or numeric",
+            )),
+        }
+    }
+
+    fn codegen_expr(&mut self, e: &Expr) -> CodegenResult<BasicValueEnum<'ctx>> {
         match &e.kind {
-            ExprKind::Int(v) => Ok(bigint_to_llvm_const(self.context, v)),
+            ExprKind::Int(v) => Ok(bigint_to_llvm_const(self.context, v).into()),
+            ExprKind::Bool(b) => Ok(self
+                .context
+                .bool_type()
+                .const_int(u64::from(*b), false)
+                .into()),
+            ExprKind::Float(fv) => {
+                let locals = self.visible_ast_var_types();
+                let ast_ty = infer_expr_type_after_validate(
+                    e,
+                    self.ast_program,
+                    self.ast_fn.ok_or(CodegenError::InvalidIrState(
+                        "codegen: missing current function for float literal",
+                    ))?,
+                    &locals,
+                )
+                .map_err(|e| CodegenError::Other(e.to_string()))?;
+                let ll = self.llvm_type(&ast_ty)?;
+                let BasicTypeEnum::FloatType(ft) = ll else {
+                    return Err(CodegenError::UnsupportedType {
+                        ty: ast_ty.to_string(),
+                        span: e.span,
+                    });
+                };
+                Ok(ft.const_float(*fv).into())
+            }
             ExprKind::Ident(name) => {
                 let &(ref ptr, ty, ref _ast_ty) =
                     self.lookup_variable(name)
@@ -635,18 +769,36 @@ impl<'ctx> CodeGen<'ctx> {
                 self.builder
                     .build_load(ty, *ptr, name.as_str())
                     .map_err(llvm_err!("build_load"))
-                    .map(|v| v.into_int_value())
+                    .map(|v| v.as_basic_value_enum())
             }
             ExprKind::BinOp { lhs, op, rhs } => {
                 let lhs_unsigned = self.infer_expr_unsigned(lhs);
                 let rhs_unsigned = self.infer_expr_unsigned(rhs);
                 let lhs_val = self.codegen_expr(lhs)?;
                 let rhs_val = self.codegen_expr(rhs)?;
-                self.codegen_binop(op, lhs_val, rhs_val, lhs_unsigned, rhs_unsigned)
+                match (lhs_val, rhs_val) {
+                    (BasicValueEnum::IntValue(l), BasicValueEnum::IntValue(r)) => self
+                        .codegen_binop(op, l, r, lhs_unsigned, rhs_unsigned)
+                        .map(Into::into),
+                    (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) => {
+                        self.codegen_binop_float(op, l, r)
+                    }
+                    _ => Err(CodegenError::InvalidIrState(
+                        "mixed operand categories in binop (should be caught by validate)",
+                    )),
+                }
             }
             ExprKind::UnaryOp { op, operand } => {
                 let val = self.codegen_expr(operand)?;
-                self.codegen_unaryop(op, val)
+                match val {
+                    BasicValueEnum::IntValue(v) => self.codegen_unaryop(op, v).map(Into::into),
+                    BasicValueEnum::FloatValue(v) => {
+                        self.codegen_unaryop_float(op, v).map(Into::into)
+                    }
+                    _ => Err(CodegenError::InvalidIrState(
+                        "unary op on unsupported value",
+                    )),
+                }
             }
             ExprKind::Call { name, args } => {
                 let callee = self.module.get_function(name).ok_or_else(|| {
@@ -664,13 +816,25 @@ impl<'ctx> CodeGen<'ctx> {
                         span: e.span,
                     });
                 }
+                let callee_fn = self
+                    .ast_program
+                    .functions
+                    .iter()
+                    .find(|f| f.name == *name)
+                    .ok_or(CodegenError::InvalidIrState("call: missing AST for callee"))?;
                 let mut compiled_args: Vec<inkwell::values::BasicMetadataValueEnum> =
                     Vec::with_capacity(args.len());
-                for (arg_expr, param) in args.iter().zip(callee.get_param_iter()) {
+                for ((arg_expr, param), param_binding) in args
+                    .iter()
+                    .zip(callee.get_param_iter())
+                    .zip(callee_fn.params.iter())
+                {
                     let val = self.codegen_expr(arg_expr)?;
                     let target = param.get_type();
-                    let arg_unsigned = self.infer_expr_unsigned(arg_expr);
-                    compiled_args.push(self.cast_int_to_type(val, target, arg_unsigned)?.into());
+                    compiled_args.push(
+                        self.coerce_basic_to_target(val, target, &param_binding.ty)?
+                            .into(),
+                    );
                 }
                 let call = self
                     .builder
@@ -680,28 +844,27 @@ impl<'ctx> CodeGen<'ctx> {
                     .try_as_basic_value()
                     .basic()
                     .ok_or(CodegenError::InvalidIrState("call returned void"))?;
-                Ok(ret.into_int_value())
+                Ok(ret.as_basic_value_enum())
             }
             ExprKind::IfElse {
                 condition,
                 then_branch,
                 else_branch,
             } => {
-                let cond_val = self.codegen_expr(condition)?;
-                // Use the condition directly when it is already i1, otherwise
-                // emit icmp ne ..., zero to convert to a branch predicate.
-                let cond_i1 = if cond_val.get_type().get_bit_width() == 1 {
-                    cond_val
-                } else {
-                    let zero = cond_val.get_type().const_zero();
-                    self.builder
-                        .build_int_compare(IntPredicate::NE, cond_val, zero, "if_cond")
-                        .map_err(llvm_err!("build_int_compare"))?
-                };
+                let cond_v = self.codegen_expr(condition)?;
+                let cond_i1 = self.expr_to_bool_condition(cond_v)?;
+                let locals = self.visible_ast_var_types();
+                let merged_ast = infer_expr_type_after_validate(
+                    e,
+                    self.ast_program,
+                    self.ast_fn.ok_or(CodegenError::InvalidIrState(
+                        "if-expression outside of function",
+                    ))?,
+                    &locals,
+                )
+                .map_err(|e| CodegenError::Other(e.to_string()))?;
+                let merged_ll = self.llvm_type(&merged_ast)?;
 
-                // Lower to control flow so only the taken branch executes.
-                // This preserves side-effect semantics and avoids type mismatches
-                // in build_select when the two branches have different bit-widths.
                 let current_block =
                     self.builder
                         .get_insert_block()
@@ -722,10 +885,8 @@ impl<'ctx> CodeGen<'ctx> {
                     .build_conditional_branch(cond_i1, then_bb, else_bb)
                     .map_err(llvm_err!("build_conditional_branch"))?;
 
-                // Then branch
                 self.builder.position_at_end(then_bb);
                 let then_val_raw = self.codegen_expr(then_branch)?;
-                // Re-read the insert block: codegen_expr may have appended blocks.
                 let then_end_bb =
                     self.builder
                         .get_insert_block()
@@ -733,8 +894,6 @@ impl<'ctx> CodeGen<'ctx> {
                             "no block after then expression",
                         ))?;
 
-                // Else branch — evaluate before emitting any branches so we
-                // know both widths and can pick the common type.
                 self.builder.position_at_end(else_bb);
                 let else_val_raw = self.codegen_expr(else_branch)?;
                 let else_end_bb =
@@ -744,51 +903,33 @@ impl<'ctx> CodeGen<'ctx> {
                             "no block after else expression",
                         ))?;
 
-                // Cast both branches to the wider of the two types so the phi
-                // node is always well-typed, even when branches yield i64 literals
-                // and narrower variables.
-                let common_ty = if then_val_raw.get_type().get_bit_width()
-                    >= else_val_raw.get_type().get_bit_width()
-                {
-                    then_val_raw.get_type()
-                } else {
-                    else_val_raw.get_type()
-                };
-                // Emit the widening cast for `then` at the end of then_end_bb
-                // (before its branch terminator).
                 self.builder.position_at_end(then_end_bb);
-                let then_unsigned = self.infer_expr_unsigned(then_branch);
-                let then_val =
-                    self.cast_int_to_type(then_val_raw, common_ty.into(), then_unsigned)?;
+                let then_val = self.coerce_basic_to_target(then_val_raw, merged_ll, &merged_ast)?;
                 self.builder
                     .build_unconditional_branch(merge_bb)
                     .map_err(llvm_err!("build_unconditional_branch (ife then->merge)"))?;
 
-                // Emit the widening cast for `else` at the end of else_end_bb.
                 self.builder.position_at_end(else_end_bb);
-                let else_unsigned = self.infer_expr_unsigned(else_branch);
-                let else_val =
-                    self.cast_int_to_type(else_val_raw, common_ty.into(), else_unsigned)?;
+                let else_val = self.coerce_basic_to_target(else_val_raw, merged_ll, &merged_ast)?;
                 self.builder
                     .build_unconditional_branch(merge_bb)
                     .map_err(llvm_err!("build_unconditional_branch (ife else->merge)"))?;
 
-                // Merge block: phi picks the value from whichever branch ran.
                 self.builder.position_at_end(merge_bb);
                 let phi = self
                     .builder
-                    .build_phi(common_ty.as_basic_type_enum(), "ife_result")
+                    .build_phi(merged_ll, "ife_result")
                     .map_err(llvm_err!("build_phi"))?;
                 phi.add_incoming(&[(&then_val, then_end_bb), (&else_val, else_end_bb)]);
-                Ok(phi.as_basic_value().into_int_value())
+                Ok(phi.as_basic_value().as_basic_value_enum())
             }
-            ExprKind::Loop { body } => self.compile_loop(body, None, false, false),
+            ExprKind::Loop { body } => self.compile_loop(body, None, false, false, e),
             ExprKind::CondLoop {
                 post,
                 inverted,
                 condition,
                 body,
-            } => self.compile_loop(body, Some(condition), *post, *inverted),
+            } => self.compile_loop(body, Some(condition), *post, *inverted, e),
         }
     }
 
@@ -798,23 +939,40 @@ impl<'ctx> CodeGen<'ctx> {
         condition: Option<&Expr>,
         post: bool,
         inverted: bool,
-    ) -> CodegenResult<inkwell::values::IntValue<'ctx>> {
-        let (fn_val, ret_ty) = self.current_fn.ok_or(CodegenError::InvalidIrState(
+        loop_expr: &Expr,
+    ) -> CodegenResult<BasicValueEnum<'ctx>> {
+        let (fn_val, ret_llvm) = self.current_fn.ok_or(CodegenError::InvalidIrState(
             "loop expression compiled outside of a function",
         ))?;
+        let fn_ret_ast = &self
+            .ast_fn
+            .ok_or(CodegenError::InvalidIrState("loop: missing ast_fn"))?
+            .return_type
+            .ty;
 
-        // Allocate a result slot upfront so break can store into it
+        let locals = self.visible_ast_var_types();
+        let result_ast = infer_expr_type_after_validate(
+            loop_expr,
+            self.ast_program,
+            self.ast_fn.unwrap(),
+            &locals,
+        )
+        .map_err(|e| CodegenError::Other(e.to_string()))?;
+        let slot_ll = self.llvm_type(&result_ast)?;
         let result_slot = self
             .builder
-            .build_alloca(self.context.i64_type(), "loop_result")
+            .build_alloca(slot_ll, "loop_result")
             .map_err(llvm_err!("build_alloca (loop result)"))?;
 
-        // Initialize the result slot to a well-defined default value.
-        // This ensures that if the loop exits without writing a value
-        // (e.g. via `break;` with no value or a false condition), the
-        // subsequent load in `loop_after` reads a defined value rather
-        // than uninitialized memory.
-        let loop_result_default = self.context.i64_type().const_zero();
+        let loop_result_default: BasicValueEnum = match slot_ll {
+            BasicTypeEnum::IntType(it) => it.const_zero().into(),
+            BasicTypeEnum::FloatType(ft) => ft.const_float(0.0).into(),
+            _ => {
+                return Err(CodegenError::InvalidIrState(
+                    "loop result: unsupported LLVM slot type",
+                ));
+            }
+        };
         self.builder
             .build_store(result_slot, loop_result_default)
             .map_err(llvm_err!("build_store (loop result default)"))?;
@@ -865,10 +1023,11 @@ impl<'ctx> CodeGen<'ctx> {
             continue_bb,
             break_bb: loop_after,
             result_slot,
+            result_ast_ty: result_ast.clone(),
         });
         self.push_scope();
         for s in body {
-            if self.compile_stmt(s, fn_val, ret_ty)? {
+            if self.compile_stmt(s, fn_val, ret_llvm, fn_ret_ast)? {
                 break;
             }
         }
@@ -900,15 +1059,15 @@ impl<'ctx> CodeGen<'ctx> {
                 .remove_from_function()
                 .map_err(|()| CodegenError::InvalidIrState("failed to remove loop_after block"))?;
             // Return a dummy value; this path is never reachable.
-            return Ok(self.context.i64_type().const_zero());
+            return Ok(self.context.i64_type().const_zero().into());
         }
 
         // Load the result from the result slot and return it.
         self.builder.position_at_end(loop_after);
         self.builder
-            .build_load(self.context.i64_type(), result_slot, "loop_val")
+            .build_load(slot_ll, result_slot, "loop_val")
             .map_err(llvm_err!("build_load (loop result)"))
-            .map(|v| v.into_int_value())
+            .map(|v| v.as_basic_value_enum())
     }
 
     fn emit_loop_condition(
@@ -919,19 +1078,7 @@ impl<'ctx> CodeGen<'ctx> {
         after_bb: BasicBlock<'ctx>,
     ) -> CodegenResult<()> {
         let cond_val = self.codegen_expr(condition)?;
-
-        let cond_i1 = if cond_val.get_type().get_bit_width() == 1 {
-            cond_val
-        } else {
-            self.builder
-                .build_int_compare(
-                    IntPredicate::NE,
-                    cond_val,
-                    cond_val.get_type().const_zero(),
-                    "loop_cond_ne",
-                )
-                .map_err(llvm_err!("build_int_compare (loop condition)"))?
-        };
+        let cond_i1 = self.expr_to_bool_condition(cond_val)?;
         // `inverted`: condition is true → exit (until), false → continue.
         // `normal`:   condition is true → continue (while), false → exit.
         let (true_bb, false_bb) = if inverted {
@@ -968,6 +1115,104 @@ impl<'ctx> CodeGen<'ctx> {
                 self.infer_expr_unsigned(then_branch) || self.infer_expr_unsigned(else_branch)
             }
             ExprKind::Call { .. } | ExprKind::Loop { .. } | ExprKind::CondLoop { .. } => false,
+            ExprKind::Bool(_) | ExprKind::Float(_) => false,
+        }
+    }
+
+    fn codegen_binop_float(
+        &self,
+        op: &BinOp,
+        mut lhs: inkwell::values::FloatValue<'ctx>,
+        mut rhs: inkwell::values::FloatValue<'ctx>,
+    ) -> CodegenResult<BasicValueEnum<'ctx>> {
+        let lw = lhs.get_type().get_bit_width();
+        let rw = rhs.get_type().get_bit_width();
+        if lw < rw {
+            lhs = self
+                .builder
+                .build_float_cast(lhs, rhs.get_type(), "widen_l")
+                .map_err(llvm_err!("build_float_cast"))?;
+        } else if rw < lw {
+            rhs = self
+                .builder
+                .build_float_cast(rhs, lhs.get_type(), "widen_r")
+                .map_err(llvm_err!("build_float_cast"))?;
+        }
+        match op {
+            BinOp::Add => Ok(self
+                .builder
+                .build_float_add(lhs, rhs, "fadd")
+                .map_err(llvm_err!("build_float_add"))?
+                .into()),
+            BinOp::Sub => Ok(self
+                .builder
+                .build_float_sub(lhs, rhs, "fsub")
+                .map_err(llvm_err!("build_float_sub"))?
+                .into()),
+            BinOp::Mul => Ok(self
+                .builder
+                .build_float_mul(lhs, rhs, "fmul")
+                .map_err(llvm_err!("build_float_mul"))?
+                .into()),
+            BinOp::Div => Ok(self
+                .builder
+                .build_float_div(lhs, rhs, "fdiv")
+                .map_err(llvm_err!("build_float_div"))?
+                .into()),
+            BinOp::Mod => Ok(self
+                .builder
+                .build_float_rem(lhs, rhs, "frem")
+                .map_err(llvm_err!("build_float_rem"))?
+                .into()),
+            BinOp::Eq => Ok(self
+                .builder
+                .build_float_compare(FloatPredicate::OEQ, lhs, rhs, "feq")
+                .map_err(llvm_err!("build_float_compare"))?
+                .into()),
+            BinOp::NotEq => Ok(self
+                .builder
+                .build_float_compare(FloatPredicate::ONE, lhs, rhs, "fne")
+                .map_err(llvm_err!("build_float_compare"))?
+                .into()),
+            BinOp::Lt => Ok(self
+                .builder
+                .build_float_compare(FloatPredicate::OLT, lhs, rhs, "flt")
+                .map_err(llvm_err!("build_float_compare"))?
+                .into()),
+            BinOp::Gt => Ok(self
+                .builder
+                .build_float_compare(FloatPredicate::OGT, lhs, rhs, "fgt")
+                .map_err(llvm_err!("build_float_compare"))?
+                .into()),
+            BinOp::LtEq => Ok(self
+                .builder
+                .build_float_compare(FloatPredicate::OLE, lhs, rhs, "fle")
+                .map_err(llvm_err!("build_float_compare"))?
+                .into()),
+            BinOp::GtEq => Ok(self
+                .builder
+                .build_float_compare(FloatPredicate::OGE, lhs, rhs, "fge")
+                .map_err(llvm_err!("build_float_compare"))?
+                .into()),
+            _ => Err(CodegenError::InvalidIrState(
+                "unsupported operator for float operands",
+            )),
+        }
+    }
+
+    fn codegen_unaryop_float(
+        &self,
+        op: &UnaryOp,
+        val: inkwell::values::FloatValue<'ctx>,
+    ) -> CodegenResult<inkwell::values::FloatValue<'ctx>> {
+        match op {
+            UnaryOp::Neg => self
+                .builder
+                .build_float_neg(val, "fneg")
+                .map_err(llvm_err!("build_float_neg")),
+            _ => Err(CodegenError::InvalidIrState(
+                "unsupported unary operator for float",
+            )),
         }
     }
 
@@ -1383,8 +1628,14 @@ pub fn emit_object_and_ir(
     // 2) Build IR module, passing the data layout so that usize/isize resolve
     //    to the correct pointer-sized integer type for this target.
     let context = Context::create();
-    let cg = CodeGen::new(&context, "xenon_mvp", tm.get_target_data(), debug_checks);
-    let module = cg.compile_program(program)?;
+    let cg = CodeGen::new(
+        &context,
+        "xenon_mvp",
+        tm.get_target_data(),
+        debug_checks,
+        program,
+    );
+    let module = cg.compile_program()?;
     module.set_triple(&triple);
 
     // Optional: write LLVM IR text for debugging
