@@ -29,6 +29,14 @@ Prerequisite: a recent Rust toolchain (stable).
 	- `cargo run -p xenonc`
 - Compile a Xenon source file:
 	- `cargo run -- compile tests/main.xe --out-dir xenon-build/`
+- Type-check / parse / validate only (no codegen or link):
+	- `cargo run -p xenonc -- check tests/main.xe`
+- Run tests:
+	- `cargo test -p xenonc`
+
+JSON diagnostics (for tooling):
+
+- `cargo run -p xenonc -- check tests/main.xe --error-format json`
 
 ### Useful dev commands
 
