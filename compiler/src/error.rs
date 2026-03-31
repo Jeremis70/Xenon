@@ -90,9 +90,86 @@ pub enum SemanticError {
         ty: crate::frontend::ast::Type,
         span: Span,
     },
+    #[error("type mismatch: expected `{expected}`, found `{found}`")]
+    TypeMismatch {
+        expected: String,
+        found: String,
+        span: Span,
+    },
+    #[error("condition must be `bool`, found `{found}`")]
+    ConditionNotBool { found: String, span: Span },
+    #[error("return type mismatch: expected `{expected}`, found `{found}`")]
+    ReturnTypeMismatch {
+        expected: String,
+        found: String,
+        span: Span,
+    },
+    #[error("invalid operands for `{op}`: {detail}")]
+    InvalidOperands {
+        op: String,
+        detail: String,
+        span: Span,
+    },
+    #[error("undefined variable `{name}`")]
+    UndefinedVariable { name: String, span: Span },
+    #[error("undefined function `{name}`")]
+    UndefinedFunction { name: String, span: Span },
+    #[error("function `{name}` expects {expected} argument(s), got {got}")]
+    ArgumentCountMismatch {
+        name: String,
+        expected: usize,
+        got: usize,
+        span: Span,
+    },
+    #[error(
+        "argument type mismatch for `{name}` parameter {index}: expected `{expected}`, found `{found}`"
+    )]
+    ArgumentTypeMismatch {
+        name: String,
+        index: usize,
+        expected: String,
+        found: String,
+        span: Span,
+    },
+    #[error("break value type mismatch: expected `{expected}`, found `{found}`")]
+    BreakTypeMismatch {
+        expected: String,
+        found: String,
+        span: Span,
+    },
+    #[error("conflicting break value types in loop: `{earlier}` vs `{found}`")]
+    BreakTypeConflict {
+        earlier: String,
+        found: String,
+        span: Span,
+    },
+    #[error("`break` outside of a loop")]
+    BreakOutsideLoop { span: Span },
+    #[error("`continue` outside of a loop")]
+    ContinueOutsideLoop { span: Span },
 }
 
 pub type SemanticResult<T> = Result<T, SemanticError>;
+
+impl SemanticError {
+    pub fn span(&self) -> Option<Span> {
+        match self {
+            SemanticError::ConstantOutOfRange { span, .. }
+            | SemanticError::TypeMismatch { span, .. }
+            | SemanticError::ConditionNotBool { span, .. }
+            | SemanticError::ReturnTypeMismatch { span, .. }
+            | SemanticError::InvalidOperands { span, .. }
+            | SemanticError::UndefinedVariable { span, .. }
+            | SemanticError::UndefinedFunction { span, .. }
+            | SemanticError::ArgumentCountMismatch { span, .. }
+            | SemanticError::ArgumentTypeMismatch { span, .. }
+            | SemanticError::BreakTypeMismatch { span, .. }
+            | SemanticError::BreakTypeConflict { span, .. }
+            | SemanticError::BreakOutsideLoop { span }
+            | SemanticError::ContinueOutsideLoop { span } => Some(*span),
+        }
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum FoldError {
