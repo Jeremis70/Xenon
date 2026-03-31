@@ -22,6 +22,42 @@ fn span_range(span: Span) -> std::ops::Range<usize> {
     span.start..span.end
 }
 
+fn try_eprint_report(
+    report: Report<'_, (String, std::ops::Range<usize>)>,
+    file_id: String,
+    src: &str,
+) {
+    if report.eprint((file_id, Source::from(src))).is_err() {
+        eprintln!("error: (failed to render rich diagnostic)");
+    }
+}
+
+#[derive(serde::Serialize)]
+struct JsonDiagnostic<'a> {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    span: Option<JsonSpan>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    code: Option<&'a str>,
+}
+
+#[derive(serde::Serialize)]
+struct JsonSpan {
+    start: usize,
+    end: usize,
+}
+
+fn emit_json(diag: JsonDiagnostic<'_>) {
+    match serde_json::to_string(&diag) {
+        Ok(s) => eprintln!("{s}"),
+        Err(e) => {
+            eprintln!(r#"{{"type":"error","message":"failed to serialize diagnostic: {e}"}}"#)
+        }
+    }
+}
+
 pub fn emit_lex_error(
     err: &LexError,
     filename: &str,
@@ -31,24 +67,27 @@ pub fn emit_lex_error(
 ) {
     match format {
         ErrorFormat::Human => {
-            Report::build(ReportKind::Error, (filename, span_range(err.span)))
+            let fid = filename.to_string();
+            let report = Report::build(ReportKind::Error, (fid.clone(), span_range(err.span)))
                 .with_config(color_config(color))
                 .with_message("invalid token")
                 .with_label(
-                    Label::new((filename, span_range(err.span)))
+                    Label::new((fid.clone(), span_range(err.span)))
                         .with_message("unexpected character(s)")
                         .with_color(Color::Red),
                 )
-                .finish()
-                .eprint((filename, Source::from(src)))
-                .unwrap();
+                .finish();
+            try_eprint_report(report, fid, src);
         }
-        ErrorFormat::Json => {
-            eprintln!(
-                r#"{{"type":"error","message":"lexing error","span":{{"start":{},"end":{}}}}}"#,
-                err.span.start, err.span.end,
-            );
-        }
+        ErrorFormat::Json => emit_json(JsonDiagnostic {
+            kind: "error",
+            message: "lexing error".to_owned(),
+            span: Some(JsonSpan {
+                start: err.span.start,
+                end: err.span.end,
+            }),
+            code: Some("lex"),
+        }),
     }
 }
 
@@ -61,24 +100,27 @@ pub fn emit_parse_error(
 ) {
     match format {
         ErrorFormat::Human => {
-            Report::build(ReportKind::Error, (filename, span_range(err.span)))
+            let fid = filename.to_string();
+            let report = Report::build(ReportKind::Error, (fid.clone(), span_range(err.span)))
                 .with_config(color_config(color))
                 .with_message(format!("parse error: {}", err.message))
                 .with_label(
-                    Label::new((filename, span_range(err.span)))
+                    Label::new((fid.clone(), span_range(err.span)))
                         .with_message(&err.message)
                         .with_color(Color::Red),
                 )
-                .finish()
-                .eprint((filename, Source::from(src)))
-                .unwrap();
+                .finish();
+            try_eprint_report(report, fid, src);
         }
-        ErrorFormat::Json => {
-            eprintln!(
-                r#"{{"type":"error","message":"{}","span":{{"start":{},"end":{}}}}}"#,
-                err.message, err.span.start, err.span.end,
-            );
-        }
+        ErrorFormat::Json => emit_json(JsonDiagnostic {
+            kind: "error",
+            message: err.message.clone(),
+            span: Some(JsonSpan {
+                start: err.span.start,
+                end: err.span.end,
+            }),
+            code: Some("parse"),
+        }),
     }
 }
 
@@ -89,29 +131,34 @@ pub fn emit_semantic_error(
     format: ErrorFormat,
     color: ColorChoice,
 ) {
-    let span = match err {
-        SemanticError::ConstantOutOfRange { span, .. } => *span,
-    };
+    let span = err.span();
     match format {
         ErrorFormat::Human => {
-            Report::build(ReportKind::Error, (filename, span_range(span)))
-                .with_config(color_config(color))
-                .with_message(format!("semantic error: {err}"))
-                .with_label(
-                    Label::new((filename, span_range(span)))
-                        .with_message(err.to_string())
-                        .with_color(Color::Yellow),
-                )
-                .finish()
-                .eprint((filename, Source::from(src)))
-                .unwrap();
+            if let Some(span) = span {
+                let fid = filename.to_string();
+                let report = Report::build(ReportKind::Error, (fid.clone(), span_range(span)))
+                    .with_config(color_config(color))
+                    .with_message(format!("semantic error: {err}"))
+                    .with_label(
+                        Label::new((fid.clone(), span_range(span)))
+                            .with_message(err.to_string())
+                            .with_color(Color::Yellow),
+                    )
+                    .finish();
+                try_eprint_report(report, fid, src);
+            } else {
+                eprintln!("semantic error: {err}");
+            }
         }
-        ErrorFormat::Json => {
-            eprintln!(
-                r#"{{"type":"error","message":"{}","span":{{"start":{},"end":{}}}}}"#,
-                err, span.start, span.end,
-            );
-        }
+        ErrorFormat::Json => emit_json(JsonDiagnostic {
+            kind: "error",
+            message: err.to_string(),
+            span: span.map(|s| JsonSpan {
+                start: s.start,
+                end: s.end,
+            }),
+            code: Some("semantic"),
+        }),
     }
 }
 
@@ -127,24 +174,27 @@ pub fn emit_fold_error(
     };
     match format {
         ErrorFormat::Human => {
-            Report::build(ReportKind::Error, (filename, span_range(span)))
+            let fid = filename.to_string();
+            let report = Report::build(ReportKind::Error, (fid.clone(), span_range(span)))
                 .with_config(color_config(color))
                 .with_message(format!("constant folding error: {err}"))
                 .with_label(
-                    Label::new((filename, span_range(span)))
+                    Label::new((fid.clone(), span_range(span)))
                         .with_message(err.to_string())
                         .with_color(Color::Red),
                 )
-                .finish()
-                .eprint((filename, Source::from(src)))
-                .unwrap();
+                .finish();
+            try_eprint_report(report, fid, src);
         }
-        ErrorFormat::Json => {
-            eprintln!(
-                r#"{{"type":"error","message":"{}","span":{{"start":{},"end":{}}}}}"#,
-                err, span.start, span.end,
-            );
-        }
+        ErrorFormat::Json => emit_json(JsonDiagnostic {
+            kind: "error",
+            message: err.to_string(),
+            span: Some(JsonSpan {
+                start: span.start,
+                end: span.end,
+            }),
+            code: Some("fold"),
+        }),
     }
 }
 
@@ -171,30 +221,29 @@ pub fn emit_codegen_error(
     match format {
         ErrorFormat::Human => {
             if let Some(span) = span {
-                Report::build(ReportKind::Error, (filename, span_range(span)))
+                let fid = filename.to_string();
+                let report = Report::build(ReportKind::Error, (fid.clone(), span_range(span)))
                     .with_config(color_config(color))
                     .with_message(format!("codegen error: {err}"))
                     .with_label(
-                        Label::new((filename, span_range(span)))
+                        Label::new((fid.clone(), span_range(span)))
                             .with_message(err.to_string())
                             .with_color(Color::Red),
                     )
-                    .finish()
-                    .eprint((filename, Source::from(src)))
-                    .unwrap();
+                    .finish();
+                try_eprint_report(report, fid, src);
             } else {
                 eprintln!("error: {err}");
             }
         }
-        ErrorFormat::Json => {
-            if let Some(span) = span {
-                eprintln!(
-                    r#"{{"type":"error","message":"{}","span":{{"start":{},"end":{}}}}}"#,
-                    err, span.start, span.end,
-                );
-            } else {
-                eprintln!(r#"{{"type":"error","message":"{}"}}"#, err);
-            }
-        }
+        ErrorFormat::Json => emit_json(JsonDiagnostic {
+            kind: "error",
+            message: err.to_string(),
+            span: span.map(|s| JsonSpan {
+                start: s.start,
+                end: s.end,
+            }),
+            code: Some("codegen"),
+        }),
     }
 }
