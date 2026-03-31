@@ -101,6 +101,12 @@ fn fold_expr(expr: Expr) -> FoldResult<Expr> {
                         span,
                     });
                 }
+                (UnaryOp::Neg, ExprKind::Float(f)) => {
+                    return Ok(Expr {
+                        kind: ExprKind::Float(-f),
+                        span,
+                    });
+                }
                 (UnaryOp::BitwiseNot, ExprKind::Int(n)) => {
                     return Ok(Expr {
                         kind: ExprKind::Int(!n),
@@ -116,7 +122,7 @@ fn fold_expr(expr: Expr) -> FoldResult<Expr> {
             }
         }
 
-        ExprKind::Int(_) | ExprKind::Ident(_) => expr.kind,
+        ExprKind::Int(_) | ExprKind::Bool(_) | ExprKind::Float(_) | ExprKind::Ident(_) => expr.kind,
 
         ExprKind::IfElse {
             condition,
