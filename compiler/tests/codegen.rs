@@ -33,10 +33,8 @@ fn compile_to_ir(src: &str) -> String {
         .expect("target machine creation should succeed");
 
     let context = Context::create();
-    let cg = CodeGen::new(&context, "test", tm.get_target_data(), false);
-    let module = cg
-        .compile_program(&program)
-        .expect("codegen should succeed");
+    let cg = CodeGen::new(&context, "test", tm.get_target_data(), false, &program);
+    let module = cg.compile_program().expect("codegen should succeed");
     module.print_to_string().to_string()
 }
 
@@ -212,9 +210,9 @@ fn missing_return_yields_codegen_error() {
         .expect("target machine creation should succeed");
 
     let context = Context::create();
-    let cg = CodeGen::new(&context, "test", tm.get_target_data(), false);
+    let cg = CodeGen::new(&context, "test", tm.get_target_data(), false, &program);
     let err = cg
-        .compile_program(&program)
+        .compile_program()
         .expect_err("codegen should fail with MissingReturn");
 
     assert!(
@@ -482,10 +480,8 @@ fn compile_to_ir_debug(src: &str) -> String {
         .expect("target machine creation should succeed");
 
     let context = Context::create();
-    let cg = CodeGen::new(&context, "test", tm.get_target_data(), true);
-    let module = cg
-        .compile_program(&program)
-        .expect("codegen should succeed");
+    let cg = CodeGen::new(&context, "test", tm.get_target_data(), true, &program);
+    let module = cg.compile_program().expect("codegen should succeed");
     module.print_to_string().to_string()
 }
 
@@ -524,9 +520,9 @@ fn if_body_variable_is_not_visible_after_block() {
         .expect("target machine creation should succeed");
 
     let context = Context::create();
-    let cg = CodeGen::new(&context, "test", tm.get_target_data(), false);
+    let cg = CodeGen::new(&context, "test", tm.get_target_data(), false, &program);
     let err = cg
-        .compile_program(&program)
+        .compile_program()
         .expect_err("should fail: `x` is out of scope");
 
     assert!(
@@ -581,9 +577,9 @@ fn loop_body_variable_is_not_visible_after_loop() {
         .expect("target machine creation should succeed");
 
     let context = Context::create();
-    let cg = CodeGen::new(&context, "test", tm.get_target_data(), false);
+    let cg = CodeGen::new(&context, "test", tm.get_target_data(), false, &program);
     let err = cg
-        .compile_program(&program)
+        .compile_program()
         .expect_err("should fail: `x` is out of scope after loop");
 
     assert!(
