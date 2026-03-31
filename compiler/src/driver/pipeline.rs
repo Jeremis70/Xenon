@@ -12,9 +12,19 @@ use crate::backend::link::link_executable;
 
 use crate::middle::constant_fold::fold_constants;
 
+use crate::frontend::ast::Program;
 use crate::middle::validate::validate_program;
 
-pub fn compile(session: &Session) -> i32 {
+/// Parsed program plus combined source and primary path for diagnostics (e.g. codegen).
+pub struct ParsedSource {
+    pub program: Program,
+    pub combined_source: String,
+    pub first_path: String,
+}
+
+/// Lex, parse, constant-fold, and semantically validate. On failure, emits
+/// diagnostics and returns `None`.
+pub fn parse_and_validate(session: &Session) -> Option<ParsedSource> {
     let mut tokens: Vec<Token> = Vec::new();
     let mut combined_source = String::new();
     let first_path = session
@@ -37,7 +47,7 @@ pub fn compile(session: &Session) -> i32 {
                     session.error_format,
                     session.color,
                 );
-                return 1;
+                return None;
             }
         };
         combined_source.push_str(&source.content);
@@ -60,7 +70,7 @@ pub fn compile(session: &Session) -> i32 {
                 session.error_format,
                 session.color,
             );
-            return 1;
+            return None;
         }
     };
 
@@ -74,7 +84,7 @@ pub fn compile(session: &Session) -> i32 {
                 session.error_format,
                 session.color,
             );
-            return 1;
+            return None;
         }
     };
 
@@ -86,8 +96,25 @@ pub fn compile(session: &Session) -> i32 {
             session.error_format,
             session.color,
         );
-        return 1;
+        return None;
     }
+
+    Some(ParsedSource {
+        program,
+        combined_source,
+        first_path,
+    })
+}
+
+pub fn compile(session: &Session) -> i32 {
+    let ParsedSource {
+        program,
+        combined_source,
+        first_path,
+    } = match parse_and_validate(session) {
+        Some(p) => p,
+        None => return 1,
+    };
 
     let out_dir: PathBuf = session
         .out_dir
@@ -124,35 +151,8 @@ pub fn compile(session: &Session) -> i32 {
 }
 
 pub fn check(session: &Session) -> i32 {
-    let mut combined_source = String::new();
-    let _first_path = session
-        .source
-        .first()
-        .map(|s| s.path.display().to_string())
-        .unwrap_or_else(|| "<unknown>".into());
-
-    for source in &session.source {
-        if session.verbose {
-            println!("Compiling source file: {:?}", source.path);
-        }
-        let tokens = match lex(&source.content) {
-            Ok(tokens) => tokens,
-            Err(err) => {
-                diagnostics::emit_lex_error(
-                    &err,
-                    &source.path.display().to_string(),
-                    &source.content,
-                    session.error_format,
-                    session.color,
-                );
-                return 1;
-            }
-        };
-        combined_source.push_str(&source.content);
-
-        if session.verbose {
-            println!("Tokens: {:?}", tokens);
-        }
+    if parse_and_validate(session).is_none() {
+        return 1;
     }
 
     if session.verbose {
