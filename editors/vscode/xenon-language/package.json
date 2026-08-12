@@ -1,0 +1,45 @@
+{
+  "name": "xenon-language",
+  "displayName": "Xenon Language Support",
+  "description": "Syntax highlighting for the Xenon programming language",
+  "version": "0.1.0",
+  "publisher": "xenon-lang",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": ["Programming Languages"],
+  "contributes": {
+    "languages": [
+      {
+        "id": "xenon",
+        "aliases": ["Xenon", "xenon"],
+        "extensions": [".xe"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "xenon",
+        "scopeName": "source.xenon",
+        "path": "./syntaxes/xenon.tmLanguage.json"
+      }
+    ],
+    "semanticTokenScopes": [
+      {
+        "scopes": {
+          "function": ["entity.name.function.xenon"],
+          "function.declaration": ["entity.name.function.xenon"],
+          "variable": ["variable.other.xenon"],
+          "variable.declaration": ["variable.other.declaration.xenon"],
+          "parameter": ["variable.parameter.xenon"],
+          "type": ["entity.name.type.xenon"],
+          "keyword": ["keyword.control.xenon"],
+          "comment": ["comment.line.double-slash.xenon"],
+          "string": ["string.quoted.double.xenon"],
+          "number": ["constant.numeric.xenon"],
+          "operator": ["keyword.operator.xenon"]
+        }
+      }
+    ]
+  }
+}
