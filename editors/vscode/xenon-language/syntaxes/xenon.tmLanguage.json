@@ -1,0 +1,187 @@
+{
+  "name": "Xenon",
+  "scopeName": "source.xenon",
+  "fileTypes": ["xe"],
+  "patterns": [
+    { "include": "#line_comments" },
+    { "include": "#strings" },
+    { "include": "#function_definitions" },
+    { "include": "#keywords_control" },
+    { "include": "#types" },
+    { "include": "#constants" },
+    { "include": "#function_calls" },
+    { "include": "#numbers" },
+    { "include": "#operators" },
+    { "include": "#punctuation" }
+  ],
+  "repository": {
+    "line_comments": {
+      "name": "comment.line.double-slash.xenon",
+      "match": "//.*$"
+    },
+
+    "strings": {
+      "name": "string.quoted.double.xenon",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        {
+          "name": "constant.character.escape.xenon",
+          "match": "\\\\(?:[nrt\\\\\"0]|x[0-9a-fA-F]{2})"
+        }
+      ]
+    },
+
+    "function_definitions": {
+      "comment": "Matches `fn name` — colors the fn keyword and the function name together so the keyword is never consumed alone.",
+      "match": "\\b(fn)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
+      "captures": {
+        "1": { "name": "keyword.other.fn.xenon" },
+        "2": { "name": "entity.name.function.xenon" }
+      }
+    },
+
+    "keywords_control": {
+      "name": "keyword.control.xenon",
+      "match": "\\b(if|else|while|until|for|loop|do|break|continue|return)\\b"
+    },
+
+    "types": {
+      "comment": "Built-in scalar types: bool, sized integers, arbitrary-width i<n>/u<n>, floats.",
+      "name": "entity.name.type.xenon",
+      "match": "\\b(bool|usize|isize|bf16|f16|f32|f64|f128|[iu]\\d+)\\b"
+    },
+
+    "constants": {
+      "name": "constant.language.boolean.xenon",
+      "match": "\\b(true|false)\\b"
+    },
+
+    "function_calls": {
+      "comment": "Identifier immediately followed by `(` — covers all call sites.",
+      "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(?=\\()",
+      "captures": {
+        "1": { "name": "entity.name.function.xenon" }
+      }
+    },
+
+    "numbers": {
+      "patterns": [
+        {
+          "comment": "Float literal — must come before plain integers to match the dot.",
+          "name": "constant.numeric.float.xenon",
+          "match": "\\b(?:[0-9]+\\.[0-9]*|[0-9]*\\.[0-9]+)(?:[eE][+-]?[0-9]+)?\\b"
+        },
+        {
+          "name": "constant.numeric.hex.xenon",
+          "match": "\\b0[xX][0-9a-fA-F]+\\b"
+        },
+        {
+          "name": "constant.numeric.binary.xenon",
+          "match": "\\b0[bB][01]+\\b"
+        },
+        {
+          "name": "constant.numeric.octal.xenon",
+          "match": "\\b0[oO][0-7]+\\b"
+        },
+        {
+          "name": "constant.numeric.integer.decimal.xenon",
+          "match": "\\b[0-9]+\\b"
+        }
+      ]
+    },
+
+    "operators": {
+      "patterns": [
+        {
+          "comment": "Three-char compound assignments first to avoid partial matches.",
+          "name": "keyword.operator.assignment.compound.xenon",
+          "match": "<<=|>>=|\\*\\*="
+        },
+        {
+          "comment": "Two-char compound assignments.",
+          "name": "keyword.operator.assignment.compound.xenon",
+          "match": "\\+=|-=|\\*=|/=|&=|\\|=|\\^=|%="
+        },
+        {
+          "name": "keyword.operator.arrow.xenon",
+          "match": "->"
+        },
+        {
+          "comment": "Equality and ordering comparisons.",
+          "name": "keyword.operator.comparison.xenon",
+          "match": "==|!=|<=|>="
+        },
+        {
+          "comment": "Logical short-circuit and XOR.",
+          "name": "keyword.operator.logical.xenon",
+          "match": "&&|\\|\\||\\^\\^"
+        },
+        {
+          "name": "keyword.operator.bitwise.shift.xenon",
+          "match": "<<|>>"
+        },
+        {
+          "comment": "Multi-char arithmetic: exponent, increment, decrement.",
+          "name": "keyword.operator.arithmetic.xenon",
+          "match": "\\*\\*|\\+\\+|--"
+        },
+        {
+          "comment": "Plain assignment — negative lookahead excludes ==.",
+          "name": "keyword.operator.assignment.xenon",
+          "match": "=(?!=)"
+        },
+        {
+          "comment": "Less-than / greater-than (not part of shift or comparison pair).",
+          "name": "keyword.operator.comparison.xenon",
+          "match": "<|>"
+        },
+        {
+          "name": "keyword.operator.arithmetic.xenon",
+          "match": "[+\\-*/%]"
+        },
+        {
+          "name": "keyword.operator.bitwise.xenon",
+          "match": "[&|^~]"
+        },
+        {
+          "name": "keyword.operator.unary.xenon",
+          "match": "!"
+        }
+      ]
+    },
+
+    "punctuation": {
+      "patterns": [
+        {
+          "name": "punctuation.brackets.curly.xenon",
+          "match": "[{}]"
+        },
+        {
+          "name": "punctuation.brackets.round.xenon",
+          "match": "[()]"
+        },
+        {
+          "name": "punctuation.brackets.square.xenon",
+          "match": "[\\[\\]]"
+        },
+        {
+          "name": "punctuation.separator.comma.xenon",
+          "match": ","
+        },
+        {
+          "name": "punctuation.terminator.statement.xenon",
+          "match": ";"
+        },
+        {
+          "name": "punctuation.separator.colon.xenon",
+          "match": ":"
+        },
+        {
+          "name": "punctuation.accessor.dot.xenon",
+          "match": "\\."
+        }
+      ]
+    }
+  }
+}
