@@ -303,9 +303,7 @@ impl<'ctx, 'a> CodeGen<'ctx, 'a> {
         // If there's an entry function not named "main" and another function IS
         // named "main", the latter must be renamed to avoid collision with the
         // generated @main wrapper.
-        let needs_main_rename = entry_fn_name
-            .as_ref()
-            .is_some_and(|name| name != "main")
+        let needs_main_rename = entry_fn_name.as_ref().is_some_and(|name| name != "main")
             && self
                 .ast_program
                 .functions
@@ -313,31 +311,44 @@ impl<'ctx, 'a> CodeGen<'ctx, 'a> {
                 .any(|f| f.name == "main" && !f.attributes.iter().any(|a| a.name == "entry"));
 
         if needs_main_rename {
-            self.name_map.insert("main".to_string(), "_xe_main".to_string());
+            self.name_map
+                .insert("main".to_string(), "_xe_main".to_string());
         }
 
         for f in &self.ast_program.functions {
-            self.declare_function_with_name(f, self.llvm_name_for(f, &entry_fn_name, needs_main_rename))?;
+            self.declare_function_with_name(
+                f,
+                self.llvm_name_for(f, &entry_fn_name, needs_main_rename),
+            )?;
         }
         for f in &self.ast_program.functions {
             self.ast_fn = Some(f);
-            self.compile_function_with_name(f, self.llvm_name_for(f, &entry_fn_name, needs_main_rename))?;
+            self.compile_function_with_name(
+                f,
+                self.llvm_name_for(f, &entry_fn_name, needs_main_rename),
+            )?;
             self.ast_fn = None;
         }
 
         // Emit @main wrapper if the entry function is not already named "main".
-        if let Some(ref entry_name) = entry_fn_name {
-            if entry_name != "main" {
-                self.emit_main_wrapper(entry_name)?;
-            }
+        if let Some(ref entry_name) = entry_fn_name
+            && entry_name != "main"
+        {
+            self.emit_main_wrapper(entry_name)?;
         }
 
         Ok(self.module)
     }
 
     /// Returns the LLVM function name for a given AST function.
-    fn llvm_name_for(&self, f: &Function, _entry_fn_name: &Option<String>, needs_main_rename: bool) -> String {
-        if needs_main_rename && f.name == "main" && !f.attributes.iter().any(|a| a.name == "entry") {
+    fn llvm_name_for(
+        &self,
+        f: &Function,
+        _entry_fn_name: &Option<String>,
+        needs_main_rename: bool,
+    ) -> String {
+        if needs_main_rename && f.name == "main" && !f.attributes.iter().any(|a| a.name == "entry")
+        {
             "_xe_main".to_string()
         } else {
             f.name.clone()
@@ -345,7 +356,11 @@ impl<'ctx, 'a> CodeGen<'ctx, 'a> {
     }
 
     /// Registers a function signature under the given LLVM name.
-    fn declare_function_with_name(&self, f: &Function, llvm_name: String) -> CodegenResult<FunctionValue<'ctx>> {
+    fn declare_function_with_name(
+        &self,
+        f: &Function,
+        llvm_name: String,
+    ) -> CodegenResult<FunctionValue<'ctx>> {
         if let Some(existing) = self.module.get_function(&llvm_name) {
             return Ok(existing);
         }
@@ -358,7 +373,11 @@ impl<'ctx, 'a> CodeGen<'ctx, 'a> {
     }
 
     /// Compiles a function body under the given LLVM name.
-    fn compile_function_with_name(&mut self, f: &Function, llvm_name: String) -> CodegenResult<FunctionValue<'ctx>> {
+    fn compile_function_with_name(
+        &mut self,
+        f: &Function,
+        llvm_name: String,
+    ) -> CodegenResult<FunctionValue<'ctx>> {
         let fn_val = self
             .module
             .get_function(&llvm_name)
@@ -465,9 +484,12 @@ impl<'ctx, 'a> CodeGen<'ctx, 'a> {
         let bb = self.context.append_basic_block(main_fn, "entry");
         self.builder.position_at_end(bb);
 
-        let callee = self.module.get_function(entry_name).ok_or(
-            CodegenError::InvalidIrState("entry function not found in module"),
-        )?;
+        let callee = self
+            .module
+            .get_function(entry_name)
+            .ok_or(CodegenError::InvalidIrState(
+                "entry function not found in module",
+            ))?;
         let call = self
             .builder
             .build_call(callee, &[], "ret")
@@ -475,9 +497,7 @@ impl<'ctx, 'a> CodeGen<'ctx, 'a> {
         let ret_val = call
             .try_as_basic_value()
             .basic()
-            .ok_or(CodegenError::InvalidIrState(
-                "entry function returned void",
-            ))?;
+            .ok_or(CodegenError::InvalidIrState("entry function returned void"))?;
         self.builder
             .build_return(Some(&ret_val))
             .map_err(llvm_err!("build_return (main wrapper)"))?;
@@ -873,7 +893,11 @@ impl<'ctx, 'a> CodeGen<'ctx, 'a> {
                 }
             }
             ExprKind::Call { name, args } => {
-                let llvm_name = self.name_map.get(name).cloned().unwrap_or_else(|| name.clone());
+                let llvm_name = self
+                    .name_map
+                    .get(name)
+                    .cloned()
+                    .unwrap_or_else(|| name.clone());
                 let callee = self.module.get_function(&llvm_name).ok_or_else(|| {
                     CodegenError::UndefinedFunction {
                         name: name.clone(),
