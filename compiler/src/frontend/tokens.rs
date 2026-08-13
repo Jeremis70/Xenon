@@ -73,6 +73,7 @@ pub enum TokenKind {
     Semicolon,
     Colon,
     Period,
+    Hash,
     // Multi-char operators
     PlusEq,
     MinusEq,
@@ -228,6 +229,8 @@ enum RawKind {
     Colon,
     #[token(".")]
     Period,
+    #[token("#")]
+    Hash,
 
     // ---------- Multi-char operators (put before single-char) ----------
     #[token("<<=")]
@@ -386,6 +389,7 @@ fn into_token_parts(raw: RawKind) -> (TokenKind, Option<TokenValue>) {
         RawKind::Semicolon => (TokenKind::Semicolon, None),
         RawKind::Colon => (TokenKind::Colon, None),
         RawKind::Period => (TokenKind::Period, None),
+        RawKind::Hash => (TokenKind::Hash, None),
         RawKind::PlusEq => (TokenKind::PlusEq, None),
         RawKind::MinusEq => (TokenKind::MinusEq, None),
         RawKind::StarEq => (TokenKind::StarEq, None),

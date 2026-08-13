@@ -286,12 +286,19 @@ impl UnaryOp {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct Attribute {
+    pub name: String,
+    pub span: Span,
+}
+
 #[derive(Debug, Clone)]
 pub struct Function {
     pub name: String,
     pub params: Vec<Binding>,
     pub return_type: Binding,
     pub body: Vec<Stmt>,
+    pub attributes: Vec<Attribute>,
     pub span: Span,
 }
 
@@ -301,6 +308,7 @@ impl PartialEq for Function {
             && self.params == other.params
             && self.return_type == other.return_type
             && self.body == other.body
+            && self.attributes == other.attributes
     }
 }
 

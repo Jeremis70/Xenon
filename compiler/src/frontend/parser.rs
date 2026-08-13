@@ -1,6 +1,6 @@
 use crate::error::{ParseError, ParseResult, TypeError};
 use crate::frontend::ast::{
-    BinOp, Binding, Expr, ExprKind, Function, Program, Stmt, StmtKind, Type, UnaryOp,
+    Attribute, BinOp, Binding, Expr, ExprKind, Function, Program, Stmt, StmtKind, Type, UnaryOp,
 };
 use crate::frontend::tokens::{Span, Token, TokenKind};
 use num_bigint::BigInt;
@@ -132,12 +132,40 @@ impl<'a> Parser<'a> {
     pub fn parse_program(&mut self) -> ParseResult<Program> {
         let mut functions = Vec::new();
         while self.peek().is_some() {
-            functions.push(self.parse_function()?);
+            let attributes = self.parse_attributes()?;
+            if !attributes.is_empty() && !self.peek().is_some_and(|t| t.kind == TokenKind::Fn) {
+                let span = attributes.last().unwrap().span;
+                return Err(ParseError::new(
+                    "attributes must be followed by a function definition",
+                    span,
+                ));
+            }
+            functions.push(self.parse_function(attributes)?);
         }
         Ok(Program { functions })
     }
 
-    fn parse_function(&mut self) -> ParseResult<Function> {
+    fn parse_attributes(&mut self) -> ParseResult<Vec<Attribute>> {
+        let mut attrs = Vec::new();
+        while self.peek().is_some_and(|t| t.kind == TokenKind::Hash) {
+            let hash_token = self.expect(TokenKind::Hash)?;
+            let start = hash_token.span.start;
+            self.expect(TokenKind::LBracket)?;
+            let name_token = self.expect(TokenKind::Ident)?;
+            let name = name_token.ident_value()?.to_string();
+            self.expect(TokenKind::RBracket)?;
+            attrs.push(Attribute {
+                name,
+                span: Span {
+                    start,
+                    end: self.prev_span().end,
+                },
+            });
+        }
+        Ok(attrs)
+    }
+
+    fn parse_function(&mut self, attributes: Vec<Attribute>) -> ParseResult<Function> {
         let fn_token = self.expect(TokenKind::Fn)?;
         let start = fn_token.span.start;
         let name = self.expect(TokenKind::Ident)?.ident_value()?.to_string();
@@ -158,6 +186,7 @@ impl<'a> Parser<'a> {
             params,
             return_type,
             body,
+            attributes,
             span: Span {
                 start,
                 end: self.prev_span().end,
