@@ -931,10 +931,7 @@ fn entry_plus_user_main_no_collision() {
     let src =
         "#[entry] fn start()->i32 { return other_main(); } fn other_main()->i32 { return 99; }";
     let ir = compile_to_ir(src);
-    assert!(
-        ir.contains("define i32 @start()"),
-        "expected @start:\n{ir}"
-    );
+    assert!(ir.contains("define i32 @start()"), "expected @start:\n{ir}");
     assert!(
         ir.contains("define i32 @main()"),
         "expected @main wrapper:\n{ir}"

@@ -106,10 +106,9 @@ fn no_entry_point_is_error() {
 
 #[test]
 fn multiple_entry_points_is_error() {
-    let err = validate_entry(
-        "#[entry] fn a()->i32 { return 0; } #[entry] fn b()->i32 { return 1; }",
-    )
-    .expect_err("multiple entries");
+    let err =
+        validate_entry("#[entry] fn a()->i32 { return 0; } #[entry] fn b()->i32 { return 1; }")
+            .expect_err("multiple entries");
     assert!(
         matches!(err, SemanticError::MultipleEntryPoints { .. }),
         "unexpected error: {err}"
