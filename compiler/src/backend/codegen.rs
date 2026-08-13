@@ -67,7 +67,9 @@ pub struct CodeGen<'ctx, 'a> {
     /// invalid shift amounts. Typically enabled at `-O0` (debug builds).
     debug_checks: bool,
     /// Maps source function names to LLVM IR names when they differ
-    /// (e.g. a non-entry function named "main" becomes "_xe_main").
+    /// (e.g. a non-entry function named "main" becomes "_xe.main").
+    /// The `_xe.` prefix contains a dot, which is illegal in Xenon
+    /// identifiers but valid in LLVM IR, so collisions are impossible.
     name_map: HashMap<String, String>,
 }
 
@@ -312,7 +314,7 @@ impl<'ctx, 'a> CodeGen<'ctx, 'a> {
 
         if needs_main_rename {
             self.name_map
-                .insert("main".to_string(), "_xe_main".to_string());
+                .insert("main".to_string(), "_xe.main".to_string());
         }
 
         for f in &self.ast_program.functions {
@@ -349,7 +351,7 @@ impl<'ctx, 'a> CodeGen<'ctx, 'a> {
     ) -> String {
         if needs_main_rename && f.name == "main" && !f.attributes.iter().any(|a| a.name == "entry")
         {
-            "_xe_main".to_string()
+            "_xe.main".to_string()
         } else {
             f.name.clone()
         }

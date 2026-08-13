@@ -925,15 +925,27 @@ fn entry_with_helper_functions() {
 }
 
 /// When entry is not named "main" and there IS another function named "main",
-/// the non-entry "main" gets renamed to avoid collision with the wrapper.
+/// the non-entry "main" must be renamed to avoid collision with the @main wrapper,
+/// and call sites to it must still resolve correctly.
 #[test]
 fn entry_plus_user_main_no_collision() {
-    let src =
-        "#[entry] fn start()->i32 { return other_main(); } fn other_main()->i32 { return 99; }";
+    // `fn main` is a plain helper — NOT the entry point.
+    // Codegen must rename it to `_xe.main` and emit a @main wrapper for `start`.
+    let src = "#[entry] fn start()->i32 { return main(); } fn main()->i32 { return 99; }";
     let ir = compile_to_ir(src);
+
+    // The entry function compiles under its real name.
     assert!(ir.contains("define i32 @start()"), "expected @start:\n{ir}");
+
+    // The renamed helper must appear in the IR.
     assert!(
-        ir.contains("define i32 @main()"),
-        "expected @main wrapper:\n{ir}"
+        ir.contains("@\"_xe.main\"") || ir.contains("@_xe.main"),
+        "expected renamed symbol _xe.main in IR:\n{ir}"
+    );
+
+    // The @main wrapper must call @start, not the renamed helper.
+    assert!(
+        ir.contains("call i32 @start()"),
+        "expected @main wrapper to call @start:\n{ir}"
     );
 }

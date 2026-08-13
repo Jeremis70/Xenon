@@ -522,3 +522,22 @@ fn parse_attribute_at_eof_is_error() {
         err.message
     );
 }
+
+/// Dots are illegal in Xenon identifiers, so a user can never define a function
+/// whose name would collide with an internal mangled name like `_xe.main`.
+/// The parser rejects it because `fn _xe` parses the name as `_xe`, then the
+/// `.` is unexpected where `(` is required.
+#[test]
+fn function_name_with_dot_is_rejected() {
+    let src = "fn _xe.main()->i32 { return 0; }";
+    let tokens = lex(src).expect("lexing should succeed");
+    let mut parser = Parser::new(&tokens);
+    let err = parser
+        .parse_program()
+        .expect_err("dotted name should fail to parse");
+    assert!(
+        err.message.contains("LParen"),
+        "expected a 'LParen' error, got: {}",
+        err.message
+    );
+}
