@@ -101,8 +101,8 @@ jobs:
 
       - name: Install LLVM 22 (Linux)
         run: |
-          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
-          sudo add-apt-repository "deb http://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-22 main"
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | gpg --dearmor | sudo tee /usr/share/keyrings/apt.llvm.org.gpg > /dev/null
+          echo "deb [signed-by=/usr/share/keyrings/apt.llvm.org.gpg] https://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-22 main" | sudo tee /etc/apt/sources.list.d/llvm-toolchain-22.list > /dev/null
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends llvm-22 llvm-22-dev libpolly-22-dev clang-22 libclang-22-dev lld-22
 
