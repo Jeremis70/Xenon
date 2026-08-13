@@ -20,6 +20,7 @@ fn make_program(expr: Expr) -> Program {
                 kind: StmtKind::Expr(Box::new(expr)),
                 span: Span::ZERO,
             }],
+            attributes: vec![],
             span: Span::ZERO,
         }],
     }

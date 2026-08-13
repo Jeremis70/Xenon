@@ -61,3 +61,22 @@ fn lex_invalid_input_returns_error() {
 
     assert_eq!(err.span, Span { start: 3, end: 4 });
 }
+
+#[test]
+fn lex_hash_token() {
+    let src = "#[entry]";
+    let tokens = lex(src).expect("lexing should succeed");
+
+    let kinds: Vec<TokenKind> = tokens.iter().map(|t| t.kind).collect();
+    assert_eq!(
+        kinds,
+        vec![
+            TokenKind::Hash,
+            TokenKind::LBracket,
+            TokenKind::Ident,
+            TokenKind::RBracket,
+        ]
+    );
+    assert_eq!(tokens[2].ident_value().unwrap(), "entry");
+    assert_eq!(&src[tokens[0].span.start..tokens[0].span.end], "#");
+}

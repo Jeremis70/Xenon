@@ -455,3 +455,70 @@ fn parse_call_as_rhs_of_var_decl() {
         other => panic!("expected VarDecl, got {:?}", other),
     }
 }
+
+// ── Attributes ────────────────────────────────────────────────────────────────
+
+#[test]
+fn parse_entry_attribute_on_function() {
+    let src = "#[entry] fn main()->i32 { return 0; }";
+    let tokens = lex(src).expect("lexing should succeed");
+    let mut parser = Parser::new(&tokens);
+    let program = parser.parse_program().expect("parsing should succeed");
+
+    assert_eq!(program.functions.len(), 1);
+    let f = &program.functions[0];
+    assert_eq!(f.name, "main");
+    assert_eq!(f.attributes.len(), 1);
+    assert_eq!(f.attributes[0].name, "entry");
+}
+
+#[test]
+fn parse_multiple_attributes_on_function() {
+    let src = "#[entry] #[inline] fn start()->i32 { return 0; }";
+    let tokens = lex(src).expect("lexing should succeed");
+    let mut parser = Parser::new(&tokens);
+    let program = parser.parse_program().expect("parsing should succeed");
+
+    let f = &program.functions[0];
+    assert_eq!(f.attributes.len(), 2);
+    assert_eq!(f.attributes[0].name, "entry");
+    assert_eq!(f.attributes[1].name, "inline");
+}
+
+#[test]
+fn parse_function_without_attributes_has_empty_vec() {
+    let src = "fn f()->i32 { return 0; }";
+    let tokens = lex(src).expect("lexing should succeed");
+    let mut parser = Parser::new(&tokens);
+    let program = parser.parse_program().expect("parsing should succeed");
+
+    assert!(program.functions[0].attributes.is_empty());
+}
+
+#[test]
+fn parse_attribute_not_followed_by_fn_is_error() {
+    let src = "#[entry] 42";
+    let tokens = lex(src).expect("lexing should succeed");
+    let mut parser = Parser::new(&tokens);
+    let err = parser.parse_program().expect_err("should fail");
+    assert!(
+        err.message
+            .contains("attributes must be followed by a function definition"),
+        "unexpected error: {}",
+        err.message
+    );
+}
+
+#[test]
+fn parse_attribute_at_eof_is_error() {
+    let src = "#[entry]";
+    let tokens = lex(src).expect("lexing should succeed");
+    let mut parser = Parser::new(&tokens);
+    let err = parser.parse_program().expect_err("should fail");
+    assert!(
+        err.message
+            .contains("attributes must be followed by a function definition"),
+        "unexpected error: {}",
+        err.message
+    );
+}
