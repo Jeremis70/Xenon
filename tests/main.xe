@@ -1,7 +1,8 @@
 // Testing MVP for xenon programming language
-fn main()->u32
+#[entry]
+fn main()->i32
 {
-    u32 x = 0;
+    i32 x = 0;
     while x < 10
     {
         x++;
@@ -9,7 +10,7 @@ fn main()->u32
     return fibonacci(x);
 }
 
-fn fibonacci(u32 n)->u32
+fn fibonacci(i32 n)->i32
 {
     if n == 0
     {

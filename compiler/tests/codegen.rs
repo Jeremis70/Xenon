@@ -877,3 +877,66 @@ fn debug_overflow_ok_block_is_present() {
         "overflow_ok should appear after overflow_trap in the IR:\n{ir}"
     );
 }
+
+// ── Entry point / #[entry] attribute ──────────────────────────────────────────
+
+/// A function named "main" with `#[entry]` compiles as `@main` directly.
+#[test]
+fn entry_named_main_compiles_directly() {
+    let ir = compile_to_ir("#[entry] fn main()->i32 { return 0; }");
+    assert!(
+        ir.contains("define i32 @main()"),
+        "expected @main definition:\n{ir}"
+    );
+}
+
+/// A function with a custom name and `#[entry]` gets a `@main` wrapper.
+#[test]
+fn entry_custom_name_emits_main_wrapper() {
+    let ir = compile_to_ir("#[entry] fn start()->i32 { return 42; }");
+    // The user function is defined under its real name.
+    assert!(
+        ir.contains("define i32 @start()"),
+        "expected @start definition:\n{ir}"
+    );
+    // A thin @main wrapper is also generated.
+    assert!(
+        ir.contains("define i32 @main()"),
+        "expected @main wrapper:\n{ir}"
+    );
+    // The wrapper calls @start.
+    assert!(
+        ir.contains("call i32 @start()"),
+        "expected call to @start in @main wrapper:\n{ir}"
+    );
+}
+
+/// Entry function can coexist with other helper functions.
+#[test]
+fn entry_with_helper_functions() {
+    let src = "#[entry] fn run()->i32 { return helper(); } fn helper()->i32 { return 7; }";
+    let ir = compile_to_ir(src);
+    assert!(ir.contains("define i32 @run()"), "expected @run:\n{ir}");
+    assert!(
+        ir.contains("define i32 @helper()"),
+        "expected @helper:\n{ir}"
+    );
+    assert!(ir.contains("define i32 @main()"), "expected @main:\n{ir}");
+}
+
+/// When entry is not named "main" and there IS another function named "main",
+/// the non-entry "main" gets renamed to avoid collision with the wrapper.
+#[test]
+fn entry_plus_user_main_no_collision() {
+    let src =
+        "#[entry] fn start()->i32 { return other_main(); } fn other_main()->i32 { return 99; }";
+    let ir = compile_to_ir(src);
+    assert!(
+        ir.contains("define i32 @start()"),
+        "expected @start:\n{ir}"
+    );
+    assert!(
+        ir.contains("define i32 @main()"),
+        "expected @main wrapper:\n{ir}"
+    );
+}

@@ -3,7 +3,7 @@ use xenonc::error::SemanticError;
 use xenonc::frontend::lexer::lex;
 use xenonc::frontend::parser::Parser;
 use xenonc::middle::constant_fold::fold_constants;
-use xenonc::middle::validate::validate_program;
+use xenonc::middle::validate::{validate_entry_point, validate_program};
 
 /// Helper: parse and validate a Xenon source string.
 fn validate_src(src: &str) -> Result<(), SemanticError> {
@@ -70,6 +70,77 @@ fn logical_ops_require_bool_operands() {
     let err = validate_src("fn f(u32 a, u32 b)->u32 { return a && b; }").expect_err("int && int");
     assert!(
         matches!(err, SemanticError::InvalidOperands { .. }),
+        "unexpected error: {err}"
+    );
+}
+
+// ── Entry point validation ────────────────────────────────────────────────────
+
+/// Helper: parse, fold, validate entry point.
+fn validate_entry(src: &str) -> Result<(), SemanticError> {
+    let tokens = lex(src).expect("lexing should succeed");
+    let mut parser = Parser::new(&tokens);
+    let program = parser.parse_program().expect("parsing should succeed");
+    let program = fold_constants(program).expect("fold should succeed");
+    validate_entry_point(&program)
+}
+
+#[test]
+fn entry_point_valid() {
+    validate_entry("#[entry] fn main()->i32 { return 0; }").expect("valid entry");
+}
+
+#[test]
+fn entry_point_custom_name() {
+    validate_entry("#[entry] fn start()->i32 { return 0; }").expect("valid entry with custom name");
+}
+
+#[test]
+fn no_entry_point_is_error() {
+    let err = validate_entry("fn f()->i32 { return 0; }").expect_err("no entry");
+    assert!(
+        matches!(err, SemanticError::NoEntryPoint),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn multiple_entry_points_is_error() {
+    let err = validate_entry(
+        "#[entry] fn a()->i32 { return 0; } #[entry] fn b()->i32 { return 1; }",
+    )
+    .expect_err("multiple entries");
+    assert!(
+        matches!(err, SemanticError::MultipleEntryPoints { .. }),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn entry_with_params_is_error() {
+    let err = validate_entry("#[entry] fn main(i32 x)->i32 { return x; }").expect_err("has params");
+    assert!(
+        matches!(err, SemanticError::EntryWithParams { .. }),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn entry_wrong_return_type_is_error() {
+    let err =
+        validate_entry("#[entry] fn main()->u32 { return 0; }").expect_err("wrong return type");
+    assert!(
+        matches!(err, SemanticError::EntryWrongReturn { .. }),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn unknown_attribute_is_error() {
+    let err =
+        validate_entry("#[foobar] fn main()->i32 { return 0; }").expect_err("unknown attribute");
+    assert!(
+        matches!(err, SemanticError::UnknownAttribute { ref name, .. } if name == "foobar"),
         "unexpected error: {err}"
     );
 }
