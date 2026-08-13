@@ -23,7 +23,7 @@ tempfile = "3"
 
 [target.'cfg(windows)'.dependencies]
 inkwell = { version = "0.10", features = [
-    "llvm22-1",
+    "llvm22-1-force-dynamic",
 ] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
