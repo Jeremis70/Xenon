@@ -568,3 +568,50 @@ pub fn infer_expr_type_after_validate(
 
     infer_expr(expr, &mut env)
 }
+
+/// Validates that exactly one `#[entry]` function exists with a correct
+/// signature: no parameters, returns `i32`. Also rejects unknown attributes.
+pub fn validate_entry_point(program: &Program) -> SemanticResult<()> {
+    // Check for unknown attributes on all functions.
+    for f in &program.functions {
+        for attr in &f.attributes {
+            if attr.name != "entry" {
+                return Err(SemanticError::UnknownAttribute {
+                    name: attr.name.clone(),
+                    span: attr.span,
+                });
+            }
+        }
+    }
+
+    let entry_fns: Vec<&Function> = program
+        .functions
+        .iter()
+        .filter(|f| f.attributes.iter().any(|a| a.name == "entry"))
+        .collect();
+
+    match entry_fns.len() {
+        0 => return Err(SemanticError::NoEntryPoint),
+        1 => {}
+        _ => {
+            let first_span = entry_fns[0].span;
+            let dup_span = entry_fns[1].span;
+            return Err(SemanticError::MultipleEntryPoints {
+                first_span,
+                span: dup_span,
+            });
+        }
+    }
+
+    let entry = entry_fns[0];
+
+    if !entry.params.is_empty() {
+        return Err(SemanticError::EntryWithParams { span: entry.span });
+    }
+
+    if entry.return_type.ty != Type::Int(32) {
+        return Err(SemanticError::EntryWrongReturn { span: entry.span });
+    }
+
+    Ok(())
+}
