@@ -99,23 +99,27 @@ jobs:
         with:
           cache-on-failure: true
 
-      - name: Setup LLVM (Linux)
-        uses: KyleMayes/install-llvm-action@v2
-        with:
-          version: "22"
+      - name: Install LLVM 22 (Linux)
+        run: |
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
+          sudo add-apt-repository "deb http://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-22 main"
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends llvm-22 llvm-22-dev libpolly-22-dev clang-22 libclang-22-dev lld-22
 
       - name: Configure LLVM env (Linux)
         shell: bash
         run: |
+          LLVM_PATH=/usr/lib/llvm-22
           echo "LLVM_SYS_221_PREFIX=${LLVM_PATH}" >> "$GITHUB_ENV"
           echo "PATH=${LLVM_PATH}/bin:$PATH" >> "$GITHUB_ENV"
           echo "LD_LIBRARY_PATH=${LLVM_PATH}/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+          echo "LIBCLANG_PATH=${LLVM_PATH}/lib" >> "$GITHUB_ENV"
 
       - name: Verify llvm-config
         shell: bash
         run: |
-          which llvm-config
-          llvm-config --version
+          which llvm-config-22
+          llvm-config-22 --version
 
       - name: Run Clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
@@ -180,16 +184,23 @@ jobs:
           shared-key: "${{ matrix.os }}-${{ matrix.rust }}"
           save-if: ${{ github.ref == 'refs/heads/master' }}
 
-      - name: Setup LLVM (Linux/macOS)
-        if: runner.os != 'Windows'
-        uses: KyleMayes/install-llvm-action@v2
-        with:
-          version: "22"
+      - name: Install LLVM 22 (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
+          sudo add-apt-repository "deb http://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-22 main"
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends llvm-22 llvm-22-dev libpolly-22-dev clang-22 libclang-22-dev lld-22
+
+      - name: Install LLVM 22 (macOS)
+        if: runner.os == 'macOS'
+        run: brew install llvm@22
 
       - name: Configure LLVM env (Linux)
         if: runner.os == 'Linux'
         shell: bash
         run: |
+          LLVM_PATH=/usr/lib/llvm-22
           echo "LLVM_SYS_221_PREFIX=${LLVM_PATH}" >> "$GITHUB_ENV"
           echo "PATH=${LLVM_PATH}/bin:$PATH" >> "$GITHUB_ENV"
           echo "LD_LIBRARY_PATH=${LLVM_PATH}/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
@@ -199,6 +210,7 @@ jobs:
         if: runner.os == 'macOS'
         shell: bash
         run: |
+          LLVM_PATH="$(brew --prefix llvm@22)"
           SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
 
           echo "LLVM_SYS_221_PREFIX=${LLVM_PATH}" >> "$GITHUB_ENV"
@@ -216,13 +228,20 @@ jobs:
           echo "CXXFLAGS=-isysroot ${SDKROOT}" >> "$GITHUB_ENV"
           echo "MACOSX_DEPLOYMENT_TARGET=14.0" >> "$GITHUB_ENV"
 
-      - name: Verify llvm-config (Linux/macOS)
-        if: runner.os != 'Windows'
+      - name: Verify llvm-config (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          which llvm-config-22
+          llvm-config-22 --version
+
+      - name: Verify llvm-config (macOS)
+        if: runner.os == 'macOS'
         shell: bash
         run: |
           which llvm-config
           llvm-config --version
-          "${LLVM_PATH}/bin/clang" --version
+          clang --version
 
       # -------------------------
       # Windows: MSYS2 toolchain ONLY (no rustup)
@@ -325,16 +344,23 @@ jobs:
           shared-key: "${{ matrix.os }}-${{ matrix.rust }}"
           save-if: ${{ github.ref == 'refs/heads/master' }}
 
-      - name: Setup LLVM (Linux/macOS)
-        if: runner.os != 'Windows'
-        uses: KyleMayes/install-llvm-action@v2
-        with:
-          version: "22"
+      - name: Install LLVM 22 (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
+          sudo add-apt-repository "deb http://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-22 main"
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends llvm-22 llvm-22-dev libpolly-22-dev clang-22 libclang-22-dev lld-22
+
+      - name: Install LLVM 22 (macOS)
+        if: runner.os == 'macOS'
+        run: brew install llvm@22
 
       - name: Configure LLVM env (Linux)
         if: runner.os == 'Linux'
         shell: bash
         run: |
+          LLVM_PATH=/usr/lib/llvm-22
           echo "LLVM_SYS_221_PREFIX=${LLVM_PATH}" >> "$GITHUB_ENV"
           echo "PATH=${LLVM_PATH}/bin:$PATH" >> "$GITHUB_ENV"
           echo "LD_LIBRARY_PATH=${LLVM_PATH}/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
@@ -344,6 +370,7 @@ jobs:
         if: runner.os == 'macOS'
         shell: bash
         run: |
+          LLVM_PATH="$(brew --prefix llvm@22)"
           SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
 
           echo "LLVM_SYS_221_PREFIX=${LLVM_PATH}" >> "$GITHUB_ENV"
@@ -361,13 +388,20 @@ jobs:
           echo "CXXFLAGS=-isysroot ${SDKROOT}" >> "$GITHUB_ENV"
           echo "MACOSX_DEPLOYMENT_TARGET=14.0" >> "$GITHUB_ENV"
 
-      - name: Verify llvm-config (Linux/macOS)
-        if: runner.os != 'Windows'
+      - name: Verify llvm-config (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          which llvm-config-22
+          llvm-config-22 --version
+
+      - name: Verify llvm-config (macOS)
+        if: runner.os == 'macOS'
         shell: bash
         run: |
           which llvm-config
           llvm-config --version
-          "${LLVM_PATH}/bin/clang" --version
+          clang --version
 
       # -------------------------
       # Windows: MSYS2 toolchain ONLY (no rustup)
@@ -447,14 +481,17 @@ jobs:
         with:
           cache-on-failure: true
 
-      - name: Setup LLVM (Linux)
-        uses: KyleMayes/install-llvm-action@v2
-        with:
-          version: "22"
+      - name: Install LLVM 22 (Linux)
+        run: |
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
+          sudo add-apt-repository "deb http://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-22 main"
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends llvm-22 llvm-22-dev libpolly-22-dev clang-22 libclang-22-dev lld-22
 
       - name: Configure LLVM env (Linux)
         shell: bash
         run: |
+          LLVM_PATH=/usr/lib/llvm-22
           echo "LLVM_SYS_221_PREFIX=${LLVM_PATH}" >> "$GITHUB_ENV"
           echo "PATH=${LLVM_PATH}/bin:$PATH" >> "$GITHUB_ENV"
           echo "LD_LIBRARY_PATH=${LLVM_PATH}/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
@@ -462,8 +499,8 @@ jobs:
       - name: Verify llvm-config
         shell: bash
         run: |
-          which llvm-config
-          llvm-config --version
+          which llvm-config-22
+          llvm-config-22 --version
 
       - name: Build documentation
         run: cargo doc --no-deps --workspace --all-features
