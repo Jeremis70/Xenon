@@ -13,7 +13,7 @@ use crate::backend::link::link_executable;
 use crate::middle::constant_fold::fold_constants;
 
 use crate::frontend::ast::Program;
-use crate::middle::validate::validate_program;
+use crate::middle::validate::{validate_entry_point, validate_program};
 
 /// Parsed program plus combined source and primary path for diagnostics (e.g. codegen).
 pub struct ParsedSource {
@@ -89,6 +89,17 @@ pub fn parse_and_validate(session: &Session) -> Option<ParsedSource> {
     };
 
     if let Err(e) = validate_program(&program) {
+        diagnostics::emit_semantic_error(
+            &e,
+            &first_path,
+            &combined_source,
+            session.error_format,
+            session.color,
+        );
+        return None;
+    }
+
+    if let Err(e) = validate_entry_point(&program) {
         diagnostics::emit_semantic_error(
             &e,
             &first_path,
