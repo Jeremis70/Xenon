@@ -26,6 +26,7 @@ fn fold_function(func: Function) -> FoldResult<Function> {
             .into_iter()
             .map(fold_stmt)
             .collect::<FoldResult<_>>()?,
+        attributes: func.attributes,
         span: func.span,
     })
 }
