@@ -66,6 +66,9 @@ pub struct CodeGen<'ctx, 'a> {
     /// When true, emit runtime checks for overflow, division by zero, and
     /// invalid shift amounts. Typically enabled at `-O0` (debug builds).
     debug_checks: bool,
+    /// Maps source function names to LLVM IR names when they differ
+    /// (e.g. a non-entry function named "main" becomes "_xe_main").
+    name_map: HashMap<String, String>,
 }
 
 impl<'ctx, 'a> CodeGen<'ctx, 'a> {
@@ -89,6 +92,7 @@ impl<'ctx, 'a> CodeGen<'ctx, 'a> {
             ast_fn: None,
             target_data,
             debug_checks,
+            name_map: HashMap::new(),
         }
     }
 
@@ -288,20 +292,61 @@ impl<'ctx, 'a> CodeGen<'ctx, 'a> {
     }
 
     pub fn compile_program(mut self) -> CodegenResult<Module<'ctx>> {
+        // Find the entry function (if any) and determine LLVM names.
+        let entry_fn_name = self
+            .ast_program
+            .functions
+            .iter()
+            .find(|f| f.attributes.iter().any(|a| a.name == "entry"))
+            .map(|f| f.name.clone());
+
+        // If there's an entry function not named "main" and another function IS
+        // named "main", the latter must be renamed to avoid collision with the
+        // generated @main wrapper.
+        let needs_main_rename = entry_fn_name
+            .as_ref()
+            .is_some_and(|name| name != "main")
+            && self
+                .ast_program
+                .functions
+                .iter()
+                .any(|f| f.name == "main" && !f.attributes.iter().any(|a| a.name == "entry"));
+
+        if needs_main_rename {
+            self.name_map.insert("main".to_string(), "_xe_main".to_string());
+        }
+
         for f in &self.ast_program.functions {
-            self.declare_function(f)?;
+            self.declare_function_with_name(f, self.llvm_name_for(f, &entry_fn_name, needs_main_rename))?;
         }
         for f in &self.ast_program.functions {
             self.ast_fn = Some(f);
-            self.compile_function(f)?;
+            self.compile_function_with_name(f, self.llvm_name_for(f, &entry_fn_name, needs_main_rename))?;
             self.ast_fn = None;
         }
+
+        // Emit @main wrapper if the entry function is not already named "main".
+        if let Some(ref entry_name) = entry_fn_name {
+            if entry_name != "main" {
+                self.emit_main_wrapper(entry_name)?;
+            }
+        }
+
         Ok(self.module)
     }
 
-    /// Registers a function signature without compiling yet
-    fn declare_function(&self, f: &Function) -> CodegenResult<FunctionValue<'ctx>> {
-        if let Some(existing) = self.module.get_function(&f.name) {
+    /// Returns the LLVM function name for a given AST function.
+    fn llvm_name_for(&self, f: &Function, _entry_fn_name: &Option<String>, needs_main_rename: bool) -> String {
+        if needs_main_rename && f.name == "main" && !f.attributes.iter().any(|a| a.name == "entry") {
+            "_xe_main".to_string()
+        } else {
+            f.name.clone()
+        }
+    }
+
+    /// Registers a function signature under the given LLVM name.
+    fn declare_function_with_name(&self, f: &Function, llvm_name: String) -> CodegenResult<FunctionValue<'ctx>> {
+        if let Some(existing) = self.module.get_function(&llvm_name) {
             return Ok(existing);
         }
         let ret_ty = self.llvm_type(&f.return_type.ty)?;
@@ -309,14 +354,14 @@ impl<'ctx, 'a> CodeGen<'ctx, 'a> {
         let param_metadata: Vec<inkwell::types::BasicMetadataTypeEnum> =
             param_types.iter().map(|&t| t.into()).collect();
         let fn_ty = ret_ty.fn_type(&param_metadata, false);
-        Ok(self.module.add_function(&f.name, fn_ty, None))
+        Ok(self.module.add_function(&llvm_name, fn_ty, None))
     }
 
-    fn compile_function(&mut self, f: &Function) -> CodegenResult<FunctionValue<'ctx>> {
-        // Reuse the forward declaration emitted by declare_function.
+    /// Compiles a function body under the given LLVM name.
+    fn compile_function_with_name(&mut self, f: &Function, llvm_name: String) -> CodegenResult<FunctionValue<'ctx>> {
         let fn_val = self
             .module
-            .get_function(&f.name)
+            .get_function(&llvm_name)
             .ok_or(CodegenError::InvalidIrState(
                 "declare_function must be called before compile_function",
             ))?;
@@ -410,6 +455,33 @@ impl<'ctx, 'a> CodeGen<'ctx, 'a> {
         }
 
         Ok(fn_val)
+    }
+
+    /// Emits a thin C-ABI `@main` wrapper that calls the user's entry function.
+    fn emit_main_wrapper(&self, entry_name: &str) -> CodegenResult<()> {
+        let i32_ty = self.context.i32_type();
+        let fn_ty = i32_ty.fn_type(&[], false);
+        let main_fn = self.module.add_function("main", fn_ty, None);
+        let bb = self.context.append_basic_block(main_fn, "entry");
+        self.builder.position_at_end(bb);
+
+        let callee = self.module.get_function(entry_name).ok_or(
+            CodegenError::InvalidIrState("entry function not found in module"),
+        )?;
+        let call = self
+            .builder
+            .build_call(callee, &[], "ret")
+            .map_err(llvm_err!("build_call (main wrapper)"))?;
+        let ret_val = call
+            .try_as_basic_value()
+            .basic()
+            .ok_or(CodegenError::InvalidIrState(
+                "entry function returned void",
+            ))?;
+        self.builder
+            .build_return(Some(&ret_val))
+            .map_err(llvm_err!("build_return (main wrapper)"))?;
+        Ok(())
     }
 
     /// Compiles a single statement. Returns `true` when the current basic block
@@ -801,7 +873,8 @@ impl<'ctx, 'a> CodeGen<'ctx, 'a> {
                 }
             }
             ExprKind::Call { name, args } => {
-                let callee = self.module.get_function(name).ok_or_else(|| {
+                let llvm_name = self.name_map.get(name).cloned().unwrap_or_else(|| name.clone());
+                let callee = self.module.get_function(&llvm_name).ok_or_else(|| {
                     CodegenError::UndefinedFunction {
                         name: name.clone(),
                         span: e.span,
