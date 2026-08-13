@@ -147,6 +147,16 @@ pub enum SemanticError {
     BreakOutsideLoop { span: Span },
     #[error("`continue` outside of a loop")]
     ContinueOutsideLoop { span: Span },
+    #[error("no `#[entry]` function found")]
+    NoEntryPoint,
+    #[error("multiple `#[entry]` functions: first at {first_span:?}, duplicate at {span:?}")]
+    MultipleEntryPoints { first_span: Span, span: Span },
+    #[error("entry function must take no parameters")]
+    EntryWithParams { span: Span },
+    #[error("entry function must return `i32`")]
+    EntryWrongReturn { span: Span },
+    #[error("unknown attribute `{name}`")]
+    UnknownAttribute { name: String, span: Span },
 }
 
 pub type SemanticResult<T> = Result<T, SemanticError>;
@@ -166,7 +176,12 @@ impl SemanticError {
             | SemanticError::BreakTypeMismatch { span, .. }
             | SemanticError::BreakTypeConflict { span, .. }
             | SemanticError::BreakOutsideLoop { span }
-            | SemanticError::ContinueOutsideLoop { span } => Some(*span),
+            | SemanticError::ContinueOutsideLoop { span }
+            | SemanticError::MultipleEntryPoints { span, .. }
+            | SemanticError::EntryWithParams { span }
+            | SemanticError::EntryWrongReturn { span }
+            | SemanticError::UnknownAttribute { span, .. } => Some(*span),
+            SemanticError::NoEntryPoint => None,
         }
     }
 }
