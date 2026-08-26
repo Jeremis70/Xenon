@@ -35,15 +35,22 @@ u32 out = foo(y = 12, x = 5);
 
 ## Multiple return values (named returns)
 
-Named returns behave as local variables and are implicitly returned at function end.
+Named returns declare return variables that exist as local variables inside the function body. Functions with named return variables **require an explicit `return`** (implicit returns are not permitted).
 
 ```xe
 fn count_colored_sheep(SheepImage img) -> u32 white, u32 black, u32 other, u32 total {
-    // ...
+    white = count(img, Color.White);
+    black = count(img, Color.Black);
+    other = count(img, Color.Other);
+    total = white + black + other;
+    return;
 }
 ```
 
-Equivalent explicit return form is also documented.
+Caller-side destructuring:
+```xe
+u32 white, u32 black, u32 other, u32 total = count_colored_sheep(img);
+```
 
 ## Callable model
 

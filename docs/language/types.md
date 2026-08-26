@@ -23,6 +23,18 @@ This page documents currently listed primitive and numeric type ideas.
 - `bool` with values `true` and `false`
 - Draft distinction: `bool` is logical, while `u1` participates in integer arithmetic.
 
+## Tuples
+
+Tuples are anonymous positional product types written as `(T1, T2, ...)`:
+
+```xe
+(u32, u32) pair = (10, 20);
+u32 x = pair.0;
+u32 y = pair.1;
+```
+
+Tuples are nameless (fields are accessed strictly by 0-based index or via destructuring `u32 x, u32 y = pair`). Multiple function returns (`fn foo() -> u32 x, u32 y`) evaluate to tuple types under the hood.
+
 ## Related pages
 
 - [Operators](operators.md)
