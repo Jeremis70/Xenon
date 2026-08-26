@@ -48,7 +48,7 @@ Open `http://localhost:3000` in VS Code Simple Browser (or any browser).
 - [x] Build system (Cargo workspace)
 - [ ] Structs/enums details (no doc yet)
 - [ ] Modules/imports details (no doc yet)
-- [ ] Memory model / ownership / references (no doc yet)
+- [ ] Memory model / ownership / references (pointer and reference syntax draft documented; full semantics pending)
 - [ ] Standard library overview (no doc yet)
 - [ ] Formatter (no doc yet)
 - [ ] Linter (no doc yet)
