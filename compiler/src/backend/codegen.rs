@@ -446,33 +446,18 @@ impl<'ctx, 'a> CodeGen<'ctx, 'a> {
             }
         }
 
-        // If the body didn't end with an explicit `return`, either emit an
-        // implicit return from the named return variable, or report an error.
+        // If the body didn't end with an explicit `return`, report an error.
+        // Named return variables are still usable as locals but do not
+        // produce an implicit return — every path must end with `return`.
         let current_block = self
             .builder
             .get_insert_block()
             .ok_or(CodegenError::InvalidIrState("no insert block after body"))?;
         if current_block.get_terminator().is_none() {
-            let Some(ret_name) = &f.return_type.name else {
-                return Err(CodegenError::MissingReturn {
-                    name: f.name.clone(),
-                    span: f.span,
-                });
-            };
-            let (ptr, ty, _) =
-                self.lookup_variable(ret_name.as_str())
-                    .ok_or(CodegenError::InvalidIrState(
-                        "named return variable missing from variable map",
-                    ))?;
-            let val = self
-                .builder
-                .build_load(*ty, *ptr, ret_name)
-                .map_err(llvm_err!("build_load (implicit return)"))?
-                .as_basic_value_enum();
-            let val = self.coerce_basic_to_target(val, ret_ty, &f.return_type.ty)?;
-            self.builder
-                .build_return(Some(&val))
-                .map_err(llvm_err!("build_return (implicit)"))?;
+            return Err(CodegenError::MissingReturn {
+                name: f.name.clone(),
+                span: f.span,
+            });
         }
 
         Ok(fn_val)

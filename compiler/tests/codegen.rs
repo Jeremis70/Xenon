@@ -40,42 +40,82 @@ fn compile_to_ir(src: &str) -> String {
 
 // ── Named return variable ─────────────────────────────────────────────────────
 
-/// The named return variable is recognised as a writable variable inside the body.
+/// Named return variables require an explicit `return` — implicit return
+/// from a named variable is no longer supported.
 #[test]
 fn named_return_var_compiles_without_error() {
-    compile_to_ir("fn add(u32 x, u32 y)->u32 sum { sum = x + y; }");
+    compile_to_ir("fn add(u32 x, u32 y)->u32 sum { sum = x + y; return sum; }");
 }
 
-/// Without an explicit `return`, the compiler emits an implicit `ret` that
-/// loads and returns the named variable.
+/// An explicit `return` with a named return variable emits a `ret`.
 #[test]
-fn named_return_var_implicit_return_emits_ret() {
-    let ir = compile_to_ir("fn add(u32 x, u32 y)->u32 sum { sum = x + y; }");
+fn named_return_var_explicit_return_emits_ret() {
+    let ir = compile_to_ir("fn add(u32 x, u32 y)->u32 sum { sum = x + y; return sum; }");
     assert!(
         ir.contains("ret i32"),
         "expected ret instruction in IR:\n{ir}"
     );
 }
 
-/// The named return variable is zero-initialised on function entry, so a
-/// function that never assigns it still returns a deterministic value.
+/// The named return variable is zero-initialised on function entry.
 #[test]
 fn named_return_var_is_zero_initialized() {
-    let ir = compile_to_ir("fn f()->u32 result { }");
+    let ir = compile_to_ir("fn f()->u32 result { return result; }");
     assert!(
         ir.contains("store i32 0"),
         "expected zero-init store in IR:\n{ir}"
     );
 }
 
-/// An explicit `return` still works correctly when a named return variable is
-/// present — the two styles must coexist.
+/// Returning an expression directly (without assigning to a named variable)
+/// compiles and emits the expected `ret`.
 #[test]
-fn named_return_var_explicit_return_still_works() {
-    let ir = compile_to_ir("fn add(u32 x, u32 y)->u32 sum { sum = x + y; return sum; }");
+fn named_return_with_expression_return() {
+    let ir = compile_to_ir("fn add(u32 x, u32 y)->u32 sum { return x + y; }");
     assert!(
         ir.contains("ret i32"),
         "expected ret instruction in IR:\n{ir}"
+    );
+}
+
+/// A named return variable without an explicit `return` must produce a
+/// `MissingReturn` error — implicit return is no longer supported.
+#[test]
+fn named_return_without_explicit_return_errors() {
+    use xenonc::error::CodegenError;
+
+    let tokens = xenonc::frontend::lexer::lex("fn add(u32 x, u32 y)->u32 sum { sum = x + y; }")
+        .expect("lexing should succeed");
+    let mut parser = Parser::new(&tokens);
+    let program = parser.parse_program().expect("parsing should succeed");
+    let program = fold_constants(program).expect("fold should succeed");
+
+    Target::initialize_native(&InitializationConfig::default())
+        .expect("native target init should succeed");
+    let triple = TargetMachine::get_default_triple();
+    let target = Target::from_triple(&triple).expect("target from triple should succeed");
+    let cpu = TargetMachine::get_host_cpu_name().to_string();
+    let features = TargetMachine::get_host_cpu_features().to_string();
+    let tm = target
+        .create_target_machine(
+            &triple,
+            &cpu,
+            &features,
+            OptimizationLevel::None,
+            RelocMode::Default,
+            CodeModel::Default,
+        )
+        .expect("target machine creation should succeed");
+
+    let context = Context::create();
+    let cg = CodeGen::new(&context, "test", tm.get_target_data(), false, &program);
+    let err = cg
+        .compile_program()
+        .expect_err("codegen should fail with MissingReturn");
+
+    assert!(
+        matches!(err, CodegenError::MissingReturn { ref name, .. } if name == "add"),
+        "expected MissingReturn for function `add`, got: {err}"
     );
 }
 
@@ -98,7 +138,7 @@ fn unnamed_return_explicit_return_unaffected() {
 /// `if_merge` block that both sides branch to.
 #[test]
 fn if_only_emits_then_else_and_merge_blocks() {
-    let ir = compile_to_ir("fn f(u1 x)->u32 result { if x { result = 1; } }");
+    let ir = compile_to_ir("fn f(u1 x)->u32 result { if x { result = 1; } return result; }");
     assert!(ir.contains("then:"), "expected then block:\n{ir}");
     assert!(ir.contains("else:"), "expected else block:\n{ir}");
     assert!(ir.contains("if_merge:"), "expected if_merge block:\n{ir}");
@@ -119,7 +159,7 @@ fn if_all_branches_return_omits_merge_block() {
 /// comparison) must be used directly — no redundant `icmp ne ..., false` wrapper.
 #[test]
 fn if_comparison_condition_has_no_redundant_icmp() {
-    let ir = compile_to_ir("fn f(u32 x)->u32 result { if x == 0 { result = 1; } }");
+    let ir = compile_to_ir("fn f(u32 x)->u32 result { if x == 0 { result = 1; } return result; }");
     // There must be exactly one `icmp` — the comparison itself.
     let icmp_count = ir.matches("icmp").count();
     assert_eq!(
@@ -160,10 +200,10 @@ fn multiple_else_if_clauses_all_blocks_have_predecessors() {
 }
 
 /// The `if` codegen integrates with the named-return-variable feature:
-/// assigning inside an `if` body and relying on the implicit return must work.
+/// assigning inside an `if` body and using an explicit return must work.
 #[test]
 fn if_body_can_assign_named_return_variable() {
-    let ir = compile_to_ir("fn f(u1 x)->u32 result { if x { result = 42; } }");
+    let ir = compile_to_ir("fn f(u1 x)->u32 result { if x { result = 42; } return result; }");
     assert!(ir.contains("ret i32"), "expected ret instruction:\n{ir}");
 }
 
@@ -172,7 +212,9 @@ fn if_body_can_assign_named_return_variable() {
 /// store/ret past the merge.
 #[test]
 fn statements_after_if_are_emitted_in_merge_block() {
-    let ir = compile_to_ir("fn f(u1 x)->u32 result { if x { result = 1; } result = 99; }");
+    let ir = compile_to_ir(
+        "fn f(u1 x)->u32 result { if x { result = 1; } result = 99; return result; }",
+    );
     // The final assignment into 'result' and the implicit return must be present.
     assert!(ir.contains("store"), "expected store instructions:\n{ir}");
     assert!(ir.contains("ret i32"), "expected ret instruction:\n{ir}");
@@ -238,7 +280,7 @@ fn explicit_return_terminates_function() {
 /// in the IR — the dead block should be removed entirely.
 #[test]
 fn infinite_loop_omits_loop_after_block() {
-    let ir = compile_to_ir("fn f()->u32 result { loop { result = 1; } }");
+    let ir = compile_to_ir("fn f()->u32 result { loop { result = 1; } return result; }");
     assert!(
         !ir.contains("loop_after"),
         "dead loop_after block should be removed:\n{ir}"
@@ -248,7 +290,7 @@ fn infinite_loop_omits_loop_after_block() {
 /// An infinite `loop` produces a `loop_body` block with a back-edge to itself.
 #[test]
 fn infinite_loop_body_block_has_back_edge() {
-    let ir = compile_to_ir("fn f()->u32 result { loop { result = 1; } }");
+    let ir = compile_to_ir("fn f()->u32 result { loop { result = 1; } return result; }");
     assert!(ir.contains("loop_body"), "expected loop_body block:\n{ir}");
     // The back-edge unconditional branch back to loop_body must appear.
     assert!(
@@ -278,7 +320,9 @@ fn loop_with_break_emits_loop_after_block() {
 #[test]
 fn continue_in_infinite_loop_branches_to_loop_body() {
     // Uses a named return so the function is valid without an explicit return.
-    let ir = compile_to_ir("fn f()->u32 result { loop { if result == 0 { continue; } break 1; } }");
+    let ir = compile_to_ir(
+        "fn f()->u32 result { loop { if result == 0 { continue; } break 1; } return result; }",
+    );
     assert!(
         ir.contains("br label %loop_body"),
         "expected continue to branch back to loop_body:\n{ir}"
@@ -291,7 +335,8 @@ fn continue_in_infinite_loop_branches_to_loop_body() {
 /// before the body and also as the back-edge target for `continue`.
 #[test]
 fn while_loop_emits_loop_cond_block() {
-    let ir = compile_to_ir("fn f()->u32 result { while result == 0 { result = 1; } }");
+    let ir =
+        compile_to_ir("fn f()->u32 result { while result == 0 { result = 1; } return result; }");
     assert!(ir.contains("loop_cond:"), "expected loop_cond block:\n{ir}");
     assert!(ir.contains("loop_body:"), "expected loop_body block:\n{ir}");
     assert!(
@@ -303,7 +348,8 @@ fn while_loop_emits_loop_cond_block() {
 /// The `while` entry edge must jump to `loop_cond`, not directly to `loop_body`.
 #[test]
 fn while_loop_entry_branches_to_cond_first() {
-    let ir = compile_to_ir("fn f()->u32 result { while result == 0 { result = 1; } }");
+    let ir =
+        compile_to_ir("fn f()->u32 result { while result == 0 { result = 1; } return result; }");
     // The entry block unconditionally branches to loop_cond (pre-check).
     assert!(
         ir.contains("br label %loop_cond"),
@@ -315,7 +361,8 @@ fn while_loop_entry_branches_to_cond_first() {
 /// becomes true —  the conditional branch must still exit to `loop_after`.
 #[test]
 fn until_loop_exits_when_condition_becomes_true() {
-    let ir = compile_to_ir("fn f()->u32 result { until result == 5 { result = 5; } }");
+    let ir =
+        compile_to_ir("fn f()->u32 result { until result == 5 { result = 5; } return result; }");
     assert!(ir.contains("loop_cond:"), "expected loop_cond block:\n{ir}");
     assert!(
         ir.contains("loop_after:"),
@@ -334,7 +381,9 @@ fn until_loop_exits_when_condition_becomes_true() {
 /// that the body always executes at least once.
 #[test]
 fn do_while_loop_emits_cond_after_body() {
-    let ir = compile_to_ir("fn f()->u32 result { do { result = result + 1; } while result == 0 }");
+    let ir = compile_to_ir(
+        "fn f()->u32 result { do { result = result + 1; } while result == 0 return result; }",
+    );
     // Entry must jump directly to loop_body, not loop_cond.
     assert!(ir.contains("loop_body:"), "expected loop_body block:\n{ir}");
     assert!(ir.contains("loop_cond:"), "expected loop_cond block:\n{ir}");
@@ -351,7 +400,9 @@ fn do_while_loop_emits_cond_after_body() {
 /// condition first becomes true.
 #[test]
 fn do_until_loop_emits_cond_after_body() {
-    let ir = compile_to_ir("fn f()->u32 result { do { result = result + 1; } until result == 5 }");
+    let ir = compile_to_ir(
+        "fn f()->u32 result { do { result = result + 1; } until result == 5 return result; }",
+    );
     assert!(ir.contains("loop_body:"), "expected loop_body block:\n{ir}");
     assert!(ir.contains("loop_cond:"), "expected loop_cond block:\n{ir}");
     let body_pos = ir.find("loop_body:").expect("loop_body must exist");
@@ -539,8 +590,9 @@ fn outer_variable_is_unchanged_after_if_block() {
     // `result` is in outer scope.  Inside the if, a *new* `result` is declared
     // but it is scoped to the branch and must not overwrite the outer one.
     // After the if, the outer `result` (= 99) is what gets returned.
-    let ir =
-        compile_to_ir("fn f(u1 cond)->u32 result { result = 99; if cond { u32 result = 42; } }");
+    let ir = compile_to_ir(
+        "fn f(u1 cond)->u32 result { result = 99; if cond { u32 result = 42; } return result; }",
+    );
     // The function must still compile and contain a `ret i32`.
     assert!(
         ir.contains("ret i32"),
@@ -593,8 +645,9 @@ fn loop_body_variable_is_not_visible_after_loop() {
 #[test]
 fn inner_scope_does_not_pollute_outer() {
     // After the if, `result` (named return, outer scope) must still be 10.
-    let ir =
-        compile_to_ir("fn f(u1 cond)->u32 result { result = 10; if cond { u32 result = 99; } }");
+    let ir = compile_to_ir(
+        "fn f(u1 cond)->u32 result { result = 10; if cond { u32 result = 99; } return result; }",
+    );
     assert!(
         ir.contains("ret i32"),
         "expected function to compile:\n{ir}"

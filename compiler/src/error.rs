@@ -67,7 +67,7 @@ pub enum CodegenError {
     TargetMachineCreation,
     #[error("output file error: {0}")]
     OutputFile(String),
-    #[error("function `{name}` has no return statement and no named return variable at {span:?}")]
+    #[error("function `{name}` is missing a return statement at {span:?}")]
     MissingReturn { name: String, span: Span },
     #[error("division by zero at {span:?}")]
     DivisionByZero { span: Span },
