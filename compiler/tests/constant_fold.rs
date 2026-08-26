@@ -127,11 +127,6 @@ fn fold_mod_by_zero_is_error() {
 }
 
 #[test]
-fn fold_pow() {
-    assert_eq!(fold(binop(int(2), BinOp::Pow, int(10))), int(1024));
-}
-
-#[test]
 fn fold_lshift() {
     assert_eq!(fold(binop(int(1), BinOp::LShift, int(4))), int(16));
 }

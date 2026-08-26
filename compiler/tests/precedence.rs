@@ -83,14 +83,6 @@ fn mod_binds_tighter_than_sub() {
 }
 
 #[test]
-fn pow_binds_tighter_than_mul() {
-    assert_eq!(
-        parse_expr("2 ** 3 * 4"),
-        binop(binop(int(2), BinOp::Pow, int(3)), BinOp::Mul, int(4))
-    );
-}
-
-#[test]
 fn add_binds_tighter_than_lshift() {
     assert_eq!(
         parse_expr("1 + 2 << 3"),
@@ -419,14 +411,6 @@ fn logical_or_is_left_associative() {
 }
 
 #[test]
-fn pow_is_right_associative() {
-    assert_eq!(
-        parse_expr("2 ** 3 ** 4"),
-        binop(int(2), BinOp::Pow, binop(int(3), BinOp::Pow, int(4)))
-    );
-}
-
-#[test]
 fn parens_override_mul_over_add() {
     assert_eq!(
         parse_expr("(1 + 2) * 3"),
@@ -439,14 +423,6 @@ fn parens_on_rhs_override_precedence() {
     assert_eq!(
         parse_expr("2 * (3 + 4)"),
         binop(int(2), BinOp::Mul, binop(int(3), BinOp::Add, int(4)))
-    );
-}
-
-#[test]
-fn parens_override_pow_right_associativity() {
-    assert_eq!(
-        parse_expr("(2 ** 3) ** 4"),
-        binop(binop(int(2), BinOp::Pow, int(3)), BinOp::Pow, int(4))
     );
 }
 

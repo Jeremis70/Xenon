@@ -178,7 +178,6 @@ fn eval_binop(op: &BinOp, a: &BigInt, b: &BigInt, span: Span) -> FoldResult<Opti
                 Ok(Some(a % b))
             }
         }
-        BinOp::Pow => Ok(b.to_u32().map(|e| a.pow(e))),
         BinOp::LShift => Ok(b.to_u64().map(|s| a << s)),
         BinOp::RShift => Ok(b.to_u64().map(|s| a >> s)),
         BinOp::BitwiseAnd => Ok(Some(a & b)),

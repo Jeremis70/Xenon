@@ -19,8 +19,6 @@ fn lbp(kind: &TokenKind) -> Option<u8> {
         TokenKind::LShift | TokenKind::RShift => Some(17),
         TokenKind::Plus | TokenKind::Minus => Some(19),
         TokenKind::Star | TokenKind::Slash | TokenKind::Percent => Some(21),
-        // right-associative: left_bp > right_bp
-        TokenKind::Pow => Some(24),
         // ternary `x if c else y` — looser than all binary operators
         TokenKind::If => Some(0),
         _ => None,
@@ -49,8 +47,6 @@ fn infix_op(kind: &TokenKind) -> Option<(u8, BinOp)> {
         TokenKind::Star => Some((22, BinOp::Mul)),
         TokenKind::Slash => Some((22, BinOp::Div)),
         TokenKind::Percent => Some((22, BinOp::Mod)),
-        // Right associative operator: left_bp > right_bp
-        TokenKind::Pow => Some((23, BinOp::Pow)),
         _ => None,
     }
 }
@@ -252,7 +248,6 @@ impl<'a> Parser<'a> {
                         TokenKind::StarEq,
                         TokenKind::SlashEq,
                         TokenKind::PercentEq,
-                        TokenKind::PowEq,
                         TokenKind::AndEq,
                         TokenKind::OrEq,
                         TokenKind::XorEq,

@@ -135,12 +135,6 @@ fn parse_compound_mod_assign_desugars_to_binop() {
 }
 
 #[test]
-fn parse_compound_pow_assign_desugars_to_binop() {
-    let stmt = parse_single_assign("fn f()->u32{x **= 2;}");
-    assert_desugared(&stmt, "x", BinOp::Pow, 2);
-}
-
-#[test]
 fn parse_compound_bitand_assign_desugars_to_binop() {
     let stmt = parse_single_assign("fn f()->u32{x &= 5;}");
     assert_desugared(&stmt, "x", BinOp::BitwiseAnd, 5);

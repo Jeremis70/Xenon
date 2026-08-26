@@ -461,20 +461,6 @@ fn infer_binop(
     span: crate::frontend::tokens::Span,
 ) -> SemanticResult<Type> {
     match op {
-        BinOp::Pow => {
-            if is_float_type(&lhs_ty)
-                || is_float_type(&rhs_ty)
-                || matches!(lhs_ty, Type::Float64)
-                || matches!(rhs_ty, Type::Float64)
-            {
-                return Err(SemanticError::InvalidOperands {
-                    op: "**".to_owned(),
-                    detail: "integer-only in this version".to_owned(),
-                    span,
-                });
-            }
-            unify_arithmetic(lhs_ty, rhs_ty, span)
-        }
         BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
             unify_arithmetic(lhs_ty, rhs_ty, span)
         }
