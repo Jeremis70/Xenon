@@ -1,0 +1,88 @@
+// Zed tasks for the Xenon compiler (xenonc)
+// Open with the task runner (default keybinding: alt-t / cmd-shift-t) or
+// via the command palette: "task: spawn".
+[
+  {
+    "label": "Watch: check xenonc",
+    "command": "cargo",
+    "args": ["watch", "-c", "-x", "check -p xenonc"],
+    "use_new_terminal": true,
+    "allow_concurrent_runs": false,
+    "reveal": "always"
+  },
+  {
+    "label": "Format all",
+    "command": "cargo",
+    "args": ["fmt", "--all"],
+    "use_new_terminal": false,
+    "allow_concurrent_runs": false,
+    "reveal": "always",
+    "hide": "on_success"
+  },
+  {
+    "label": "Build xenonc",
+    "command": "cargo",
+    "args": ["build", "-p", "xenonc"],
+    "use_new_terminal": false,
+    "allow_concurrent_runs": false,
+    "reveal": "always",
+    "hide": "on_success"
+  },
+  {
+    "label": "Clippy (deny warnings)",
+    "command": "cargo",
+    "args": [
+      "clippy",
+      "--workspace",
+      "--all-targets",
+      "--all-features",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "use_new_terminal": false,
+    "allow_concurrent_runs": false,
+    "reveal": "always",
+    "hide": "on_success"
+  },
+  {
+    "label": "Test xenonc",
+    "command": "cargo",
+    "args": ["test", "-p", "xenonc"],
+    "use_new_terminal": false,
+    "allow_concurrent_runs": false,
+    "reveal": "always",
+    "hide": "on_success"
+  },
+  {
+    "label": "Compile tests/main.xe",
+    "command": "cargo",
+    "args": [
+      "run",
+      "-p",
+      "xenonc",
+      "--",
+      "compile",
+      "tests/main.xe",
+      "--out-dir",
+      "xenon-build/"
+    ],
+    "use_new_terminal": false,
+    "allow_concurrent_runs": false,
+    "reveal": "always"
+  },
+  {
+    "label": "Run compiled output",
+    "command": "./xenon-build/out; echo \"Exit code: $status\"",
+    "use_new_terminal": false,
+    "allow_concurrent_runs": false,
+    "reveal": "always"
+  },
+  {
+    "label": "Compile + Run main.xe",
+    "command": "cargo run -p xenonc -- compile tests/main.xe --out-dir xenon-build/; and ./xenon-build/out; echo \"Exit code: $status\"",
+    "use_new_terminal": false,
+    "allow_concurrent_runs": false,
+    "reveal": "always"
+  }
+]
