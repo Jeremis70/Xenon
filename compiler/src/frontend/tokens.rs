@@ -25,7 +25,6 @@ impl TokenKind {
                 | TokenKind::StarEq
                 | TokenKind::SlashEq
                 | TokenKind::PercentEq
-                | TokenKind::PowEq
                 | TokenKind::AndEq
                 | TokenKind::OrEq
                 | TokenKind::XorEq
@@ -84,7 +83,6 @@ pub enum TokenKind {
     XorEq,
     LShiftEq,
     RShiftEq,
-    PowEq,
     PercentEq,
     PlusPlus,
     MinusMinus,
@@ -99,7 +97,6 @@ pub enum TokenKind {
     XorXor,
     LShift,
     RShift,
-    Pow,
     // Single-char operators
     Eq,
     Lt,
@@ -237,8 +234,6 @@ enum RawKind {
     LShiftEq,
     #[token(">>=")]
     RShiftEq,
-    #[token("**=")]
-    PowEq,
     #[token("++")]
     PlusPlus,
     #[token("--")]
@@ -282,8 +277,6 @@ enum RawKind {
     LShift,
     #[token(">>")]
     RShift,
-    #[token("**")]
-    Pow,
     // ---------- Single-char operators ----------
     #[token("=")]
     Eq,
@@ -399,7 +392,6 @@ fn into_token_parts(raw: RawKind) -> (TokenKind, Option<TokenValue>) {
         RawKind::XorEq => (TokenKind::XorEq, None),
         RawKind::LShiftEq => (TokenKind::LShiftEq, None),
         RawKind::RShiftEq => (TokenKind::RShiftEq, None),
-        RawKind::PowEq => (TokenKind::PowEq, None),
         RawKind::PercentEq => (TokenKind::PercentEq, None),
 
         RawKind::PlusPlus => (TokenKind::PlusPlus, None),
@@ -414,7 +406,6 @@ fn into_token_parts(raw: RawKind) -> (TokenKind, Option<TokenValue>) {
         RawKind::XorXor => (TokenKind::XorXor, None),
         RawKind::LShift => (TokenKind::LShift, None),
         RawKind::RShift => (TokenKind::RShift, None),
-        RawKind::Pow => (TokenKind::Pow, None),
         RawKind::Eq => (TokenKind::Eq, None),
         RawKind::Lt => (TokenKind::Lt, None),
         RawKind::Gt => (TokenKind::Gt, None),

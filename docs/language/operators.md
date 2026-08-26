@@ -11,7 +11,6 @@ This page lists currently documented operator families and overflow suffix modes
 | `*`      | Multiplication |
 | `/`      | Division       |
 | `%`      | Modulo         |
-| `**`     | Exponentiation |
 
 ## Bitwise
 

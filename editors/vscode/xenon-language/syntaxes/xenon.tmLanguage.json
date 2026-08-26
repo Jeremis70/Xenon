@@ -122,9 +122,9 @@
           "match": "<<|>>"
         },
         {
-          "comment": "Multi-char arithmetic: exponent, increment, decrement.",
+          "comment": "Multi-char arithmetic: increment, decrement.",
           "name": "keyword.operator.arithmetic.xenon",
-          "match": "\\*\\*|\\+\\+|--"
+          "match": "\\+\\+|--"
         },
         {
           "comment": "Plain assignment — negative lookahead excludes ==.",
