@@ -110,6 +110,7 @@ pub enum TokenKind {
     And,
     Or,
     Xor,
+    At,
     Percent,
     // Value-bearing
     Ident,
@@ -305,7 +306,8 @@ enum RawKind {
     Or,
     #[token("^")]
     Xor,
-
+    #[token("@")]
+    At,
     // ---------- Literals ----------
     // Integer: decimal, hex (0x), binary (0b), octal (0o)
     #[regex(r"0[xX][0-9a-fA-F]+|0[bB][01]+|0[oO][0-7]+|[0-9]+", parse_int)]
@@ -419,6 +421,7 @@ fn into_token_parts(raw: RawKind) -> (TokenKind, Option<TokenValue>) {
         RawKind::Or => (TokenKind::Or, None),
         RawKind::Xor => (TokenKind::Xor, None),
         RawKind::Percent => (TokenKind::Percent, None),
+        RawKind::At => (TokenKind::At, None),
         RawKind::Ident(s) => (TokenKind::Ident, Some(TokenValue::Ident(s))),
         RawKind::Int(v) => (TokenKind::Int, Some(TokenValue::Int(v))),
         RawKind::Str(s) => (TokenKind::Str, Some(TokenValue::Str(s))),
