@@ -57,9 +57,9 @@ fn lex_string_literal_strip_quotes_no_decode() {
 
 #[test]
 fn lex_invalid_input_returns_error() {
-    let err = lex("fn @").expect_err("lexing should fail on invalid token");
+    let err = lex("fn ¸").expect_err("lexing should fail on invalid token");
 
-    assert_eq!(err.span, Span { start: 3, end: 4 });
+    assert_eq!(err.span, Span { start: 3, end: 5 });
 }
 
 #[test]
