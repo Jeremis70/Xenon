@@ -190,7 +190,8 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_type(&self, token: &Token) -> ParseResult<Type> {
+    fn parse_type(&mut self) -> ParseResult<Type> {
+        let token = self.expect(TokenKind::Ident)?;
         token
             .ident_value()?
             .parse::<Type>()
@@ -202,20 +203,11 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_statement(&mut self) -> ParseResult<Stmt> {
-        let first_token = self.expect([
-            TokenKind::Return,
-            TokenKind::Ident,
-            TokenKind::If,
-            TokenKind::Loop,
-            TokenKind::While,
-            TokenKind::Do,
-            TokenKind::Until,
-            TokenKind::Break,
-            TokenKind::Continue,
-        ])?;
-        let start = first_token.span.start;
-        match first_token.kind {
+        let first = self.peek().ok_or_else(|| self.error("expected statement"))?;
+        let start = first.span.start;
+        match first.kind {
             TokenKind::Return => {
+                self.advance();
                 let expr = self.parse_expression()?;
                 self.expect(TokenKind::Semicolon)?;
                 Ok(Stmt {
@@ -227,10 +219,12 @@ impl<'a> Parser<'a> {
                 })
             }
             TokenKind::Ident => {
-                if self.peek().is_some_and(|t| t.kind == TokenKind::LParen) {
-                    // Ident followed by `(` is a function call statement
+                let next_kind = self.tokens.get(self.position + 1).map(|t| t.kind);
+                if next_kind == Some(TokenKind::LParen) {
+                    // Function call statement
+                    let name_token = self.expect(TokenKind::Ident)?;
                     let call_expr =
-                        self.parse_call(first_token.ident_value()?.to_string(), start)?;
+                        self.parse_call(name_token.ident_value()?.to_string(), start)?;
                     self.expect(TokenKind::Semicolon)?;
                     Ok(Stmt {
                         kind: StmtKind::Expr(Box::new(call_expr)),
@@ -239,9 +233,14 @@ impl<'a> Parser<'a> {
                             end: self.prev_span().end,
                         },
                     })
-                } else {
-                    let second_token = self.expect([
-                        TokenKind::Ident,
+                } else if next_kind == Some(TokenKind::Ident) {
+                    // Variable declaration: type name = expr;
+                    self.parse_var_decl(start)
+                } else if next_kind.is_some_and(|k| k.is_assign_op()) {
+                    // Assignment or compound assignment
+                    let name_token = self.expect(TokenKind::Ident)?;
+                    let name = name_token.ident_value()?.to_string();
+                    let assign_token = self.expect([
                         TokenKind::Eq,
                         TokenKind::PlusEq,
                         TokenKind::MinusEq,
@@ -256,18 +255,21 @@ impl<'a> Parser<'a> {
                         TokenKind::PlusPlus,
                         TokenKind::MinusMinus,
                     ])?;
-                    match second_token.kind {
-                        TokenKind::Ident => self.parse_var_decl(first_token, second_token, start),
-                        kind if kind.is_assign_op() => {
-                            let name = first_token.ident_value()?.to_string();
-                            self.parse_var_assign(name, &kind, first_token.span)
-                        }
-                        _ => unreachable!("expect guarantees valid second token"),
-                    }
+                    self.parse_var_assign(name, &assign_token.kind, name_token.span)
+                } else {
+                    // Consume the ident so the error points at the unexpected token
+                    self.advance();
+                    Err(self.error(
+                        "expected '(', identifier, or assignment operator after identifier",
+                    ))
                 }
             }
-            TokenKind::If => self.parse_if(start),
+            TokenKind::If => {
+                self.advance();
+                self.parse_if(start)
+            }
             TokenKind::Loop => {
+                self.advance();
                 let loop_expr = self.parse_loop(start)?;
                 Ok(Stmt {
                     span: loop_expr.span,
@@ -275,6 +277,7 @@ impl<'a> Parser<'a> {
                 })
             }
             TokenKind::While | TokenKind::Do | TokenKind::Until => {
+                let first_token = self.advance().ok_or_else(|| self.error("expected token"))?;
                 let loop_expr = self.parse_cond_loop(first_token, start)?;
                 Ok(Stmt {
                     span: loop_expr.span,
@@ -282,6 +285,7 @@ impl<'a> Parser<'a> {
                 })
             }
             TokenKind::Break => {
+                self.advance();
                 let value = if self.peek().is_some_and(|t| t.kind != TokenKind::Semicolon) {
                     Some(Box::new(self.parse_expression()?))
                 } else {
@@ -297,6 +301,7 @@ impl<'a> Parser<'a> {
                 })
             }
             TokenKind::Continue => {
+                self.advance();
                 self.expect(TokenKind::Semicolon)?;
                 Ok(Stmt {
                     kind: StmtKind::Continue,
@@ -306,21 +311,21 @@ impl<'a> Parser<'a> {
                     },
                 })
             }
-            _ => unreachable!(
-                "expect guarantees token is Return, Ident, If, Loop, Break, or Continue"
-            ),
+            _ => Err(self.error("expected statement")),
         }
     }
 
-    fn parse_typed_binding(&self, type_token: &Token, name_token: &Token) -> ParseResult<Binding> {
-        let ty = self.parse_type(type_token)?;
+    fn parse_typed_binding(&mut self) -> ParseResult<Binding> {
+        let start = self.peek().map(|t| t.span.start).unwrap_or(0);
+        let ty = self.parse_type()?;
+        let name_token = self.expect(TokenKind::Ident)?;
         let name = name_token.ident_value()?.to_string();
         Ok(Binding {
             name: Some(name),
             ty,
             default: None,
             span: Span {
-                start: type_token.span.start,
+                start,
                 end: name_token.span.end,
             },
         })
@@ -417,13 +422,8 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_var_decl(
-        &mut self,
-        type_token: &Token,
-        name_token: &Token,
-        start: usize,
-    ) -> ParseResult<Stmt> {
-        let mut binding = self.parse_typed_binding(type_token, name_token)?;
+    fn parse_var_decl(&mut self, start: usize) -> ParseResult<Stmt> {
+        let mut binding = self.parse_typed_binding()?;
         self.expect(TokenKind::Eq)?;
         binding.default = Some(Box::new(self.parse_expression()?));
         self.expect(TokenKind::Semicolon)?;
@@ -437,18 +437,30 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_return_type(&mut self) -> ParseResult<Binding> {
-        let type_token = self.expect(TokenKind::Ident)?;
-        let ty = self.parse_type(type_token)?;
+        let start = self.peek().map(|t| t.span.start).unwrap_or(0);
+        let ty = self.parse_type()?;
         Ok(match self.peek() {
             Some(t) if t.kind == TokenKind::Ident => {
                 let name_token = self.expect(TokenKind::Ident)?;
-                self.parse_typed_binding(type_token, name_token)?
+                let name = name_token.ident_value()?.to_string();
+                Binding {
+                    name: Some(name),
+                    ty,
+                    default: None,
+                    span: Span {
+                        start,
+                        end: name_token.span.end,
+                    },
+                }
             }
             _ => Binding {
                 name: None,
                 ty,
                 default: None,
-                span: type_token.span,
+                span: Span {
+                    start,
+                    end: self.prev_span().end,
+                },
             },
         })
     }
@@ -464,9 +476,7 @@ impl<'a> Parser<'a> {
             if !params.is_empty() {
                 self.expect(TokenKind::Comma)?;
             }
-            let type_token = self.expect(TokenKind::Ident)?;
-            let name_token = self.expect(TokenKind::Ident)?;
-            params.push(self.parse_typed_binding(type_token, name_token)?);
+            params.push(self.parse_typed_binding()?);
         }
         Ok(params)
     }
