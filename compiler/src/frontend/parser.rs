@@ -539,18 +539,9 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_expr(&mut self, min_bp: u8) -> ParseResult<Expr> {
-        let token = self.expect([
-            TokenKind::Int,
-            TokenKind::Float,
-            TokenKind::True,
-            TokenKind::False,
-            TokenKind::Ident,
-            TokenKind::Minus,
-            TokenKind::Bang,
-            TokenKind::Tilde,
-            TokenKind::LParen,
-            TokenKind::Loop,
-        ])?;
+        let token = self
+            .advance()
+            .ok_or_else(|| self.error("expected expression, found end of input"))?;
         let mut left = self.nud(token)?;
 
         while let Some(t) = self.peek() {
@@ -632,7 +623,10 @@ impl<'a> Parser<'a> {
                 })
             }
             TokenKind::Loop => self.parse_loop(start),
-            _ => Err(self.error(format!("unexpected token in expression: {:?}", token.kind))),
+            _ => Err(ParseError::new(
+                format!("Expected expression, found {:?}", token.kind),
+                token.span,
+            )),
         }
     }
 
