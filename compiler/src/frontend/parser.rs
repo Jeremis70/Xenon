@@ -93,6 +93,14 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Creates a span from `start` to the end of the most recently consumed token.
+    fn span_since(&self, start: usize) -> Span {
+        Span {
+            start,
+            end: self.prev_span().end,
+        }
+    }
+
     fn expect(&mut self, kinds: impl AsRef<[TokenKind]>) -> ParseResult<&'a Token> {
         let kinds = kinds.as_ref();
         let description = if kinds.len() == 1 {
@@ -140,10 +148,7 @@ impl<'a> Parser<'a> {
             self.expect(TokenKind::RBracket)?;
             attrs.push(Attribute {
                 name,
-                span: Span {
-                    start,
-                    end: self.prev_span().end,
-                },
+                span: self.span_since(start),
             });
         }
         Ok(attrs)
@@ -171,10 +176,7 @@ impl<'a> Parser<'a> {
             return_type,
             body,
             attributes,
-            span: Span {
-                start,
-                end: self.prev_span().end,
-            },
+            span: self.span_since(start),
         })
     }
 
@@ -219,10 +221,7 @@ impl<'a> Parser<'a> {
                 self.expect(TokenKind::Semicolon)?;
                 Ok(Stmt {
                     kind: StmtKind::Return(Box::new(expr)),
-                    span: Span {
-                        start,
-                        end: self.prev_span().end,
-                    },
+                    span: self.span_since(start),
                 })
             }
             TokenKind::Ident => {
@@ -235,10 +234,7 @@ impl<'a> Parser<'a> {
                     self.expect(TokenKind::Semicolon)?;
                     Ok(Stmt {
                         kind: StmtKind::Expr(Box::new(call_expr)),
-                        span: Span {
-                            start,
-                            end: self.prev_span().end,
-                        },
+                        span: self.span_since(start),
                     })
                 } else if next_kind == Some(TokenKind::Ident) {
                     // Variable declaration: type name = expr;
@@ -305,10 +301,7 @@ impl<'a> Parser<'a> {
                 self.expect(TokenKind::Semicolon)?;
                 Ok(Stmt {
                     kind: StmtKind::Break(value),
-                    span: Span {
-                        start,
-                        end: self.prev_span().end,
-                    },
+                    span: self.span_since(start),
                 })
             }
             TokenKind::Continue => {
@@ -316,10 +309,7 @@ impl<'a> Parser<'a> {
                 self.expect(TokenKind::Semicolon)?;
                 Ok(Stmt {
                     kind: StmtKind::Continue,
-                    span: Span {
-                        start,
-                        end: self.prev_span().end,
-                    },
+                    span: self.span_since(start),
                 })
             }
             _ => Err(self.error("expected statement")),
@@ -348,10 +338,7 @@ impl<'a> Parser<'a> {
         self.expect(TokenKind::RBrace)?;
         Ok(Expr {
             kind: ExprKind::Loop { body },
-            span: Span {
-                start,
-                end: self.prev_span().end,
-            },
+            span: self.span_since(start),
         })
     }
 
@@ -370,10 +357,7 @@ impl<'a> Parser<'a> {
                         condition,
                         body,
                     },
-                    span: Span {
-                        start,
-                        end: self.prev_span().end,
-                    },
+                    span: self.span_since(start),
                 })
             }
             TokenKind::Do => {
@@ -390,10 +374,7 @@ impl<'a> Parser<'a> {
                         condition,
                         body,
                     },
-                    span: Span {
-                        start,
-                        end: self.prev_span().end,
-                    },
+                    span: self.span_since(start),
                 })
             }
             _ => unreachable!("expect guarantees token is While, Until, or Do"),
@@ -426,10 +407,7 @@ impl<'a> Parser<'a> {
                 then_branch,
                 else_branch,
             },
-            span: Span {
-                start,
-                end: self.prev_span().end,
-            },
+            span: self.span_since(start),
         })
     }
 
@@ -440,10 +418,7 @@ impl<'a> Parser<'a> {
         self.expect(TokenKind::Semicolon)?;
         Ok(Stmt {
             kind: StmtKind::VarDecl(binding),
-            span: Span {
-                start,
-                end: self.prev_span().end,
-            },
+            span: self.span_since(start),
         })
     }
 
@@ -468,10 +443,7 @@ impl<'a> Parser<'a> {
                 name: None,
                 ty,
                 default: None,
-                span: Span {
-                    start,
-                    end: self.prev_span().end,
-                },
+                span: self.span_since(start),
             },
         })
     }
@@ -616,10 +588,7 @@ impl<'a> Parser<'a> {
                 self.expect(TokenKind::RParen)?;
                 Ok(Expr {
                     kind: expr.kind,
-                    span: Span {
-                        start,
-                        end: self.prev_span().end,
-                    },
+                    span: self.span_since(start),
                 })
             }
             TokenKind::Loop => self.parse_loop(start),
@@ -686,10 +655,7 @@ impl<'a> Parser<'a> {
         self.expect(TokenKind::RParen)?;
         Ok(Expr {
             kind: ExprKind::Call { name, args },
-            span: Span {
-                start,
-                end: self.prev_span().end,
-            },
+            span: self.span_since(start),
         })
     }
 
