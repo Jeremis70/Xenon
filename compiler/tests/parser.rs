@@ -535,3 +535,80 @@ fn function_name_with_dot_is_rejected() {
         err.message
     );
 }
+
+// ── Pointer / Reference types ─────────────────────────────────────────────────
+
+#[test]
+fn parse_var_decl_pointer_type() {
+    let src = "fn f()->u32{ *i32 p = 0; return 0; }";
+    let tokens = lex(src).expect("lexing should succeed");
+    let mut parser = Parser::new(&tokens);
+    let program = parser.parse_program().expect("parsing should succeed");
+
+    match &program.functions[0].body[0].kind {
+        StmtKind::VarDecl(binding) => {
+            assert_eq!(binding.name.as_deref(), Some("p"));
+            assert_eq!(binding.ty, Type::Pointer(Box::new(Type::Int(32))));
+        }
+        other => panic!("expected VarDecl, got {:?}", other),
+    }
+}
+
+#[test]
+fn parse_var_decl_reference_type() {
+    let src = "fn f()->u32{ &i32 r = 0; return 0; }";
+    let tokens = lex(src).expect("lexing should succeed");
+    let mut parser = Parser::new(&tokens);
+    let program = parser.parse_program().expect("parsing should succeed");
+
+    match &program.functions[0].body[0].kind {
+        StmtKind::VarDecl(binding) => {
+            assert_eq!(binding.name.as_deref(), Some("r"));
+            assert_eq!(binding.ty, Type::Reference(Box::new(Type::Int(32))));
+        }
+        other => panic!("expected VarDecl, got {:?}", other),
+    }
+}
+
+#[test]
+fn parse_var_decl_nested_pointer_reference() {
+    let src = "fn f()->u32{ *&i32 p = 0; return 0; }";
+    let tokens = lex(src).expect("lexing should succeed");
+    let mut parser = Parser::new(&tokens);
+    let program = parser.parse_program().expect("parsing should succeed");
+
+    match &program.functions[0].body[0].kind {
+        StmtKind::VarDecl(binding) => {
+            assert_eq!(binding.name.as_deref(), Some("p"));
+            assert_eq!(
+                binding.ty,
+                Type::Pointer(Box::new(Type::Reference(Box::new(Type::Int(32)))))
+            );
+        }
+        other => panic!("expected VarDecl, got {:?}", other),
+    }
+}
+
+#[test]
+fn parse_function_with_pointer_param() {
+    let src = "fn f(*i32 p)->u32{ return 0; }";
+    let tokens = lex(src).expect("lexing should succeed");
+    let mut parser = Parser::new(&tokens);
+    let program = parser.parse_program().expect("parsing should succeed");
+
+    let f = &program.functions[0];
+    assert_eq!(f.params.len(), 1);
+    assert_eq!(f.params[0].name.as_deref(), Some("p"));
+    assert_eq!(f.params[0].ty, Type::Pointer(Box::new(Type::Int(32))));
+}
+
+#[test]
+fn parse_pointer_return_type() {
+    let src = "fn f()->*i32{ return 0; }";
+    let tokens = lex(src).expect("lexing should succeed");
+    let mut parser = Parser::new(&tokens);
+    let program = parser.parse_program().expect("parsing should succeed");
+
+    let f = &program.functions[0];
+    assert_eq!(f.return_type.ty, Type::Pointer(Box::new(Type::Int(32))));
+}

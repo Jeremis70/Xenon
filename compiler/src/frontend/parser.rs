@@ -191,11 +191,30 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_type(&mut self) -> ParseResult<Type> {
-        let token = self.expect(TokenKind::Ident)?;
-        token
-            .ident_value()?
-            .parse::<Type>()
-            .map_err(|e: TypeError| ParseError::new(e.to_string(), token.span))
+        let token = self.peek().ok_or_else(|| self.error("expected type"))?;
+        match token.kind {
+            TokenKind::Star => {
+                self.advance();
+                let inner = self.parse_type()?;
+                Ok(Type::Pointer(Box::new(inner)))
+            }
+            TokenKind::And => {
+                self.advance();
+                let inner = self.parse_type()?;
+                Ok(Type::Reference(Box::new(inner)))
+            }
+            TokenKind::Ident => {
+                let token = self.expect(TokenKind::Ident)?;
+                token
+                    .ident_value()?
+                    .parse::<Type>()
+                    .map_err(|e: TypeError| ParseError::new(e.to_string(), token.span))
+            }
+            _ => Err(ParseError::new(
+                format!("expected type, found {:?}", token.kind),
+                token.span,
+            )),
+        }
     }
 
     fn parse_expression(&mut self) -> ParseResult<Expr> {
@@ -263,6 +282,10 @@ impl<'a> Parser<'a> {
                         "expected '(', identifier, or assignment operator after identifier",
                     ))
                 }
+            }
+            TokenKind::Star | TokenKind::And => {
+                // Pointer/reference type var decl
+                self.parse_var_decl(start)
             }
             TokenKind::If => {
                 self.advance();
