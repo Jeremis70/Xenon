@@ -5,48 +5,36 @@ use crate::frontend::ast::{
 use crate::frontend::tokens::{Span, Token, TokenKind};
 use num_bigint::BigInt;
 
-/// Returns the left binding power for an infix operator token.
-fn lbp(kind: &TokenKind) -> Option<u8> {
-    match kind {
-        TokenKind::OrOr => Some(1),
-        TokenKind::XorXor => Some(3),
-        TokenKind::AndAnd => Some(5),
-        TokenKind::EqEq | TokenKind::NotEq => Some(7),
-        TokenKind::Or => Some(9),
-        TokenKind::Xor => Some(11),
-        TokenKind::And => Some(13),
-        TokenKind::Lt | TokenKind::Gt | TokenKind::LtEq | TokenKind::GtEq => Some(15),
-        TokenKind::LShift | TokenKind::RShift => Some(17),
-        TokenKind::Plus | TokenKind::Minus => Some(19),
-        TokenKind::Star | TokenKind::Slash | TokenKind::Percent => Some(21),
-        // ternary `x if c else y` — looser than all binary operators
-        TokenKind::If => Some(0),
-        _ => None,
-    }
+/// Binding powers and operator for a binary infix token.
+struct OpInfo {
+    left_bp: u8,
+    right_bp: u8,
+    op: BinOp,
 }
 
-/// Returns `(right_bp, op)` for tokens that map directly to a [`BinOp`].
-fn infix_op(kind: &TokenKind) -> Option<(u8, BinOp)> {
+/// Returns the [`OpInfo`] for binary infix operators.
+/// Ternary `if` is handled separately in `led`.
+fn infix_info(kind: &TokenKind) -> Option<OpInfo> {
     match kind {
-        TokenKind::OrOr => Some((2, BinOp::LogicalOr)),
-        TokenKind::XorXor => Some((4, BinOp::LogicalXor)),
-        TokenKind::AndAnd => Some((6, BinOp::LogicalAnd)),
-        TokenKind::EqEq => Some((8, BinOp::Eq)),
-        TokenKind::NotEq => Some((8, BinOp::NotEq)),
-        TokenKind::Or => Some((10, BinOp::BitwiseOr)),
-        TokenKind::Xor => Some((12, BinOp::BitwiseXor)),
-        TokenKind::And => Some((14, BinOp::BitwiseAnd)),
-        TokenKind::Lt => Some((16, BinOp::Lt)),
-        TokenKind::Gt => Some((16, BinOp::Gt)),
-        TokenKind::LtEq => Some((16, BinOp::LtEq)),
-        TokenKind::GtEq => Some((16, BinOp::GtEq)),
-        TokenKind::LShift => Some((18, BinOp::LShift)),
-        TokenKind::RShift => Some((18, BinOp::RShift)),
-        TokenKind::Plus => Some((20, BinOp::Add)),
-        TokenKind::Minus => Some((20, BinOp::Sub)),
-        TokenKind::Star => Some((22, BinOp::Mul)),
-        TokenKind::Slash => Some((22, BinOp::Div)),
-        TokenKind::Percent => Some((22, BinOp::Mod)),
+        TokenKind::OrOr => Some(OpInfo { left_bp: 1, right_bp: 2, op: BinOp::LogicalOr }),
+        TokenKind::XorXor => Some(OpInfo { left_bp: 3, right_bp: 4, op: BinOp::LogicalXor }),
+        TokenKind::AndAnd => Some(OpInfo { left_bp: 5, right_bp: 6, op: BinOp::LogicalAnd }),
+        TokenKind::EqEq => Some(OpInfo { left_bp: 7, right_bp: 8, op: BinOp::Eq }),
+        TokenKind::NotEq => Some(OpInfo { left_bp: 7, right_bp: 8, op: BinOp::NotEq }),
+        TokenKind::Or => Some(OpInfo { left_bp: 9, right_bp: 10, op: BinOp::BitwiseOr }),
+        TokenKind::Xor => Some(OpInfo { left_bp: 11, right_bp: 12, op: BinOp::BitwiseXor }),
+        TokenKind::And => Some(OpInfo { left_bp: 13, right_bp: 14, op: BinOp::BitwiseAnd }),
+        TokenKind::Lt => Some(OpInfo { left_bp: 15, right_bp: 16, op: BinOp::Lt }),
+        TokenKind::Gt => Some(OpInfo { left_bp: 15, right_bp: 16, op: BinOp::Gt }),
+        TokenKind::LtEq => Some(OpInfo { left_bp: 15, right_bp: 16, op: BinOp::LtEq }),
+        TokenKind::GtEq => Some(OpInfo { left_bp: 15, right_bp: 16, op: BinOp::GtEq }),
+        TokenKind::LShift => Some(OpInfo { left_bp: 17, right_bp: 18, op: BinOp::LShift }),
+        TokenKind::RShift => Some(OpInfo { left_bp: 17, right_bp: 18, op: BinOp::RShift }),
+        TokenKind::Plus => Some(OpInfo { left_bp: 19, right_bp: 20, op: BinOp::Add }),
+        TokenKind::Minus => Some(OpInfo { left_bp: 19, right_bp: 20, op: BinOp::Sub }),
+        TokenKind::Star => Some(OpInfo { left_bp: 21, right_bp: 22, op: BinOp::Mul }),
+        TokenKind::Slash => Some(OpInfo { left_bp: 21, right_bp: 22, op: BinOp::Div }),
+        TokenKind::Percent => Some(OpInfo { left_bp: 21, right_bp: 22, op: BinOp::Mod }),
         _ => None,
     }
 }
@@ -565,16 +553,14 @@ impl<'a> Parser<'a> {
         ])?;
         let mut left = self.nud(token)?;
 
-        loop {
-            let l_bp = {
-                let Some(t) = self.peek() else { break };
-                let Some(l) = lbp(&t.kind) else { break };
-                if l < min_bp {
-                    break;
-                }
-                l
-            };
-            let _ = l_bp;
+        while let Some(t) = self.peek() {
+            let l_bp = infix_info(&t.kind)
+                .map(|info| info.left_bp)
+                .or(if t.kind == TokenKind::If { Some(0) } else { None });
+            let Some(l_bp) = l_bp else { break };
+            if l_bp < min_bp {
+                break;
+            }
 
             let op_token = match self.advance() {
                 Some(t) => t,
@@ -672,10 +658,10 @@ impl<'a> Parser<'a> {
                 })
             }
             _ => {
-                let (r_bp, op) = infix_op(&token.kind).ok_or_else(|| {
+                let info = infix_info(&token.kind).ok_or_else(|| {
                     self.error(format!("not an infix operator: {:?}", token.kind))
                 })?;
-                let right = self.parse_expr(r_bp)?;
+                let right = self.parse_expr(info.right_bp)?;
                 Ok(Expr {
                     span: Span {
                         start,
@@ -683,7 +669,7 @@ impl<'a> Parser<'a> {
                     },
                     kind: ExprKind::BinOp {
                         lhs: Box::new(left),
-                        op,
+                        op: info.op,
                         rhs: Box::new(right),
                     },
                 })
