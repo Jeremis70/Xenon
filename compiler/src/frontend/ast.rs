@@ -18,6 +18,9 @@ pub enum Type {
     Float128,
 
     Bool,
+
+    Pointer(Box<Type>),
+    Reference(Box<Type>),
 }
 
 impl Type {
@@ -106,6 +109,8 @@ impl std::fmt::Display for Type {
             Type::Float64 => write!(f, "f64"),
             Type::Float128 => write!(f, "f128"),
             Type::Bool => write!(f, "bool"),
+            Type::Pointer(inner) => write!(f, "*{inner}"),
+            Type::Reference(inner) => write!(f, "&{inner}"),
         }
     }
 }

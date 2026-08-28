@@ -2,6 +2,7 @@ use crate::frontend::ast::Type;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use inkwell::AddressSpace;
 use inkwell::OptimizationLevel;
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
@@ -124,6 +125,9 @@ impl<'ctx, 'a> CodeGen<'ctx, 'a> {
             Type::Float32 => self.context.f32_type().into(),
             Type::Float64 => self.context.f64_type().into(),
             Type::Float128 => self.context.f128_type().into(),
+            Type::Pointer(_) | Type::Reference(_) => {
+                self.context.ptr_type(AddressSpace::default()).into()
+            }
         })
     }
 
