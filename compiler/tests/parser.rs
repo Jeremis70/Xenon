@@ -78,6 +78,42 @@ fn parse_plain_assignment_produces_assign_stmt() {
     }
 }
 
+#[test]
+fn parse_assignment_to_call_result_is_error() {
+    // Statement parsing is expression-first: `foo() = 1;` parses `foo()` as
+    // an expression, then rejects it as an assignment target since it isn't
+    // a bare identifier.
+    let src = "fn f()->u32{ foo() = 1; return 0; }";
+    let tokens = lex(src).expect("lexing should succeed");
+    let mut parser = Parser::new(&tokens);
+    let err = parser
+        .parse_program()
+        .expect_err("assigning to a call result should fail");
+    assert!(
+        err.message.contains("invalid assignment target"),
+        "unexpected error: {}",
+        err.message
+    );
+}
+
+#[test]
+fn parse_bare_expression_statement_is_allowed() {
+    // Expression-first statement parsing allows any expression starting
+    // with an identifier (not just calls) as a statement when it isn't
+    // followed by an assignment operator.
+    let src = "fn f()->u32{ x + 2; return 0; }";
+    let tokens = lex(src).expect("lexing should succeed");
+    let mut parser = Parser::new(&tokens);
+    let program = parser.parse_program().expect("parsing should succeed");
+
+    match &program.functions[0].body[0].kind {
+        StmtKind::Expr(expr) => {
+            assert!(matches!(&expr.kind, ExprKind::BinOp { op: BinOp::Add, .. }));
+        }
+        other => panic!("expected Expr, got {:?}", other),
+    }
+}
+
 // Compound assignment desugaring
 
 fn parse_single_assign(src: &str) -> Stmt {
