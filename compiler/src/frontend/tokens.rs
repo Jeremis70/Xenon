@@ -59,6 +59,7 @@ pub enum TokenKind {
     Break,
     Continue,
     Do,
+    Let,
     True,
     False,
     // Delimiters
@@ -200,6 +201,8 @@ enum RawKind {
     Continue,
     #[token("do")]
     Do,
+    #[token("let")]
+    Let,
 
     // ---------- Float literals (before plain integer regex) ----------
     #[regex(r"(?:[0-9]+\.[0-9]*|[0-9]*\.[0-9]+)(?:[eE][+-]?[0-9]+)?", parse_float)]
@@ -371,6 +374,7 @@ fn into_token_parts(raw: RawKind) -> (TokenKind, Option<TokenValue>) {
         RawKind::Break => (TokenKind::Break, None),
         RawKind::Continue => (TokenKind::Continue, None),
         RawKind::Do => (TokenKind::Do, None),
+        RawKind::Let => (TokenKind::Let, None),
         RawKind::True => (TokenKind::True, None),
         RawKind::False => (TokenKind::False, None),
         RawKind::FloatLit(f) => (TokenKind::Float, Some(TokenValue::Float(f))),
