@@ -229,41 +229,32 @@ impl<'a> Parser<'a> {
                 self.parse_var_decl(start)
             }
             TokenKind::Ident => {
-                let next_kind = self.tokens.get(self.position + 1).map(|t| t.kind);
-                if next_kind == Some(TokenKind::LParen) {
-                    // Function call statement
-                    let name_token = self.expect(TokenKind::Ident)?;
-                    let call_expr =
-                        self.parse_call(name_token.ident_value()?.to_string(), start)?;
+                let expr = self.parse_expression()?;
+                if self.peek().is_some_and(|t| t.kind.is_assign_op()) {
+                    // Assignment or compound assignment. Only a bare
+                    // identifier is a valid target today; arbitrary lvalues
+                    // (`*p = x;`, `arr[i] = x;`, `s.field = x;`) will extend
+                    // this check once those expression forms exist.
+                    let (name, ident_span) = match expr.kind {
+                        ExprKind::Ident(name) => (name, expr.span),
+                        _ => {
+                            return Err(ParseError::new(
+                                "invalid assignment target: expected a variable name",
+                                expr.span,
+                            ));
+                        }
+                    };
+                    let assign_token = self
+                        .advance()
+                        .expect("peeked assign-op token must exist");
+                    self.parse_var_assign(name, &assign_token.kind, ident_span)
+                } else {
+                    // Expression statement (e.g. a function call).
                     self.expect(TokenKind::Semicolon)?;
                     Ok(Stmt {
-                        kind: StmtKind::Expr(Box::new(call_expr)),
+                        kind: StmtKind::Expr(Box::new(expr)),
                         span: self.span_since(start),
                     })
-                } else if next_kind.is_some_and(|k| k.is_assign_op()) {
-                    // Assignment or compound assignment
-                    let name_token = self.expect(TokenKind::Ident)?;
-                    let name = name_token.ident_value()?.to_string();
-                    let assign_token = self.expect([
-                        TokenKind::Eq,
-                        TokenKind::PlusEq,
-                        TokenKind::MinusEq,
-                        TokenKind::StarEq,
-                        TokenKind::SlashEq,
-                        TokenKind::PercentEq,
-                        TokenKind::AndEq,
-                        TokenKind::OrEq,
-                        TokenKind::XorEq,
-                        TokenKind::LShiftEq,
-                        TokenKind::RShiftEq,
-                        TokenKind::PlusPlus,
-                        TokenKind::MinusMinus,
-                    ])?;
-                    self.parse_var_assign(name, &assign_token.kind, name_token.span)
-                } else {
-                    // Consume the ident so the error points at the unexpected token
-                    self.advance();
-                    Err(self.error("expected '(' or assignment operator after identifier"))
                 }
             }
             TokenKind::If => {
