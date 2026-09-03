@@ -2,7 +2,7 @@
 #[entry]
 fn main()->i32
 {
-    i32 x = 0;
+    let i32 x = 0;
     while x < 10
     {
         x++;

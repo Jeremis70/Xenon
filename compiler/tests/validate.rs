@@ -19,7 +19,7 @@ fn validate_src(src: &str) -> Result<(), SemanticError> {
 /// `u2` can hold 0..3; assigning 10 must be a hard error.
 #[test]
 fn u2_out_of_range_literal_is_error() {
-    let err = validate_src("fn f()->u2 { u2 x = 10; return x; }")
+    let err = validate_src("fn f()->u2 { let u2 x = 10; return x; }")
         .expect_err("expected ConstantOutOfRange");
     assert!(
         matches!(err, SemanticError::ConstantOutOfRange { ref name, ref value, .. } if name == "x" && *value == BigInt::from(10)),
@@ -30,19 +30,19 @@ fn u2_out_of_range_literal_is_error() {
 /// `u2` can hold 0..3; 3 is within range and must succeed.
 #[test]
 fn u2_in_range_literal_is_ok() {
-    validate_src("fn f()->u2 { u2 x = 3; return x; }").expect("u2 x = 3 should be valid");
+    validate_src("fn f()->u2 { let u2 x = 3; return x; }").expect("u2 x = 3 should be valid");
 }
 
 /// `i2` can hold -2..1; -2 is within range and must succeed.
 #[test]
 fn i2_negative_in_range_is_ok() {
-    validate_src("fn f()->i2 { i2 x = -2; return x; }").expect("i2 x = -2 should be valid");
+    validate_src("fn f()->i2 { let i2 x = -2; return x; }").expect("i2 x = -2 should be valid");
 }
 
 /// `i2` can hold -2..1; 2 is out of range and must be an error.
 #[test]
 fn i2_out_of_range_literal_is_error() {
-    let err = validate_src("fn f()->i2 { i2 x = 2; return x; }")
+    let err = validate_src("fn f()->i2 { let i2 x = 2; return x; }")
         .expect_err("expected ConstantOutOfRange");
     assert!(
         matches!(err, SemanticError::ConstantOutOfRange { ref name, ref value, .. } if name == "x" && *value == BigInt::from(2)),

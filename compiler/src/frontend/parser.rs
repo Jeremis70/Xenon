@@ -224,6 +224,10 @@ impl<'a> Parser<'a> {
                     span: self.span_since(start),
                 })
             }
+            TokenKind::Let => {
+                self.advance();
+                self.parse_var_decl(start)
+            }
             TokenKind::Ident => {
                 let next_kind = self.tokens.get(self.position + 1).map(|t| t.kind);
                 if next_kind == Some(TokenKind::LParen) {
@@ -236,9 +240,6 @@ impl<'a> Parser<'a> {
                         kind: StmtKind::Expr(Box::new(call_expr)),
                         span: self.span_since(start),
                     })
-                } else if next_kind == Some(TokenKind::Ident) {
-                    // Variable declaration: type name = expr;
-                    self.parse_var_decl(start)
                 } else if next_kind.is_some_and(|k| k.is_assign_op()) {
                     // Assignment or compound assignment
                     let name_token = self.expect(TokenKind::Ident)?;
@@ -262,14 +263,8 @@ impl<'a> Parser<'a> {
                 } else {
                     // Consume the ident so the error points at the unexpected token
                     self.advance();
-                    Err(self.error(
-                        "expected '(', identifier, or assignment operator after identifier",
-                    ))
+                    Err(self.error("expected '(' or assignment operator after identifier"))
                 }
-            }
-            TokenKind::Star | TokenKind::And => {
-                // Pointer/reference type var decl
-                self.parse_var_decl(start)
             }
             TokenKind::If => {
                 self.advance();

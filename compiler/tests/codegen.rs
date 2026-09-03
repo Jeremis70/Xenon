@@ -228,7 +228,7 @@ fn statements_after_if_are_emitted_in_merge_block() {
 fn missing_return_yields_codegen_error() {
     use xenonc::error::CodegenError;
 
-    let tokens = xenonc::frontend::lexer::lex("fn bad()->u32 { u32 x = 1; }")
+    let tokens = xenonc::frontend::lexer::lex("fn bad()->u32 { let u32 x = 1; }")
         .expect("lexing should succeed");
     let mut parser = Parser::new(&tokens);
     let program = parser.parse_program().expect("parsing should succeed");
@@ -547,7 +547,7 @@ fn if_body_variable_is_not_visible_after_block() {
 
     // `x` is declared inside the if-branch but referenced after the if — this
     // must be a compile error, not silently succeed with a dangling pointer.
-    let tokens = lex("fn f(u1 cond)->u32 { if cond { u32 x = 1; } return x; }")
+    let tokens = lex("fn f(u1 cond)->u32 { if cond { let u32 x = 1; } return x; }")
         .expect("lexing should succeed");
     let mut parser = Parser::new(&tokens);
     let program = parser.parse_program().expect("parsing should succeed");
@@ -591,7 +591,7 @@ fn outer_variable_is_unchanged_after_if_block() {
     // but it is scoped to the branch and must not overwrite the outer one.
     // After the if, the outer `result` (= 99) is what gets returned.
     let ir = compile_to_ir(
-        "fn f(u1 cond)->u32 result { result = 99; if cond { u32 result = 42; } return result; }",
+        "fn f(u1 cond)->u32 result { result = 99; if cond { let u32 result = 42; } return result; }",
     );
     // The function must still compile and contain a `ret i32`.
     assert!(
@@ -605,7 +605,7 @@ fn outer_variable_is_unchanged_after_if_block() {
 fn loop_body_variable_is_not_visible_after_loop() {
     use xenonc::error::CodegenError;
 
-    let tokens = lex("fn f()->u32 { loop { u32 x = 1; break x; } return x; }")
+    let tokens = lex("fn f()->u32 { loop { let u32 x = 1; break x; } return x; }")
         .expect("lexing should succeed");
     let mut parser = Parser::new(&tokens);
     let program = parser.parse_program().expect("parsing should succeed");
@@ -646,7 +646,7 @@ fn loop_body_variable_is_not_visible_after_loop() {
 fn inner_scope_does_not_pollute_outer() {
     // After the if, `result` (named return, outer scope) must still be 10.
     let ir = compile_to_ir(
-        "fn f(u1 cond)->u32 result { result = 10; if cond { u32 result = 99; } return result; }",
+        "fn f(u1 cond)->u32 result { result = 10; if cond { let u32 result = 99; } return result; }",
     );
     assert!(
         ir.contains("ret i32"),

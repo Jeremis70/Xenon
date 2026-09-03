@@ -12,7 +12,7 @@ fn bi(n: i64) -> BigInt {
 
 #[test]
 fn parse_var_decl_produces_correct_name_type_and_value() {
-    let src = "fn f()->u32{u32 x = 5;}";
+    let src = "fn f()->u32{let u32 x = 5;}";
     let tokens = lex(src).expect("lexing should succeed");
     let mut parser = Parser::new(&tokens);
     let program = parser.parse_program().expect("parsing should succeed");
@@ -31,7 +31,7 @@ fn parse_var_decl_produces_correct_name_type_and_value() {
 
 #[test]
 fn parse_var_decl_accepts_signed_integer_type() {
-    let src = "fn f()->i32{i64 count = 0;}";
+    let src = "fn f()->i32{let i64 count = 0;}";
     let tokens = lex(src).expect("lexing should succeed");
     let mut parser = Parser::new(&tokens);
     let program = parser.parse_program().expect("parsing should succeed");
@@ -47,7 +47,7 @@ fn parse_var_decl_accepts_signed_integer_type() {
 
 #[test]
 fn parse_var_decl_rejects_unknown_type() {
-    let src = "fn f()->u32{foo x = 1;}";
+    let src = "fn f()->u32{let foo x = 1;}";
     let tokens = lex(src).expect("lexing should succeed");
     let mut parser = Parser::new(&tokens);
     let err = parser
@@ -433,7 +433,7 @@ fn parse_call_stmt_can_appear_multiple_times_in_body() {
 
 #[test]
 fn parse_call_as_rhs_of_var_decl() {
-    let src = "fn f()->u32{ u32 y = compute(5); return y; }";
+    let src = "fn f()->u32{ let u32 y = compute(5); return y; }";
     let tokens = lex(src).expect("lexing should succeed");
     let mut parser = Parser::new(&tokens);
     let program = parser.parse_program().expect("parsing should succeed");
@@ -540,7 +540,7 @@ fn function_name_with_dot_is_rejected() {
 
 #[test]
 fn parse_var_decl_pointer_type() {
-    let src = "fn f()->u32{ *i32 p = 0; return 0; }";
+    let src = "fn f()->u32{ let *i32 p = 0; return 0; }";
     let tokens = lex(src).expect("lexing should succeed");
     let mut parser = Parser::new(&tokens);
     let program = parser.parse_program().expect("parsing should succeed");
@@ -556,7 +556,7 @@ fn parse_var_decl_pointer_type() {
 
 #[test]
 fn parse_var_decl_reference_type() {
-    let src = "fn f()->u32{ &i32 r = 0; return 0; }";
+    let src = "fn f()->u32{ let &i32 r = 0; return 0; }";
     let tokens = lex(src).expect("lexing should succeed");
     let mut parser = Parser::new(&tokens);
     let program = parser.parse_program().expect("parsing should succeed");
@@ -572,7 +572,7 @@ fn parse_var_decl_reference_type() {
 
 #[test]
 fn parse_var_decl_nested_pointer_reference() {
-    let src = "fn f()->u32{ *&i32 p = 0; return 0; }";
+    let src = "fn f()->u32{ let *&i32 p = 0; return 0; }";
     let tokens = lex(src).expect("lexing should succeed");
     let mut parser = Parser::new(&tokens);
     let program = parser.parse_program().expect("parsing should succeed");
