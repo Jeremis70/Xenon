@@ -147,6 +147,10 @@
         {
           "name": "keyword.operator.unary.xenon",
           "match": "!"
+        },
+        {
+          "name": "keyword.operator.address.xenon",
+          "match": "@"
         }
       ]
     },
