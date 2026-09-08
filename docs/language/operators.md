@@ -35,8 +35,11 @@ a pointer:
 ```xe
 let *u32 p = @x;
 *p = 42;
-*p += 1;   // compound assignment desugars to `*p = *p + 1`
+*p += 1;   // reads, updates, and writes back through the same address
 ```
+
+Compound assignment (`+=`, `-=`, …) and `++` / `--` behave as `place = place op
+value` would, but the place is evaluated only once.
 
 `@name` always takes the address of the variable named `name`. If an integer
 variable contains a numeric address, it must be converted explicitly. The `as`

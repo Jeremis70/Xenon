@@ -1,10 +1,10 @@
 use crate::error::{ParseError, ParseResult, TypeError};
 use crate::frontend::ast::{
-    Attribute, BinOp, Binding, Expr, ExprKind, Function, Program, Stmt, StmtKind, Type, UnaryOp,
+    Attribute, BinOp, Binding, Expr, ExprKind, Function, IncDecOp, Program, Stmt, StmtKind, Type,
+    UnaryOp,
 };
 use crate::frontend::precedence::{UNARY_BP, infix_info};
 use crate::frontend::tokens::{Span, Token, TokenKind};
-use num_bigint::BigInt;
 
 pub struct Parser<'a> {
     tokens: &'a [Token],
@@ -410,41 +410,31 @@ impl<'a> Parser<'a> {
         Ok(params)
     }
 
-    /// Parses the right-hand side of an assignment whose target has already
-    /// been parsed as a place expression. Compound operators are desugared
-    /// here: `*p += e` becomes `*p = *p + e`.
+    /// Parses the remainder of an assignment statement whose target has
+    /// already been parsed as a place expression.
+    ///
+    /// No desugaring happens here: `x += e` and `x++` keep their own AST
+    /// nodes so the tree mirrors the source.
     fn parse_var_assign(&mut self, target: Expr, kind: &TokenKind) -> ParseResult<Stmt> {
         let target_span = target.span;
-        let rhs = match kind {
-            TokenKind::PlusPlus | TokenKind::MinusMinus => Expr {
-                kind: ExprKind::Int(BigInt::from(1)),
-                span: self.prev_span(),
-            },
-            _ => self.parse_expression()?,
-        };
-        let value = match BinOp::from_assign_token(kind) {
-            Some(op) => {
-                let span = Span {
-                    start: target_span.start,
-                    end: rhs.span.end,
-                };
-                Expr {
-                    kind: ExprKind::BinOp {
-                        lhs: Box::new(target.clone()),
-                        op,
-                        rhs: Box::new(rhs),
-                    },
-                    span,
-                }
+        let target = Box::new(target);
+        let kind = if let Some(op) = IncDecOp::from_token(kind) {
+            StmtKind::IncDec { target, op }
+        } else if let Some(op) = BinOp::from_compound_assign_token(kind) {
+            StmtKind::CompoundAssign {
+                target,
+                op,
+                value: Box::new(self.parse_expression()?),
             }
-            None => rhs,
+        } else {
+            StmtKind::Assign {
+                target,
+                value: Box::new(self.parse_expression()?),
+            }
         };
         self.expect(TokenKind::Semicolon)?;
         Ok(Stmt {
-            kind: StmtKind::Assign {
-                target: Box::new(target),
-                value: Box::new(value),
-            },
+            kind,
             span: Span {
                 start: target_span.start,
                 end: self.prev_span().end,

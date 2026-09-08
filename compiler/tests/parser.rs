@@ -1,5 +1,5 @@
 use num_bigint::BigInt;
-use xenonc::frontend::ast::{BinOp, Binding, ExprKind, Stmt, StmtKind, Type};
+use xenonc::frontend::ast::{BinOp, Binding, ExprKind, IncDecOp, Stmt, StmtKind, Type};
 use xenonc::frontend::lexer::lex;
 use xenonc::frontend::parser::Parser;
 use xenonc::frontend::tokens::Span;
@@ -114,7 +114,7 @@ fn parse_bare_expression_statement_is_allowed() {
     }
 }
 
-// Compound assignment desugaring
+// Compound assignment and increment/decrement
 
 fn parse_single_assign(src: &str) -> Stmt {
     let tokens = lex(src).expect("lexing should succeed");
@@ -123,81 +123,140 @@ fn parse_single_assign(src: &str) -> Stmt {
     program.functions.remove(0).body.remove(0)
 }
 
-fn assert_desugared(stmt: &Stmt, var: &str, expected_op: BinOp, rhs_val: i64) {
+/// Compound assignment keeps its own node: the operator is recorded on the
+/// statement and the target appears exactly once, never rewritten into
+/// `var = var <op> rhs`.
+fn assert_compound(stmt: &Stmt, var: &str, expected_op: BinOp, rhs_val: i64) {
     match &stmt.kind {
-        StmtKind::Assign { target, value } => {
+        StmtKind::CompoundAssign { target, op, value } => {
             assert!(matches!(&target.kind, ExprKind::Ident(s) if s == var));
-            match &value.kind {
-                ExprKind::BinOp { lhs, op, rhs } => {
-                    assert!(matches!(&lhs.kind, ExprKind::Ident(s) if s == var));
-                    assert_eq!(*op, expected_op);
-                    assert!(matches!(&rhs.kind, ExprKind::Int(v) if *v == bi(rhs_val)));
-                }
-                other => panic!("expected BinOp in desugared value, got {:?}", other),
-            }
+            assert_eq!(*op, expected_op);
+            assert!(matches!(&value.kind, ExprKind::Int(v) if *v == bi(rhs_val)));
         }
-        other => panic!("expected Assign stmt, got {:?}", other),
+        other => panic!("expected CompoundAssign stmt, got {:?}", other),
     }
 }
 
 #[test]
-fn parse_compound_add_assign_desugars_to_binop() {
+fn parse_compound_add_assign_keeps_operator() {
     let stmt = parse_single_assign("fn f()->u32{x += 3;}");
-    assert_desugared(&stmt, "x", BinOp::Add, 3);
+    assert_compound(&stmt, "x", BinOp::Add, 3);
 }
 
 #[test]
-fn parse_compound_sub_assign_desugars_to_binop() {
+fn parse_compound_sub_assign_keeps_operator() {
     let stmt = parse_single_assign("fn f()->u32{x -= 1;}");
-    assert_desugared(&stmt, "x", BinOp::Sub, 1);
+    assert_compound(&stmt, "x", BinOp::Sub, 1);
 }
 
 #[test]
-fn parse_compound_mul_assign_desugars_to_binop() {
+fn parse_compound_mul_assign_keeps_operator() {
     let stmt = parse_single_assign("fn f()->u32{x *= 2;}");
-    assert_desugared(&stmt, "x", BinOp::Mul, 2);
+    assert_compound(&stmt, "x", BinOp::Mul, 2);
 }
 
 #[test]
-fn parse_compound_div_assign_desugars_to_binop() {
+fn parse_compound_div_assign_keeps_operator() {
     let stmt = parse_single_assign("fn f()->u32{x /= 4;}");
-    assert_desugared(&stmt, "x", BinOp::Div, 4);
+    assert_compound(&stmt, "x", BinOp::Div, 4);
 }
 
 #[test]
-fn parse_compound_mod_assign_desugars_to_binop() {
+fn parse_compound_mod_assign_keeps_operator() {
     let stmt = parse_single_assign("fn f()->u32{x %= 7;}");
-    assert_desugared(&stmt, "x", BinOp::Mod, 7);
+    assert_compound(&stmt, "x", BinOp::Mod, 7);
 }
 
 #[test]
-fn parse_compound_bitand_assign_desugars_to_binop() {
+fn parse_compound_bitand_assign_keeps_operator() {
     let stmt = parse_single_assign("fn f()->u32{x &= 5;}");
-    assert_desugared(&stmt, "x", BinOp::BitwiseAnd, 5);
+    assert_compound(&stmt, "x", BinOp::BitwiseAnd, 5);
 }
 
 #[test]
-fn parse_compound_bitor_assign_desugars_to_binop() {
+fn parse_compound_bitor_assign_keeps_operator() {
     let stmt = parse_single_assign("fn f()->u32{x |= 5;}");
-    assert_desugared(&stmt, "x", BinOp::BitwiseOr, 5);
+    assert_compound(&stmt, "x", BinOp::BitwiseOr, 5);
 }
 
 #[test]
-fn parse_compound_bitxor_assign_desugars_to_binop() {
+fn parse_compound_bitxor_assign_keeps_operator() {
     let stmt = parse_single_assign("fn f()->u32{x ^= 5;}");
-    assert_desugared(&stmt, "x", BinOp::BitwiseXor, 5);
+    assert_compound(&stmt, "x", BinOp::BitwiseXor, 5);
 }
 
 #[test]
-fn parse_compound_lshift_assign_desugars_to_binop() {
+fn parse_compound_lshift_assign_keeps_operator() {
     let stmt = parse_single_assign("fn f()->u32{x <<= 1;}");
-    assert_desugared(&stmt, "x", BinOp::LShift, 1);
+    assert_compound(&stmt, "x", BinOp::LShift, 1);
 }
 
 #[test]
-fn parse_compound_rshift_assign_desugars_to_binop() {
+fn parse_compound_rshift_assign_keeps_operator() {
     let stmt = parse_single_assign("fn f()->u32{x >>= 1;}");
-    assert_desugared(&stmt, "x", BinOp::RShift, 1);
+    assert_compound(&stmt, "x", BinOp::RShift, 1);
+}
+
+#[test]
+fn parse_increment_keeps_own_node() {
+    let stmt = parse_single_assign("fn f()->u32{x++;}");
+    match &stmt.kind {
+        StmtKind::IncDec { target, op } => {
+            assert!(matches!(&target.kind, ExprKind::Ident(s) if s == "x"));
+            assert_eq!(*op, IncDecOp::Increment);
+        }
+        other => panic!("expected IncDec stmt, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_decrement_keeps_own_node() {
+    let stmt = parse_single_assign("fn f()->u32{x--;}");
+    match &stmt.kind {
+        StmtKind::IncDec { target, op } => {
+            assert!(matches!(&target.kind, ExprKind::Ident(s) if s == "x"));
+            assert_eq!(*op, IncDecOp::Decrement);
+        }
+        other => panic!("expected IncDec stmt, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_increment_through_deref_keeps_single_place() {
+    match parse_stmt("*p++;").kind {
+        StmtKind::IncDec { target, op } => {
+            assert!(matches!(&target.kind, ExprKind::Deref(_)));
+            assert_eq!(op, IncDecOp::Increment);
+        }
+        other => panic!("expected IncDec, got {other:?}"),
+    }
+}
+
+/// The parser must not invent a literal `1` that the user never wrote; `++`
+/// records only the operator and its target.
+#[test]
+fn parse_increment_does_not_synthesize_a_literal() {
+    let stmt = parse_single_assign("fn f()->u32{x++;}");
+    let StmtKind::IncDec { target, .. } = &stmt.kind else {
+        panic!("expected IncDec stmt, got {:?}", stmt.kind);
+    };
+    assert!(
+        !matches!(&target.kind, ExprKind::Int(_) | ExprKind::BinOp { .. }),
+        "`++` must not be rewritten into an arithmetic expression"
+    );
+}
+
+/// A plain `=` still produces `Assign`, distinct from the compound form.
+#[test]
+fn parse_plain_assignment_is_not_compound() {
+    let stmt = parse_single_assign("fn f()->u32{x = 3;}");
+    match &stmt.kind {
+        StmtKind::Assign { target, value } => {
+            assert!(matches!(&target.kind, ExprKind::Ident(s) if s == "x"));
+            assert!(matches!(&value.kind, ExprKind::Int(v) if *v == bi(3)));
+        }
+        other => panic!("expected Assign stmt, got {other:?}"),
+    }
 }
 
 #[test]
@@ -717,22 +776,17 @@ fn parse_double_deref_assignment_target() {
     }
 }
 
-/// `*p += 1;` must desugar to `*p = *p + 1`, preserving the place on both sides.
+/// `*p += 1;` keeps the dereference as a single target. Recording the place
+/// once is what lets later stages evaluate it once.
 #[test]
-fn parse_compound_assignment_through_deref_desugars() {
+fn parse_compound_assignment_through_deref_keeps_single_place() {
     match parse_stmt("*p += 1;").kind {
-        StmtKind::Assign { target, value } => {
+        StmtKind::CompoundAssign { target, op, value } => {
             assert!(matches!(&target.kind, ExprKind::Deref(_)));
-            match value.kind {
-                ExprKind::BinOp { lhs, op, rhs } => {
-                    assert_eq!(op, BinOp::Add);
-                    assert!(matches!(&lhs.kind, ExprKind::Deref(_)));
-                    assert!(matches!(&rhs.kind, ExprKind::Int(v) if *v == bi(1)));
-                }
-                other => panic!("expected BinOp, got {other:?}"),
-            }
+            assert_eq!(op, BinOp::Add);
+            assert!(matches!(&value.kind, ExprKind::Int(v) if *v == bi(1)));
         }
-        other => panic!("expected Assign, got {other:?}"),
+        other => panic!("expected CompoundAssign, got {other:?}"),
     }
 }
 

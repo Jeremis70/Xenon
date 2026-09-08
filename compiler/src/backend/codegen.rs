@@ -545,6 +545,24 @@ impl<'ctx, 'a> CodeGen<'ctx, 'a> {
                     .map_err(llvm_err!("build_store"))?;
                 Ok(false)
             }
+            StmtKind::CompoundAssign { target, op, value } => {
+                let rhs = self.codegen_expr(value)?;
+                self.codegen_read_modify_write(
+                    target,
+                    op,
+                    rhs,
+                    self.infer_expr_unsigned(value),
+                    stmt.span,
+                )?;
+                Ok(false)
+            }
+            StmtKind::IncDec { target, op } => {
+                // The implicit operand is a literal `1`; its width is
+                // normalized against the target inside `codegen_binop`.
+                let one = self.context.i64_type().const_int(1, false).into();
+                self.codegen_read_modify_write(target, &op.to_binop(), one, false, stmt.span)?;
+                Ok(false)
+            }
             StmtKind::Expr(expr) => {
                 self.codegen_expr(expr)?;
                 // An expression like an infinite loop may have terminated the
@@ -886,6 +904,45 @@ impl<'ctx, 'a> CodeGen<'ctx, 'a> {
             }
             _ => Err(CodegenError::NotAPlaceExpression { span: e.span }),
         }
+    }
+
+    /// Lowers an in-place update (`place op= value`, `place++`, `place--`).
+    ///
+    /// The place is evaluated **once** and then read, combined, and written
+    /// back, so a target with side effects is never evaluated twice.
+    fn codegen_read_modify_write(
+        &mut self,
+        target: &Expr,
+        op: &BinOp,
+        rhs: BasicValueEnum<'ctx>,
+        rhs_unsigned: bool,
+        span: Span,
+    ) -> CodegenResult<()> {
+        let (address, pointee_ll, pointee_ast) = self.codegen_place(target)?;
+        let lhs_unsigned = matches!(pointee_ast, Type::UInt(_) | Type::USize);
+        let current = self
+            .builder
+            .build_load(pointee_ll, address, "rmw_load")
+            .map_err(llvm_err!("build_load (read-modify-write)"))?;
+        let updated = match (current, rhs) {
+            (BasicValueEnum::IntValue(l), BasicValueEnum::IntValue(r)) => self
+                .codegen_binop(op, l, r, lhs_unsigned, rhs_unsigned)
+                .map(Into::into)?,
+            (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) => {
+                self.codegen_binop_float(op, l, r)?
+            }
+            _ => {
+                return Err(CodegenError::UnsupportedOperator {
+                    op: format!("{op:?}"),
+                    span,
+                });
+            }
+        };
+        let updated = self.coerce_basic_to_target(updated, pointee_ll, &pointee_ast)?;
+        self.builder
+            .build_store(address, updated)
+            .map_err(llvm_err!("build_store (read-modify-write)"))?;
+        Ok(())
     }
 
     /// Lowers an address literal (`@0x1234`) to a constant pointer, rejecting

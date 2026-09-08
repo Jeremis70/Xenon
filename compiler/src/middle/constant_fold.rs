@@ -47,6 +47,15 @@ fn fold_stmt(stmt: Stmt) -> FoldResult<Stmt> {
             target: Box::new(fold_expr(*target)?),
             value: Box::new(fold_expr(*value)?),
         },
+        StmtKind::CompoundAssign { target, op, value } => StmtKind::CompoundAssign {
+            target: Box::new(fold_expr(*target)?),
+            op,
+            value: Box::new(fold_expr(*value)?),
+        },
+        StmtKind::IncDec { target, op } => StmtKind::IncDec {
+            target: Box::new(fold_expr(*target)?),
+            op,
+        },
         StmtKind::If {
             condition,
             then_branch,
