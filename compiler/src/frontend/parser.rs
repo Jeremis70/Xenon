@@ -2,7 +2,7 @@ use crate::error::{ParseError, ParseResult, TypeError};
 use crate::frontend::ast::{
     Attribute, BinOp, Binding, Expr, ExprKind, Function, Program, Stmt, StmtKind, Type, UnaryOp,
 };
-use crate::frontend::precedence::infix_info;
+use crate::frontend::precedence::{UNARY_BP, infix_info};
 use crate::frontend::tokens::{Span, Token, TokenKind};
 use num_bigint::BigInt;
 
@@ -197,24 +197,17 @@ impl<'a> Parser<'a> {
                 self.advance();
                 self.parse_var_decl(start)
             }
-            TokenKind::Ident => {
+            TokenKind::Ident | TokenKind::Star => {
                 let expr = self.parse_expression()?;
                 if self.peek().is_some_and(|t| t.kind.is_assign_op()) {
-                    // Assignment or compound assignment. Only a bare
-                    // identifier is a valid target today; arbitrary lvalues
-                    // (`*p = x;`, `arr[i] = x;`, `s.field = x;`) will extend
-                    // this check once those expression forms exist.
-                    let (name, ident_span) = match expr.kind {
-                        ExprKind::Ident(name) => (name, expr.span),
-                        _ => {
-                            return Err(ParseError::new(
-                                "invalid assignment target: expected a variable name",
-                                expr.span,
-                            ));
-                        }
-                    };
+                    if !expr.is_place() {
+                        return Err(ParseError::new(
+                            "invalid assignment target: expected a variable or a dereference",
+                            expr.span,
+                        ));
+                    }
                     let assign_token = self.advance().expect("peeked assign-op token must exist");
-                    self.parse_var_assign(name, &assign_token.kind, ident_span)
+                    self.parse_var_assign(expr, &assign_token.kind)
                 } else {
                     // Expression statement (e.g. a function call).
                     self.expect(TokenKind::Semicolon)?;
@@ -417,12 +410,11 @@ impl<'a> Parser<'a> {
         Ok(params)
     }
 
-    fn parse_var_assign(
-        &mut self,
-        name: String,
-        kind: &TokenKind,
-        ident_span: Span,
-    ) -> ParseResult<Stmt> {
+    /// Parses the right-hand side of an assignment whose target has already
+    /// been parsed as a place expression. Compound operators are desugared
+    /// here: `*p += e` becomes `*p = *p + e`.
+    fn parse_var_assign(&mut self, target: Expr, kind: &TokenKind) -> ParseResult<Stmt> {
+        let target_span = target.span;
         let rhs = match kind {
             TokenKind::PlusPlus | TokenKind::MinusMinus => Expr {
                 kind: ExprKind::Int(BigInt::from(1)),
@@ -433,15 +425,12 @@ impl<'a> Parser<'a> {
         let value = match BinOp::from_assign_token(kind) {
             Some(op) => {
                 let span = Span {
-                    start: ident_span.start,
+                    start: target_span.start,
                     end: rhs.span.end,
                 };
                 Expr {
                     kind: ExprKind::BinOp {
-                        lhs: Box::new(Expr {
-                            kind: ExprKind::Ident(name.clone()),
-                            span: ident_span,
-                        }),
+                        lhs: Box::new(target.clone()),
                         op,
                         rhs: Box::new(rhs),
                     },
@@ -453,11 +442,11 @@ impl<'a> Parser<'a> {
         self.expect(TokenKind::Semicolon)?;
         Ok(Stmt {
             kind: StmtKind::Assign {
-                name,
+                target: Box::new(target),
                 value: Box::new(value),
             },
             span: Span {
-                start: ident_span.start,
+                start: target_span.start,
                 end: self.prev_span().end,
             },
         })
@@ -512,6 +501,49 @@ impl<'a> Parser<'a> {
                         op,
                         operand: Box::new(operand),
                     },
+                })
+            }
+            TokenKind::Star => {
+                // Prefix `*` is dereference. Infix `*` (multiplication) is
+                // handled in `led`, so the Pratt split disambiguates them.
+                let operand = self.parse_expr(UNARY_BP)?;
+                Ok(Expr {
+                    span: Span {
+                        start,
+                        end: operand.span.end,
+                    },
+                    kind: ExprKind::Deref(Box::new(operand)),
+                })
+            }
+            TokenKind::At => {
+                // `@<int literal>` is an address literal; `@<place>` is
+                // address-of. The expected type decides whether address-of
+                // yields a pointer or a reference (resolved during validation).
+                if let Some(t) = self.peek()
+                    && t.kind == TokenKind::Int
+                {
+                    let literal = self.expect(TokenKind::Int)?;
+                    return Ok(Expr {
+                        kind: ExprKind::Address(literal.int_value()?.clone()),
+                        span: Span {
+                            start,
+                            end: literal.span.end,
+                        },
+                    });
+                }
+                let operand = self.parse_expr(UNARY_BP)?;
+                if !operand.is_place() {
+                    return Err(ParseError::new(
+                        "`@` expects an addressable location",
+                        operand.span,
+                    ));
+                }
+                Ok(Expr {
+                    span: Span {
+                        start,
+                        end: operand.span.end,
+                    },
+                    kind: ExprKind::AddressOf(Box::new(operand)),
                 })
             }
             TokenKind::Int => Ok(Expr {

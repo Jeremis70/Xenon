@@ -19,6 +19,7 @@ use inkwell::IntPredicate;
 
 use crate::error::{CodegenError, CodegenResult};
 use crate::frontend::ast::{BinOp, Expr, ExprKind, Function, Program, Stmt, StmtKind, UnaryOp};
+use crate::frontend::tokens::Span;
 use crate::middle::validate::infer_expr_type_after_validate;
 use num_bigint::BigInt;
 use num_traits::ToPrimitive;
@@ -430,6 +431,7 @@ impl<'ctx, 'a> CodeGen<'ctx, 'a> {
             let zero: BasicValueEnum = match ret_ty {
                 BasicTypeEnum::IntType(it) => it.const_zero().into(),
                 BasicTypeEnum::FloatType(ft) => ft.const_float(0.0).into(),
+                BasicTypeEnum::PointerType(pt) => pt.const_null().into(),
                 _ => {
                     return Err(CodegenError::InvalidIrState(
                         "named return: unsupported LLVM type for zero init",
@@ -534,20 +536,12 @@ impl<'ctx, 'a> CodeGen<'ctx, 'a> {
                     .map_err(llvm_err!("build_store"))?;
                 Ok(false)
             }
-            StmtKind::Assign { name, value } => {
-                let (var_ptr, var_ty, ast_ty) = {
-                    let (ptr, ty, ast_ty) = self.lookup_variable(name).ok_or_else(|| {
-                        CodegenError::UndefinedVariable {
-                            name: name.clone(),
-                            span: stmt.span,
-                        }
-                    })?;
-                    (*ptr, *ty, ast_ty.clone())
-                };
+            StmtKind::Assign { target, value } => {
+                let (address, pointee_ll, pointee_ast) = self.codegen_place(target)?;
                 let val = self.codegen_expr(value)?;
-                let val = self.coerce_basic_to_target(val, var_ty, &ast_ty)?;
+                let val = self.coerce_basic_to_target(val, pointee_ll, &pointee_ast)?;
                 self.builder
-                    .build_store(var_ptr, val)
+                    .build_store(address, val)
                     .map_err(llvm_err!("build_store"))?;
                 Ok(false)
             }
@@ -770,6 +764,12 @@ impl<'ctx, 'a> CodeGen<'ctx, 'a> {
                         .into())
                 }
             }
+            (BasicValueEnum::PointerValue(v), BasicTypeEnum::PointerType(_)) => {
+                // Pointers and references share one opaque LLVM `ptr` type, so
+                // there is nothing to convert. Integer/pointer mixes fall
+                // through to the error below: they need an explicit cast.
+                Ok(v.into())
+            }
             _ => Err(CodegenError::InvalidIrState(
                 "coerce_basic_to_target: incompatible value and target",
             )),
@@ -814,6 +814,104 @@ impl<'ctx, 'a> CodeGen<'ctx, 'a> {
         }
     }
 
+    /// Infers the AST type of an expression using the post-validation inference
+    /// helper, seeded with the stack slots visible in the current LLVM scopes.
+    fn ast_type_of(&self, e: &Expr) -> CodegenResult<Type> {
+        let locals = self.visible_ast_var_types();
+        infer_expr_type_after_validate(
+            e,
+            self.ast_program,
+            self.ast_fn.ok_or(CodegenError::InvalidIrState(
+                "codegen: missing current function for type inference",
+            ))?,
+            &locals,
+        )
+        .map_err(|err| CodegenError::Other(err.to_string()))
+    }
+
+    /// AST type of the location denoted by a place expression.
+    fn place_ast_type(&self, e: &Expr) -> CodegenResult<Type> {
+        self.ast_type_of(e)
+    }
+
+    /// Evaluates a place expression to `(address, pointee LLVM type, pointee AST type)`.
+    ///
+    /// This is the single lowering path shared by reads, writes, and `@`.
+    /// References are transparent: a variable of type `&T` stores a pointer, so
+    /// its alloca is loaded once to reach the location it refers to. Pointers
+    /// are opaque and only reach their pointee through an explicit `*p`.
+    fn codegen_place(
+        &mut self,
+        e: &Expr,
+    ) -> CodegenResult<(PointerValue<'ctx>, BasicTypeEnum<'ctx>, Type)> {
+        match &e.kind {
+            ExprKind::Ident(name) => {
+                let (slot, slot_ll, slot_ast) = self
+                    .lookup_variable(name)
+                    .map(|(p, t, a)| (*p, *t, a.clone()))
+                    .ok_or_else(|| CodegenError::UndefinedVariable {
+                        name: name.clone(),
+                        span: e.span,
+                    })?;
+                match slot_ast {
+                    Type::Reference(pointee_ast) => {
+                        let referent = self
+                            .builder
+                            .build_load(slot_ll, slot, name.as_str())
+                            .map_err(llvm_err!("build_load (reference slot)"))?
+                            .into_pointer_value();
+                        let pointee_ll = self.llvm_type(&pointee_ast)?;
+                        Ok((referent, pointee_ll, *pointee_ast))
+                    }
+                    _ => Ok((slot, slot_ll, slot_ast)),
+                }
+            }
+            ExprKind::Deref(operand) => {
+                let operand_ast = self.ast_type_of(operand)?;
+                let pointee_ast =
+                    operand_ast
+                        .pointee()
+                        .cloned()
+                        .ok_or(CodegenError::InvalidIrState(
+                            "dereference of a non-pointer value",
+                        ))?;
+                let pointee_ll = self.llvm_type(&pointee_ast)?;
+                let address = self.codegen_expr(operand)?;
+                let BasicValueEnum::PointerValue(address) = address else {
+                    return Err(CodegenError::InvalidIrState(
+                        "dereference operand did not lower to a pointer",
+                    ));
+                };
+                Ok((address, pointee_ll, pointee_ast))
+            }
+            _ => Err(CodegenError::NotAPlaceExpression { span: e.span }),
+        }
+    }
+
+    /// Lowers an address literal (`@0x1234`) to a constant pointer, rejecting
+    /// values that do not fit the target's pointer width.
+    fn codegen_address_literal(
+        &self,
+        value: &num_bigint::BigInt,
+        span: Span,
+    ) -> CodegenResult<BasicValueEnum<'ctx>> {
+        let width = self.target_data.get_pointer_byte_size(None) * 8;
+        let out_of_range = || CodegenError::AddressLiteralOutOfRange {
+            value: value.clone(),
+            width,
+            span,
+        };
+        let raw = value.to_u64().ok_or_else(out_of_range)?;
+        if width < 64 && raw >= (1u64 << width) {
+            return Err(out_of_range());
+        }
+        let int_ty = self.context.ptr_sized_int_type(&self.target_data, None);
+        Ok(int_ty
+            .const_int(raw, false)
+            .const_to_pointer(self.context.ptr_type(AddressSpace::default()))
+            .into())
+    }
+
     fn codegen_expr(&mut self, e: &Expr) -> CodegenResult<BasicValueEnum<'ctx>> {
         match &e.kind {
             ExprKind::Int(v) => Ok(bigint_to_llvm_const(self.context, v).into()),
@@ -843,17 +941,24 @@ impl<'ctx, 'a> CodeGen<'ctx, 'a> {
                 Ok(ft.const_float(*fv).into())
             }
             ExprKind::Ident(name) => {
-                let &(ref ptr, ty, ref _ast_ty) =
-                    self.lookup_variable(name)
-                        .ok_or_else(|| CodegenError::UndefinedVariable {
-                            name: name.clone(),
-                            span: e.span,
-                        })?;
+                let (address, pointee_ll, _) = self.codegen_place(e)?;
                 self.builder
-                    .build_load(ty, *ptr, name.as_str())
+                    .build_load(pointee_ll, address, name.as_str())
                     .map_err(llvm_err!("build_load"))
                     .map(|v| v.as_basic_value_enum())
             }
+            ExprKind::Deref(_) => {
+                let (address, pointee_ll, _) = self.codegen_place(e)?;
+                self.builder
+                    .build_load(pointee_ll, address, "deref")
+                    .map_err(llvm_err!("build_load (deref)"))
+                    .map(|v| v.as_basic_value_enum())
+            }
+            ExprKind::AddressOf(operand) => {
+                let (address, _, _) = self.codegen_place(operand)?;
+                Ok(address.into())
+            }
+            ExprKind::Address(value) => self.codegen_address_literal(value, e.span),
             ExprKind::BinOp { lhs, op, rhs } => {
                 let lhs_unsigned = self.infer_expr_unsigned(lhs);
                 let rhs_unsigned = self.infer_expr_unsigned(rhs);
@@ -865,6 +970,9 @@ impl<'ctx, 'a> CodeGen<'ctx, 'a> {
                         .map(Into::into),
                     (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) => {
                         self.codegen_binop_float(op, l, r)
+                    }
+                    (BasicValueEnum::PointerValue(l), BasicValueEnum::PointerValue(r)) => {
+                        self.codegen_binop_pointer(op, l, r, e.span).map(Into::into)
                     }
                     _ => Err(CodegenError::InvalidIrState(
                         "mixed operand categories in binop (should be caught by validate)",
@@ -1204,7 +1312,36 @@ impl<'ctx, 'a> CodeGen<'ctx, 'a> {
             }
             ExprKind::Call { .. } | ExprKind::Loop { .. } | ExprKind::CondLoop { .. } => false,
             ExprKind::Bool(_) | ExprKind::Float(_) => false,
+            // Pointers are neither signed nor unsigned integers.
+            ExprKind::Address(_) | ExprKind::AddressOf(_) => false,
+            ExprKind::Deref(_) => self
+                .place_ast_type(e)
+                .is_ok_and(|ty| matches!(ty, Type::UInt(_) | Type::USize)),
         }
+    }
+
+    /// Lowers the only binary operators defined on pointers: identity
+    /// comparison. Arithmetic and ordering are rejected during validation.
+    fn codegen_binop_pointer(
+        &self,
+        op: &BinOp,
+        lhs: PointerValue<'ctx>,
+        rhs: PointerValue<'ctx>,
+        span: Span,
+    ) -> CodegenResult<inkwell::values::IntValue<'ctx>> {
+        let predicate = match op {
+            BinOp::Eq => IntPredicate::EQ,
+            BinOp::NotEq => IntPredicate::NE,
+            _ => {
+                return Err(CodegenError::UnsupportedOperator {
+                    op: format!("{op:?}"),
+                    span,
+                });
+            }
+        };
+        self.builder
+            .build_int_compare(predicate, lhs, rhs, "ptr_cmp")
+            .map_err(llvm_err!("build_int_compare (pointer)"))
     }
 
     fn codegen_binop_float(

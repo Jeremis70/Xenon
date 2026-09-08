@@ -75,6 +75,14 @@ pub enum CodegenError {
     ShiftOverflow { span: Span },
     #[error("integer overflow at {span:?}")]
     IntegerOverflow { span: Span },
+    #[error("address literal {value} does not fit in a {width}-bit pointer at {span:?}")]
+    AddressLiteralOutOfRange {
+        value: num_bigint::BigInt,
+        width: u32,
+        span: Span,
+    },
+    #[error("invalid assignment target at {span:?}: expected an addressable location")]
+    NotAPlaceExpression { span: Span },
     #[error("{0}")]
     Other(String),
 }
@@ -157,6 +165,12 @@ pub enum SemanticError {
     EntryWrongReturn { span: Span },
     #[error("unknown attribute `{name}`")]
     UnknownAttribute { name: String, span: Span },
+    #[error("invalid assignment target: expected an addressable location")]
+    NotAPlaceExpression { span: Span },
+    #[error("cannot dereference `{found}`: expected a pointer or reference type")]
+    CannotDereference { found: String, span: Span },
+    #[error("address literal requires a pointer or reference type in context")]
+    AddressLiteralWithoutPointerType { span: Span },
 }
 
 pub type SemanticResult<T> = Result<T, SemanticError>;
@@ -180,7 +194,10 @@ impl SemanticError {
             | SemanticError::MultipleEntryPoints { span, .. }
             | SemanticError::EntryWithParams { span }
             | SemanticError::EntryWrongReturn { span }
-            | SemanticError::UnknownAttribute { span, .. } => Some(*span),
+            | SemanticError::UnknownAttribute { span, .. }
+            | SemanticError::NotAPlaceExpression { span }
+            | SemanticError::CannotDereference { span, .. }
+            | SemanticError::AddressLiteralWithoutPointerType { span } => Some(*span),
             SemanticError::NoEntryPoint => None,
         }
     }

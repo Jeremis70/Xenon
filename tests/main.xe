@@ -1,12 +1,13 @@
-// Testing MVP for xenon programming language
 #[entry]
 fn main()->i32
 {
     let i32 x = 0;
+    let *i32 y = @x;
     while x < 10
     {
         x++;
     }
+    *y += 2;
     return fibonacci(x);
 }
 
