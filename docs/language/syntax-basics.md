@@ -16,34 +16,38 @@ Initial value is optional and is expected to default to zero
 u64 x = 42;
 ```
 
-## Address and pointer expressions (draft)
+## Address and pointer expressions
 
 Pointer declarations and address operations follow these forms:
 
 ```xe
 // Pointer to a u32:
-u32 x;
-*u32 p = @x;
+let u32 x = 0;
+let *u32 p = @x;
 
 // Pointer to a fixed memory address:
-*u32 p_2 = @0xFFFFFFFF;
+let *u32 p_2 = @0xFFFFFFFF;
 
 // Pointer to pointer:
-**u32 p_3 = @p_2;
+let **u32 p_3 = @p_2;
 
 // Read and write through a pointer:
-u32 value = *p_2;
+let u32 value = *p_2;
 *p_2 = value;
 
 // Bind a reference to x:
-&u32 r = @x;
-r = 10; // modifies x directly
+let &u32 r = @x;
+r = 10; // modifies x directly, no `*` needed
 ```
 
-`@x` means the address of `x` and is used for both pointers (`*u32 p = @x`)
-and references (`&u32 r = @x`). `@0xFFFFFFFF` means the address represented
-by the literal. A plain integer remains an integer; converting an integer
-variable to a pointer requires an explicit cast such as `address as *u32`.
+`@x` means the address of `x` and is used for both pointers
+(`let *u32 p = @x`) and references (`let &u32 r = @x`); the expected type
+decides which is produced. `@0xFFFFFFFF` means the address represented by the
+literal, and is only valid where a pointer or reference type is expected.
+
+A plain integer remains an integer. Converting an integer *variable* to a
+pointer requires an explicit cast such as `address as *u32`, which is planned
+but not implemented yet.
 
 ## Conditionals
 
