@@ -1002,3 +1002,100 @@ fn entry_plus_user_main_no_collision() {
         "expected @main wrapper to call @start:\n{ir}"
     );
 }
+
+// ── Pointers and references ───────────────────────────────────────────────────
+
+/// `@x` yields the variable's stack slot directly, with no intermediate load.
+#[test]
+fn address_of_stores_the_stack_slot() {
+    let ir = compile_to_ir("fn f()->i32 { let i32 x = 1; let *i32 p = @x; return x; }");
+    assert!(ir.contains("%p = alloca ptr"), "IR:\n{ir}");
+    assert!(ir.contains("store ptr %x, ptr %p"), "IR:\n{ir}");
+}
+
+/// Writing through a pointer loads the pointer, then stores into the pointee.
+#[test]
+fn deref_assignment_stores_through_the_pointer() {
+    let ir = compile_to_ir("fn f()->i32 { let i32 x = 1; let *i32 p = @x; *p = 42; return x; }");
+    assert!(ir.contains("load ptr, ptr %p"), "IR:\n{ir}");
+    assert!(ir.contains("store i32 42, ptr %p1"), "IR:\n{ir}");
+}
+
+/// Reading through a pointer loads the pointer, then loads the pointee.
+#[test]
+fn deref_read_loads_through_the_pointer() {
+    let ir = compile_to_ir("fn f()->i32 { let i32 x = 1; let *i32 p = @x; return *p; }");
+    assert!(ir.contains("load ptr, ptr %p"), "IR:\n{ir}");
+    assert!(ir.contains("%deref = load i32"), "IR:\n{ir}");
+}
+
+/// References are transparent: `r = 10` loads the reference slot and stores
+/// into the referent rather than overwriting the reference itself.
+#[test]
+fn reference_assignment_writes_through_to_the_referent() {
+    let ir = compile_to_ir("fn f()->i32 { let i32 x = 1; let &i32 r = @x; r = 10; return x; }");
+    assert!(ir.contains("%r = alloca ptr"), "IR:\n{ir}");
+    assert!(ir.contains("load ptr, ptr %r"), "IR:\n{ir}");
+    assert!(ir.contains("store i32 10, ptr %r1"), "IR:\n{ir}");
+}
+
+/// Reading a reference variable auto-derefs: pointer load followed by a
+/// pointee load.
+#[test]
+fn reference_read_auto_derefs() {
+    let ir = compile_to_ir("fn f()->i32 { let i32 x = 1; let &i32 r = @x; return r; }");
+    assert!(ir.contains("%r1 = load ptr, ptr %r"), "IR:\n{ir}");
+    assert!(ir.contains("load i32, ptr %r1"), "IR:\n{ir}");
+}
+
+/// A `&T` parameter is passed as an opaque `ptr` and written through.
+#[test]
+fn reference_parameter_is_lowered_to_a_pointer() {
+    let ir = compile_to_ir("fn inc(&i32 v)->i32 { v = v + 1; return v; }");
+    assert!(ir.contains("define i32 @inc(ptr %0)"), "IR:\n{ir}");
+    assert!(ir.contains("%v = alloca ptr"), "IR:\n{ir}");
+    assert!(ir.contains("load ptr, ptr %v"), "IR:\n{ir}");
+}
+
+/// Passing `@n` to a `&T` parameter forwards the stack slot itself.
+#[test]
+fn reference_argument_passes_the_stack_slot() {
+    let ir = compile_to_ir(
+        "fn inc(&i32 v)->i32 { v = v + 1; return v; } fn f()->i32 { let i32 n = 5; return inc(@n); }",
+    );
+    assert!(ir.contains("call i32 @inc(ptr %n)"), "IR:\n{ir}");
+}
+
+/// Double indirection resolves one level per `*`.
+#[test]
+fn double_deref_chains_two_pointer_loads() {
+    let ir = compile_to_ir(
+        "fn f()->i32 { let i32 x = 1; let *i32 p = @x; let **i32 pp = @p; **pp = 7; return x; }",
+    );
+    assert!(ir.contains("store ptr %p, ptr %pp"), "IR:\n{ir}");
+    assert!(ir.contains("%deref = load ptr"), "IR:\n{ir}");
+    assert!(ir.contains("store i32 7, ptr %deref"), "IR:\n{ir}");
+}
+
+/// Address literals lower to a constant `inttoptr`.
+#[test]
+fn address_literal_lowers_to_inttoptr() {
+    let ir = compile_to_ir("fn f()->i32 { let *u32 dev = @0xFF; return 0; }");
+    assert!(ir.contains("inttoptr (i64 255 to ptr)"), "IR:\n{ir}");
+}
+
+/// Pointer identity comparison lowers to an `icmp` on `ptr` operands.
+#[test]
+fn pointer_equality_lowers_to_icmp() {
+    let ir = compile_to_ir(
+        "fn f()->i32 { let i32 x = 1; let *i32 p = @x; let bool b = p == p; return 0; }",
+    );
+    assert!(ir.contains("icmp eq ptr"), "IR:\n{ir}");
+}
+
+/// Pointer-typed named return slots are zero-initialised with a null pointer.
+#[test]
+fn pointer_named_return_slot_is_null_initialised() {
+    let ir = compile_to_ir("fn f()->*i32 out { let i32 x = 1; out = @x; return out; }");
+    assert!(ir.contains("store ptr null, ptr %out"), "IR:\n{ir}");
+}

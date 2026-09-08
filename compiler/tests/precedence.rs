@@ -477,3 +477,70 @@ fn ternary_rhs_is_full_expression() {
         ternary(int(1), int(2), binop(int(3), BinOp::Add, int(4)))
     );
 }
+
+// ── Prefix `*` / `@` vs infix `*` / `&` ───────────────────────────────────────
+
+/// Prefix `*` binds tighter than infix `*`, so `*p * b` is `(*p) * b`.
+#[test]
+fn deref_binds_tighter_than_multiplication() {
+    match parse_expr("*p * b").kind {
+        ExprKind::BinOp { lhs, op, rhs } => {
+            assert_eq!(op, BinOp::Mul);
+            assert!(matches!(&lhs.kind, ExprKind::Deref(_)));
+            assert!(matches!(&rhs.kind, ExprKind::Ident(s) if s == "b"));
+        }
+        other => panic!("expected BinOp, got {other:?}"),
+    }
+}
+
+/// `*p + 1` must parse as `(*p) + 1`, not `*(p + 1)`.
+#[test]
+fn deref_binds_tighter_than_addition() {
+    match parse_expr("*p + 1").kind {
+        ExprKind::BinOp { lhs, op, .. } => {
+            assert_eq!(op, BinOp::Add);
+            assert!(matches!(&lhs.kind, ExprKind::Deref(_)));
+        }
+        other => panic!("expected BinOp, got {other:?}"),
+    }
+}
+
+/// Infix `&` remains bitwise AND; only `&T` in type position marks a reference.
+#[test]
+fn address_of_binds_tighter_than_bitwise_and() {
+    match parse_expr("@x & mask").kind {
+        ExprKind::BinOp { lhs, op, rhs } => {
+            assert_eq!(op, BinOp::BitwiseAnd);
+            assert!(matches!(&lhs.kind, ExprKind::AddressOf(_)));
+            assert!(matches!(&rhs.kind, ExprKind::Ident(s) if s == "mask"));
+        }
+        other => panic!("expected BinOp, got {other:?}"),
+    }
+}
+
+/// Infix `*` after an identifier is still multiplication.
+#[test]
+fn infix_multiplication_is_unaffected_by_prefix_deref() {
+    match parse_expr("a * b").kind {
+        ExprKind::BinOp { lhs, op, rhs } => {
+            assert_eq!(op, BinOp::Mul);
+            assert!(matches!(&lhs.kind, ExprKind::Ident(s) if s == "a"));
+            assert!(matches!(&rhs.kind, ExprKind::Ident(s) if s == "b"));
+        }
+        other => panic!("expected BinOp, got {other:?}"),
+    }
+}
+
+/// `**p` is a nested dereference, not an infix operator.
+#[test]
+fn double_deref_nests() {
+    match parse_expr("**p").kind {
+        ExprKind::Deref(outer) => match &outer.kind {
+            ExprKind::Deref(inner) => {
+                assert!(matches!(&inner.kind, ExprKind::Ident(s) if s == "p"));
+            }
+            other => panic!("expected nested Deref, got {other:?}"),
+        },
+        other => panic!("expected Deref, got {other:?}"),
+    }
+}

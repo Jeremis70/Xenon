@@ -70,8 +70,8 @@ fn parse_plain_assignment_produces_assign_stmt() {
     let program = parser.parse_program().expect("parsing should succeed");
 
     match &program.functions[0].body[0].kind {
-        StmtKind::Assign { name, value } => {
-            assert_eq!(name, "x");
+        StmtKind::Assign { target, value } => {
+            assert!(matches!(&target.kind, ExprKind::Ident(s) if s == "x"));
             assert!(matches!(&value.kind, ExprKind::Int(v) if *v == bi(10)));
         }
         other => panic!("expected Assign, got {:?}", other),
@@ -125,8 +125,8 @@ fn parse_single_assign(src: &str) -> Stmt {
 
 fn assert_desugared(stmt: &Stmt, var: &str, expected_op: BinOp, rhs_val: i64) {
     match &stmt.kind {
-        StmtKind::Assign { name, value } => {
-            assert_eq!(name, var);
+        StmtKind::Assign { target, value } => {
+            assert!(matches!(&target.kind, ExprKind::Ident(s) if s == var));
             match &value.kind {
                 ExprKind::BinOp { lhs, op, rhs } => {
                     assert!(matches!(&lhs.kind, ExprKind::Ident(s) if s == var));
@@ -641,4 +641,122 @@ fn parse_pointer_return_type() {
 
     let f = &program.functions[0];
     assert_eq!(f.return_type.ty, Type::Pointer(Box::new(Type::Int(32))));
+}
+
+// ── Pointer / Reference expressions ───────────────────────────────────────────
+
+/// Parses a single statement from a function body.
+fn parse_stmt(stmt_src: &str) -> Stmt {
+    let src = format!("fn f()->u32{{ {stmt_src} }}");
+    let tokens = lex(&src).expect("lexing should succeed");
+    let mut parser = Parser::new(&tokens);
+    let program = parser.parse_program().expect("parsing should succeed");
+    program.functions[0].body[0].clone()
+}
+
+#[test]
+fn parse_address_of_produces_address_of_node() {
+    match parse_stmt("let *i32 p = @x;").kind {
+        StmtKind::VarDecl(binding) => {
+            let default = binding
+                .default
+                .expect("declaration must have an initialiser");
+            match default.kind {
+                ExprKind::AddressOf(operand) => {
+                    assert!(matches!(&operand.kind, ExprKind::Ident(s) if s == "x"));
+                }
+                other => panic!("expected AddressOf, got {other:?}"),
+            }
+        }
+        other => panic!("expected VarDecl, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_address_literal_produces_address_node() {
+    match parse_stmt("let *u32 dev = @0xFF;").kind {
+        StmtKind::VarDecl(binding) => {
+            let default = binding
+                .default
+                .expect("declaration must have an initialiser");
+            assert!(matches!(default.kind, ExprKind::Address(v) if v == bi(0xFF)));
+        }
+        other => panic!("expected VarDecl, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_deref_assignment_target() {
+    match parse_stmt("*p = 42;").kind {
+        StmtKind::Assign { target, value } => {
+            match target.kind {
+                ExprKind::Deref(operand) => {
+                    assert!(matches!(&operand.kind, ExprKind::Ident(s) if s == "p"));
+                }
+                other => panic!("expected Deref target, got {other:?}"),
+            }
+            assert!(matches!(&value.kind, ExprKind::Int(v) if *v == bi(42)));
+        }
+        other => panic!("expected Assign, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_double_deref_assignment_target() {
+    match parse_stmt("**pp = 1;").kind {
+        StmtKind::Assign { target, .. } => match target.kind {
+            ExprKind::Deref(outer) => match &outer.kind {
+                ExprKind::Deref(inner) => {
+                    assert!(matches!(&inner.kind, ExprKind::Ident(s) if s == "pp"));
+                }
+                other => panic!("expected nested Deref, got {other:?}"),
+            },
+            other => panic!("expected Deref target, got {other:?}"),
+        },
+        other => panic!("expected Assign, got {other:?}"),
+    }
+}
+
+/// `*p += 1;` must desugar to `*p = *p + 1`, preserving the place on both sides.
+#[test]
+fn parse_compound_assignment_through_deref_desugars() {
+    match parse_stmt("*p += 1;").kind {
+        StmtKind::Assign { target, value } => {
+            assert!(matches!(&target.kind, ExprKind::Deref(_)));
+            match value.kind {
+                ExprKind::BinOp { lhs, op, rhs } => {
+                    assert_eq!(op, BinOp::Add);
+                    assert!(matches!(&lhs.kind, ExprKind::Deref(_)));
+                    assert!(matches!(&rhs.kind, ExprKind::Int(v) if *v == bi(1)));
+                }
+                other => panic!("expected BinOp, got {other:?}"),
+            }
+        }
+        other => panic!("expected Assign, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_address_of_non_place_is_error() {
+    let src = "fn f()->u32{ let *i32 p = @g(); return 0; }";
+    let tokens = lex(src).expect("lexing should succeed");
+    let mut parser = Parser::new(&tokens);
+    let err = parser
+        .parse_program()
+        .expect_err("`@` on a call result should be rejected");
+    assert!(
+        err.message.contains("addressable location"),
+        "unexpected error: {}",
+        err.message
+    );
+}
+
+#[test]
+fn parse_assignment_to_address_of_is_error() {
+    let src = "fn f()->u32{ @x = 1; }";
+    let tokens = lex(src).expect("lexing should succeed");
+    let mut parser = Parser::new(&tokens);
+    parser
+        .parse_program()
+        .expect_err("`@x` is not an assignable place");
 }

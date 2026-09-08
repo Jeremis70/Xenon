@@ -1,6 +1,12 @@
 use crate::frontend::ast::BinOp;
 use crate::frontend::tokens::TokenKind;
 
+/// Binding power of prefix operators (`-`, `!`, `~`, `*`, `@`).
+///
+/// Higher than every infix binding power, so `*p + 1` parses as `(*p) + 1`
+/// and `@x & mask` parses as `(@x) & mask`.
+pub(crate) const UNARY_BP: u8 = 23;
+
 /// Binding powers and operator for a binary infix token.
 pub(crate) struct OpInfo {
     pub(crate) left_bp: u8,

@@ -21,6 +21,18 @@ fn is_bool_type(ty: &Type) -> bool {
     matches!(ty, Type::Bool)
 }
 
+/// Strips one level of reference from a variable's declared type.
+///
+/// References are transparent: a variable of type `&T` denotes the `T` it
+/// refers to, both when read and when assigned to. Pointers are *not*
+/// transparent — they require an explicit `*p` dereference.
+fn auto_deref(ty: Type) -> Type {
+    match ty {
+        Type::Reference(inner) => *inner,
+        other => other,
+    }
+}
+
 /// Integer literal marker: only `ExprKind::Int` maps to this during inference.
 fn type_of_int_literal() -> Type {
     Type::Int(64)
@@ -219,20 +231,17 @@ fn check_stmt(stmt: &Stmt, env: &mut Env) -> SemanticResult<()> {
             Ok(())
         }
         StmtKind::Return(expr) => {
-            let t = infer_expr(expr, env)?;
-            assert_assignable(&t, &env.return_ty, expr.span)?;
+            let expected = env.return_ty.clone();
+            let t = infer_expr_with_expect(expr, env, Some(&expected))?;
+            assert_assignable(&t, &expected, expr.span)?;
             Ok(())
         }
-        StmtKind::Assign { name, value } => {
-            let lhs_ty =
-                env.vars
-                    .get(name)
-                    .cloned()
-                    .ok_or_else(|| SemanticError::UndefinedVariable {
-                        name: name.clone(),
-                        span: stmt.span,
-                    })?;
-            let rhs_t = infer_expr(value, env)?;
+        StmtKind::Assign { target, value } => {
+            if !target.is_place() {
+                return Err(SemanticError::NotAPlaceExpression { span: target.span });
+            }
+            let lhs_ty = infer_place_type(target, env)?;
+            let rhs_t = infer_expr_with_expect(value, env, Some(&lhs_ty))?;
             assert_assignable(&rhs_t, &lhs_ty, value.span)?;
             Ok(())
         }
@@ -298,6 +307,37 @@ fn infer_expr(expr: &Expr, env: &mut Env) -> SemanticResult<Type> {
     infer_expr_with_expect(expr, env, None)
 }
 
+/// Infers the type of the location denoted by a place expression.
+///
+/// Pointer and reference types are kept distinct here: an `Ident` bound to
+/// `&T` denotes the `T` it refers to (auto-deref), while a `*T` must be
+/// dereferenced explicitly through [`ExprKind::Deref`].
+fn infer_place_type(expr: &Expr, env: &mut Env) -> SemanticResult<Type> {
+    match &expr.kind {
+        ExprKind::Ident(name) => {
+            let ty =
+                env.vars
+                    .get(name)
+                    .cloned()
+                    .ok_or_else(|| SemanticError::UndefinedVariable {
+                        name: name.clone(),
+                        span: expr.span,
+                    })?;
+            Ok(auto_deref(ty))
+        }
+        ExprKind::Deref(operand) => {
+            let t = infer_expr(operand, env)?;
+            t.pointee()
+                .cloned()
+                .ok_or_else(|| SemanticError::CannotDereference {
+                    found: t.to_string(),
+                    span: expr.span,
+                })
+        }
+        _ => Err(SemanticError::NotAPlaceExpression { span: expr.span }),
+    }
+}
+
 fn infer_expr_with_expect(
     expr: &Expr,
     env: &mut Env,
@@ -308,14 +348,30 @@ fn infer_expr_with_expect(
         ExprKind::Bool(_) => Ok(Type::Bool),
         ExprKind::Float(_) => Ok(Type::Float64),
         ExprKind::Ident(name) => {
-            env.vars
-                .get(name)
-                .cloned()
-                .ok_or_else(|| SemanticError::UndefinedVariable {
-                    name: name.clone(),
-                    span: expr.span,
-                })
+            let ty =
+                env.vars
+                    .get(name)
+                    .cloned()
+                    .ok_or_else(|| SemanticError::UndefinedVariable {
+                        name: name.clone(),
+                        span: expr.span,
+                    })?;
+            Ok(auto_deref(ty))
         }
+        ExprKind::AddressOf(operand) => {
+            let place_ty = infer_place_type(operand, env)?;
+            // The expected type picks the flavour of indirection: `&T` in a
+            // reference context, `*T` everywhere else.
+            Ok(match expect {
+                Some(Type::Reference(_)) => Type::Reference(Box::new(place_ty)),
+                _ => Type::Pointer(Box::new(place_ty)),
+            })
+        }
+        ExprKind::Address(_) => match expect {
+            Some(t) if t.is_indirect() => Ok(t.clone()),
+            _ => Err(SemanticError::AddressLiteralWithoutPointerType { span: expr.span }),
+        },
+        ExprKind::Deref(_) => infer_place_type(expr, env),
         ExprKind::UnaryOp { op, operand } => {
             let t = infer_expr(operand, env)?;
             match op {
@@ -381,7 +437,7 @@ fn infer_expr_with_expect(
                 });
             }
             for (arg, param) in args.iter().zip(callee.params.iter()) {
-                let at = infer_expr(arg, env)?;
+                let at = infer_expr_with_expect(arg, env, Some(&param.ty))?;
                 assert_assignable(&at, &param.ty, arg.span)?;
             }
             Ok(callee.return_type.ty.clone())
@@ -460,6 +516,19 @@ fn infer_binop(
     rhs_ty: Type,
     span: crate::frontend::tokens::Span,
 ) -> SemanticResult<Type> {
+    // Pointers are opaque addresses: only identity comparison between two
+    // identical pointer types is meaningful. Arithmetic, bitwise, and ordering
+    // operators are rejected until pointer arithmetic is specified.
+    if lhs_ty.is_indirect() || rhs_ty.is_indirect() {
+        return match op {
+            BinOp::Eq | BinOp::NotEq if types_equal(&lhs_ty, &rhs_ty) => Ok(Type::Bool),
+            _ => Err(SemanticError::InvalidOperands {
+                op: format!("{op:?}"),
+                detail: format!("operator not supported for `{lhs_ty}` and `{rhs_ty}`"),
+                span,
+            }),
+        };
+    }
     match op {
         BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
             unify_arithmetic(lhs_ty, rhs_ty, span)
