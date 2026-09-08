@@ -237,12 +237,26 @@ fn check_stmt(stmt: &Stmt, env: &mut Env) -> SemanticResult<()> {
             Ok(())
         }
         StmtKind::Assign { target, value } => {
-            if !target.is_place() {
-                return Err(SemanticError::NotAPlaceExpression { span: target.span });
-            }
-            let lhs_ty = infer_place_type(target, env)?;
+            let lhs_ty = check_assign_target(target, env)?;
             let rhs_t = infer_expr_with_expect(value, env, Some(&lhs_ty))?;
             assert_assignable(&rhs_t, &lhs_ty, value.span)?;
+            Ok(())
+        }
+        StmtKind::CompoundAssign { target, op, value } => {
+            // `place op= value` must behave exactly as `place = place op value`
+            // would, without the AST having been rewritten that way.
+            let lhs_ty = check_assign_target(target, env)?;
+            let rhs_ty = infer_expr_with_expect(value, env, Some(&lhs_ty))?;
+            let result = infer_binop(op, lhs_ty.clone(), rhs_ty, stmt.span)?;
+            assert_assignable(&result, &lhs_ty, value.span)?;
+            Ok(())
+        }
+        StmtKind::IncDec { target, op } => {
+            // The implicit operand is a literal `1`, which always unifies with
+            // the target's own type, so the operator is checked against it.
+            let lhs_ty = check_assign_target(target, env)?;
+            let result = infer_binop(&op.to_binop(), lhs_ty.clone(), lhs_ty.clone(), stmt.span)?;
+            assert_assignable(&result, &lhs_ty, stmt.span)?;
             Ok(())
         }
         StmtKind::If {
@@ -305,6 +319,15 @@ fn require_bool_expr(expr: &Expr, env: &mut Env) -> SemanticResult<()> {
 
 fn infer_expr(expr: &Expr, env: &mut Env) -> SemanticResult<Type> {
     infer_expr_with_expect(expr, env, None)
+}
+
+/// Infers the type of the location written to by an assignment, rejecting
+/// targets that do not denote a place.
+fn check_assign_target(target: &Expr, env: &mut Env) -> SemanticResult<Type> {
+    if !target.is_place() {
+        return Err(SemanticError::NotAPlaceExpression { span: target.span });
+    }
+    infer_place_type(target, env)
 }
 
 /// Infers the type of the location denoted by a place expression.

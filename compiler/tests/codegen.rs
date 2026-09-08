@@ -1099,3 +1099,73 @@ fn pointer_named_return_slot_is_null_initialised() {
     let ir = compile_to_ir("fn f()->*i32 out { let i32 x = 1; out = @x; return out; }");
     assert!(ir.contains("store ptr null, ptr %out"), "IR:\n{ir}");
 }
+
+// ── Compound assignment and increment/decrement ───────────────────────────────
+//
+// These are lowered as read-modify-write over a place evaluated once, rather
+// than as a parser-level rewrite into `place = place <op> value`.
+
+#[test]
+fn compound_assign_lowers_to_load_op_store() {
+    let ir = compile_to_ir("fn f()->u32 { let u32 x = 1; x += 2; return x; }");
+    assert!(ir.contains("add"), "expected an add in IR:\n{ir}");
+    assert!(ir.contains("store"), "expected a store in IR:\n{ir}");
+}
+
+#[test]
+fn increment_lowers_to_add_of_one() {
+    let ir = compile_to_ir("fn f()->u32 { let u32 x = 1; x++; return x; }");
+    assert!(ir.contains("add"), "expected an add in IR:\n{ir}");
+}
+
+#[test]
+fn decrement_lowers_to_sub_of_one() {
+    let ir = compile_to_ir("fn f()->u32 { let u32 x = 1; x--; return x; }");
+    assert!(ir.contains("sub"), "expected a sub in IR:\n{ir}");
+}
+
+/// A compound assignment through a pointer must load the pointer once, then
+/// read, update, and write back through that single address. Loading the
+/// pointer variable twice would mean the place was evaluated twice.
+#[test]
+fn compound_assign_through_pointer_evaluates_place_once() {
+    let ir = compile_to_ir("fn f()->i32 { let i32 x = 1; let *i32 p = @x; *p += 2; return x; }");
+    let body = ir.split_once("define").map(|(_, rest)| rest).unwrap_or(&ir);
+    let pointer_loads = body.matches("load ptr").count();
+    assert_eq!(
+        pointer_loads, 1,
+        "the pointer place must be evaluated exactly once, found {pointer_loads} pointer loads:\n{ir}"
+    );
+}
+
+#[test]
+fn increment_through_pointer_evaluates_place_once() {
+    let ir = compile_to_ir("fn f()->i32 { let i32 x = 1; let *i32 p = @x; *p++; return x; }");
+    let body = ir.split_once("define").map(|(_, rest)| rest).unwrap_or(&ir);
+    let pointer_loads = body.matches("load ptr").count();
+    assert_eq!(
+        pointer_loads, 1,
+        "the pointer place must be evaluated exactly once, found {pointer_loads} pointer loads:\n{ir}"
+    );
+}
+
+#[test]
+fn compound_assign_on_float_lowers_to_float_arithmetic() {
+    let ir = compile_to_ir("fn f()->f32 { let f32 x = 1.5; x += 2.5; return x; }");
+    assert!(ir.contains("fadd"), "expected an fadd in IR:\n{ir}");
+}
+
+#[test]
+fn compound_assign_on_unsigned_uses_logical_shift() {
+    let ir = compile_to_ir("fn f()->u32 { let u32 x = 8; x >>= 1; return x; }");
+    assert!(ir.contains("lshr"), "expected a logical shift in IR:\n{ir}");
+}
+
+#[test]
+fn compound_assign_on_signed_uses_arithmetic_shift() {
+    let ir = compile_to_ir("fn f()->i32 { let i32 x = 8; x >>= 1; return x; }");
+    assert!(
+        ir.contains("ashr"),
+        "expected an arithmetic shift in IR:\n{ir}"
+    );
+}

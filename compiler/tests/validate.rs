@@ -280,3 +280,99 @@ fn pointer_return_type_is_accepted() {
     validate_src("fn f()->*i32 { let i32 x = 1; return @x; }")
         .expect("returning `@x` from a `*i32` function should be valid");
 }
+
+// ── Compound assignment and increment/decrement ───────────────────────────────
+//
+// These statements are no longer desugared by the parser, so validation must
+// enforce the same rules `place = place <op> value` would have.
+
+#[test]
+fn compound_assign_type_checks_like_the_expanded_form() {
+    validate_src("fn f()->u32 { let u32 x = 1; x += 2; return x; }")
+        .expect("`u32 += literal` should be valid");
+}
+
+#[test]
+fn compound_assign_through_pointer_is_ok() {
+    validate_src("fn f()->i32 { let i32 x = 1; let *i32 p = @x; *p += 2; return x; }")
+        .expect("compound assignment through a pointer should be valid");
+}
+
+#[test]
+fn compound_assign_through_reference_is_ok() {
+    validate_src("fn f()->i32 { let i32 x = 1; let &i32 r = @x; r += 2; return x; }")
+        .expect("compound assignment through a reference should be valid");
+}
+
+#[test]
+fn compound_assign_rejects_mismatched_operand() {
+    let err = validate_src("fn f()->u32 { let u32 x = 1; x += true; return x; }")
+        .expect_err("`u32 += bool` should be rejected");
+    assert!(
+        matches!(err, SemanticError::InvalidOperands { .. }),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn compound_assign_rejects_bitwise_op_on_bool() {
+    let err = validate_src("fn f()->u32 { let bool b = true; b <<= 1; return 0; }")
+        .expect_err("`bool <<= 1` should be rejected");
+    assert!(
+        matches!(err, SemanticError::InvalidOperands { .. }),
+        "unexpected error: {err}"
+    );
+}
+
+/// Pointers are opaque: `p += 1` is pointer arithmetic, which is not specified.
+#[test]
+fn compound_assign_on_pointer_itself_is_rejected() {
+    let err = validate_src("fn f()->i32 { let i32 x = 1; let *i32 p = @x; p += 1; return x; }")
+        .expect_err("pointer arithmetic should be rejected");
+    assert!(
+        matches!(err, SemanticError::InvalidOperands { .. }),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn increment_on_integer_is_ok() {
+    validate_src("fn f()->u32 { let u32 x = 1; x++; return x; }").expect("`u32++` should be valid");
+}
+
+#[test]
+fn increment_through_pointer_is_ok() {
+    validate_src("fn f()->i32 { let i32 x = 1; let *i32 p = @x; *p++; return x; }")
+        .expect("increment through a pointer should be valid");
+}
+
+#[test]
+fn increment_on_bool_is_rejected() {
+    let err = validate_src("fn f()->u32 { let bool b = true; b++; return 0; }")
+        .expect_err("`bool++` should be rejected");
+    assert!(
+        matches!(err, SemanticError::InvalidOperands { .. }),
+        "unexpected error: {err}"
+    );
+}
+
+/// Incrementing a pointer would be pointer arithmetic, which is unspecified.
+#[test]
+fn increment_on_pointer_itself_is_rejected() {
+    let err = validate_src("fn f()->i32 { let i32 x = 1; let *i32 p = @x; p++; return x; }")
+        .expect_err("pointer increment should be rejected");
+    assert!(
+        matches!(err, SemanticError::InvalidOperands { .. }),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn increment_of_undefined_variable_is_rejected() {
+    let err = validate_src("fn f()->u32 { nope++; return 0; }")
+        .expect_err("incrementing an undefined variable should be rejected");
+    assert!(
+        matches!(err, SemanticError::UndefinedVariable { ref name, .. } if name == "nope"),
+        "unexpected error: {err}"
+    );
+}

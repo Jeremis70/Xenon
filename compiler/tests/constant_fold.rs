@@ -268,3 +268,43 @@ fn fold_folds_around_deref() {
         other => panic!("expected BinOp, got {:?}", other),
     }
 }
+
+// ── Compound assignment and increment/decrement ───────────────────────────────
+
+/// Source-level parsing is used here so the statements keep the exact shape
+/// the parser produces, without any desugaring.
+fn fold_first_stmt(src: &str) -> StmtKind {
+    let tokens = xenonc::frontend::lexer::lex(src).expect("lexing should succeed");
+    let mut parser = xenonc::frontend::parser::Parser::new(&tokens);
+    let program = parser.parse_program().expect("parsing should succeed");
+    let mut program = fold_constants(program).expect("fold should succeed");
+    program.functions.remove(0).body.remove(0).kind
+}
+
+/// Folding must reach into the value of a compound assignment while leaving
+/// the statement itself as a `CompoundAssign`.
+#[test]
+fn fold_folds_compound_assign_value() {
+    match fold_first_stmt("fn f()->u32{ x += 2 + 3; }") {
+        StmtKind::CompoundAssign { target, op, value } => {
+            assert!(matches!(&target.kind, ExprKind::Ident(s) if s == "x"));
+            assert_eq!(op, BinOp::Add);
+            assert!(
+                matches!(&value.kind, ExprKind::Int(v) if *v == BigInt::from(5)),
+                "expected the value to fold to 5, got {:?}",
+                value.kind
+            );
+        }
+        other => panic!("expected CompoundAssign, got {other:?}"),
+    }
+}
+
+#[test]
+fn fold_preserves_increment_statement() {
+    match fold_first_stmt("fn f()->u32{ x++; }") {
+        StmtKind::IncDec { target, .. } => {
+            assert!(matches!(&target.kind, ExprKind::Ident(s) if s == "x"));
+        }
+        other => panic!("expected IncDec, got {other:?}"),
+    }
+}

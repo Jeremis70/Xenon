@@ -151,12 +151,25 @@ pub enum StmtKind {
     /// Variable declaration: `<type> <name> = <expr>;`
     VarDecl(Binding),
     /// Assignment: `<place> = <value>`. The target is a place expression
-    /// ([`ExprKind::Ident`] or [`ExprKind::Deref`]). Compound operators
-    /// (`x += e`) are desugared by the parser into `x = x + e` before
-    /// reaching this node.
+    /// ([`ExprKind::Ident`] or [`ExprKind::Deref`]).
     Assign {
         target: Box<Expr>,
         value: Box<Expr>,
+    },
+    /// Compound assignment: `<place> <op>= <value>`, e.g. `x += 1`.
+    ///
+    /// Deliberately *not* rewritten to `<place> = <place> <op> <value>`: the
+    /// AST mirrors the source, and later stages own the lowering so that the
+    /// target place is evaluated exactly once.
+    CompoundAssign {
+        target: Box<Expr>,
+        op: BinOp,
+        value: Box<Expr>,
+    },
+    /// Increment or decrement: `<place>++` / `<place>--`.
+    IncDec {
+        target: Box<Expr>,
+        op: IncDecOp,
     },
     If {
         condition: Box<Expr>,
@@ -278,9 +291,10 @@ pub enum BinOp {
 }
 
 impl BinOp {
-    /// Maps a compound-assignment token (`+=`, `-=`, …) to the corresponding
-    /// [`BinOp`], returning `None` for plain `=`.
-    pub fn from_assign_token(kind: &TokenKind) -> Option<Self> {
+    /// Maps a compound-assignment token (`+=`, `-=`, …) to the operator it
+    /// applies, returning `None` for any other token (including plain `=`,
+    /// `++`, and `--`).
+    pub fn from_compound_assign_token(kind: &TokenKind) -> Option<Self> {
         match kind {
             TokenKind::PlusEq => Some(BinOp::Add),
             TokenKind::MinusEq => Some(BinOp::Sub),
@@ -292,9 +306,32 @@ impl BinOp {
             TokenKind::XorEq => Some(BinOp::BitwiseXor),
             TokenKind::LShiftEq => Some(BinOp::LShift),
             TokenKind::RShiftEq => Some(BinOp::RShift),
-            TokenKind::PlusPlus => Some(BinOp::Add),
-            TokenKind::MinusMinus => Some(BinOp::Sub),
             _ => None,
+        }
+    }
+}
+
+/// The `++` and `--` operators.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IncDecOp {
+    Increment,
+    Decrement,
+}
+
+impl IncDecOp {
+    pub fn from_token(kind: &TokenKind) -> Option<Self> {
+        match kind {
+            TokenKind::PlusPlus => Some(IncDecOp::Increment),
+            TokenKind::MinusMinus => Some(IncDecOp::Decrement),
+            _ => None,
+        }
+    }
+
+    /// The arithmetic applied between the target and `1`.
+    pub fn to_binop(self) -> BinOp {
+        match self {
+            IncDecOp::Increment => BinOp::Add,
+            IncDecOp::Decrement => BinOp::Sub,
         }
     }
 }
