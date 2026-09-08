@@ -199,3 +199,72 @@ fn fold_out_of_range_shift_is_not_folded() {
         result
     );
 }
+
+// ── Pointers and references ───────────────────────────────────────────────────
+
+fn address_of(inner: Expr) -> Expr {
+    Expr {
+        kind: ExprKind::AddressOf(Box::new(inner)),
+        span: Span::ZERO,
+    }
+}
+
+fn deref(inner: Expr) -> Expr {
+    Expr {
+        kind: ExprKind::Deref(Box::new(inner)),
+        span: Span::ZERO,
+    }
+}
+
+/// Address-of is a place operation: its operand is folded, but the operation
+/// itself is never constant-evaluated away.
+#[test]
+fn fold_preserves_address_of() {
+    let folded = fold(address_of(ident("x")));
+    match folded.kind {
+        ExprKind::AddressOf(operand) => {
+            assert!(matches!(&operand.kind, ExprKind::Ident(s) if s == "x"));
+        }
+        other => panic!("expected AddressOf, got {:?}", other),
+    }
+}
+
+#[test]
+fn fold_preserves_deref_and_folds_operand() {
+    let folded = fold(deref(binop(int(2), BinOp::Add, int(3))));
+    match folded.kind {
+        ExprKind::Deref(operand) => {
+            assert!(matches!(&operand.kind, ExprKind::Int(v) if *v == BigInt::from(5)));
+        }
+        other => panic!("expected Deref, got {:?}", other),
+    }
+}
+
+/// Address literals denote machine addresses and must survive folding intact.
+#[test]
+fn fold_preserves_address_literal() {
+    let literal = Expr {
+        kind: ExprKind::Address(BigInt::from(0xFF)),
+        span: Span::ZERO,
+    };
+    let folded = fold(literal);
+    assert!(matches!(folded.kind, ExprKind::Address(v) if v == BigInt::from(0xFF)));
+}
+
+/// A dereference inside a larger expression keeps the surrounding folding intact.
+#[test]
+fn fold_folds_around_deref() {
+    let folded = fold(binop(
+        deref(ident("p")),
+        BinOp::Add,
+        binop(int(2), BinOp::Mul, int(4)),
+    ));
+    match folded.kind {
+        ExprKind::BinOp { lhs, op, rhs } => {
+            assert_eq!(op, BinOp::Add);
+            assert!(matches!(&lhs.kind, ExprKind::Deref(_)));
+            assert!(matches!(&rhs.kind, ExprKind::Int(v) if *v == BigInt::from(8)));
+        }
+        other => panic!("expected BinOp, got {:?}", other),
+    }
+}

@@ -43,8 +43,8 @@ fn fold_stmt(stmt: Stmt) -> FoldResult<Stmt> {
                 .transpose()?,
             ..binding
         }),
-        StmtKind::Assign { name, value } => StmtKind::Assign {
-            name,
+        StmtKind::Assign { target, value } => StmtKind::Assign {
+            target: Box::new(fold_expr(*target)?),
             value: Box::new(fold_expr(*value)?),
         },
         StmtKind::If {
@@ -123,8 +123,18 @@ fn fold_expr(expr: Expr) -> FoldResult<Expr> {
             }
         }
 
-        ExprKind::Int(_) | ExprKind::Bool(_) | ExprKind::Float(_) | ExprKind::Ident(_) => expr.kind,
+        ExprKind::Int(_)
+        | ExprKind::Bool(_)
+        | ExprKind::Float(_)
+        | ExprKind::Ident(_)
+        // Address literals denote machine addresses, never arithmetic operands,
+        // so they are passed through untouched.
+        | ExprKind::Address(_) => expr.kind,
 
+        // Address-of and dereference are place operations: their operands are
+        // folded, but the operations themselves are never constant-evaluated.
+        ExprKind::AddressOf(operand) => ExprKind::AddressOf(Box::new(fold_expr(*operand)?)),
+        ExprKind::Deref(operand) => ExprKind::Deref(Box::new(fold_expr(*operand)?)),
         ExprKind::IfElse {
             condition,
             then_branch,

@@ -1,4 +1,5 @@
 use crate::error::TypeError;
+use crate::frontend::precedence::UNARY_BP;
 use crate::frontend::tokens::{Span, TokenKind};
 use num_bigint::BigInt;
 use std::str::FromStr;
@@ -39,6 +40,19 @@ impl Type {
             }
             _ => None,
         }
+    }
+
+    /// Returns the pointee type for `*T` and `&T`, `None` otherwise.
+    pub fn pointee(&self) -> Option<&Type> {
+        match self {
+            Type::Pointer(inner) | Type::Reference(inner) => Some(inner),
+            _ => None,
+        }
+    }
+
+    /// Returns `true` for pointer and reference types.
+    pub fn is_indirect(&self) -> bool {
+        matches!(self, Type::Pointer(_) | Type::Reference(_))
     }
 }
 
@@ -136,10 +150,12 @@ pub enum StmtKind {
 
     /// Variable declaration: `<type> <name> = <expr>;`
     VarDecl(Binding),
-    /// Assignment: `x = <value>`. Compound operators (`x += e`) are desugared
-    /// by the parser into `x = x + e` before reaching this node.
+    /// Assignment: `<place> = <value>`. The target is a place expression
+    /// ([`ExprKind::Ident`] or [`ExprKind::Deref`]). Compound operators
+    /// (`x += e`) are desugared by the parser into `x = x + e` before
+    /// reaching this node.
     Assign {
-        name: String,
+        target: Box<Expr>,
         value: Box<Expr>,
     },
     If {
@@ -171,9 +187,16 @@ pub enum ExprKind {
     Bool(bool),
     /// Floating-point literal; lowered to the context type (e.g. `f32`, `f64`).
     Float(f64),
-
+    /// Address literal (`@0x1234`). Builds a pointer from a constant machine
+    /// address rather than from an addressable location.
+    Address(BigInt),
     // Variable reference
     Ident(String),
+    /// Address-of operator (`@x`). The expected type at the use site decides
+    /// whether this produces a pointer (`*T`) or a reference (`&T`).
+    AddressOf(Box<Expr>),
+    /// Dereference operator (`*p`). Also valid as an assignment target.
+    Deref(Box<Expr>),
 
     // Function call
     Call {
@@ -191,6 +214,7 @@ pub enum ExprKind {
         op: UnaryOp,
         operand: Box<Expr>,
     },
+
     // Control flow
     IfElse {
         condition: Box<Expr>,
@@ -217,6 +241,16 @@ pub struct Expr {
 impl PartialEq for Expr {
     fn eq(&self, other: &Self) -> bool {
         self.kind == other.kind
+    }
+}
+
+impl Expr {
+    /// Returns `true` when this expression denotes an assignable location.
+    ///
+    /// Only bare identifiers and dereferences are places today; indexing and
+    /// field access will extend this once those forms exist.
+    pub fn is_place(&self) -> bool {
+        matches!(self.kind, ExprKind::Ident(_) | ExprKind::Deref(_))
     }
 }
 
@@ -284,7 +318,7 @@ impl UnaryOp {
 
     pub fn precedence(&self) -> u8 {
         match self {
-            UnaryOp::Neg | UnaryOp::Not | UnaryOp::BitwiseNot => 23,
+            UnaryOp::Neg | UnaryOp::Not | UnaryOp::BitwiseNot => UNARY_BP,
         }
     }
 }
