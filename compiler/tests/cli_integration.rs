@@ -119,3 +119,73 @@ fn compile_fails_on_oversized_address_literal() {
         .assert()
         .failure();
 }
+
+/// Compiles `src` and runs the resulting binary, returning its exit code.
+fn compile_and_run(src: &str) -> i32 {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("prog.xe");
+    let out_dir = dir.path().join("build");
+    std::fs::create_dir_all(&out_dir).expect("create out dir");
+    std::fs::write(&path, src).expect("write");
+
+    Command::cargo_bin("xenonc")
+        .expect("cargo_bin xenonc")
+        .args([
+            "compile",
+            path.to_str().expect("utf8 path"),
+            "--out-dir",
+            out_dir.to_str().expect("utf8 path"),
+        ])
+        .assert()
+        .success();
+
+    let status = std::process::Command::new(out_dir.join("out"))
+        .status()
+        .expect("run compiled binary");
+    status.code().expect("process exited with a code")
+}
+
+/// Builds a program whose target and right-hand side each append a digit to a
+/// log, so the exit code spells out the order they were evaluated in. `1` is
+/// the assignment target, `2` is the right-hand side.
+fn evaluation_order_program(assignment: &str) -> String {
+    format!(
+        concat!(
+            "#[entry]\n",
+            "fn main() -> i32 {{\n",
+            "    let i32 log = 0;\n",
+            "    let i32 cell = 0;\n",
+            "    {assignment}\n",
+            "    return log;\n",
+            "}}\n",
+            "fn target(&i32 log, &i32 cell) -> *i32 {{\n",
+            "    log = log * 10 + 1;\n",
+            "    return @cell;\n",
+            "}}\n",
+            "fn bump(&i32 log) -> i32 {{\n",
+            "    log = log * 10 + 2;\n",
+            "    return 1;\n",
+            "}}\n",
+        ),
+        assignment = assignment
+    )
+}
+
+/// A compound assignment must evaluate its target before its right-hand side,
+/// exactly like the plain assignment below. Lowering the right-hand side first
+/// would yield `21`.
+#[test]
+fn compound_assignment_evaluates_target_before_value() {
+    let code = compile_and_run(&evaluation_order_program(
+        "*target(@log, @cell) += bump(@log);",
+    ));
+    assert_eq!(code, 12, "expected target-then-value evaluation order");
+}
+
+#[test]
+fn plain_assignment_evaluates_target_before_value() {
+    let code = compile_and_run(&evaluation_order_program(
+        "*target(@log, @cell) = bump(@log);",
+    ));
+    assert_eq!(code, 12, "expected target-then-value evaluation order");
+}

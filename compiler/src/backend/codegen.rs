@@ -546,21 +546,11 @@ impl<'ctx, 'a> CodeGen<'ctx, 'a> {
                 Ok(false)
             }
             StmtKind::CompoundAssign { target, op, value } => {
-                let rhs = self.codegen_expr(value)?;
-                self.codegen_read_modify_write(
-                    target,
-                    op,
-                    rhs,
-                    self.infer_expr_unsigned(value),
-                    stmt.span,
-                )?;
+                self.codegen_read_modify_write(target, op, Some(value), stmt.span)?;
                 Ok(false)
             }
             StmtKind::IncDec { target, op } => {
-                // The implicit operand is a literal `1`; its width is
-                // normalized against the target inside `codegen_binop`.
-                let one = self.context.i64_type().const_int(1, false).into();
-                self.codegen_read_modify_write(target, &op.to_binop(), one, false, stmt.span)?;
+                self.codegen_read_modify_write(target, &op.to_binop(), None, stmt.span)?;
                 Ok(false)
             }
             StmtKind::Expr(expr) => {
@@ -908,17 +898,24 @@ impl<'ctx, 'a> CodeGen<'ctx, 'a> {
 
     /// Lowers an in-place update (`place op= value`, `place++`, `place--`).
     ///
-    /// The place is evaluated **once** and then read, combined, and written
-    /// back, so a target with side effects is never evaluated twice.
+    /// The place is evaluated **once**, and before the right-hand side, so
+    /// side effects run left to right exactly as they do in a plain
+    /// assignment. `value` is `None` for `++`/`--`, whose right-hand operand
+    /// is an implicit literal `1`.
     fn codegen_read_modify_write(
         &mut self,
         target: &Expr,
         op: &BinOp,
-        rhs: BasicValueEnum<'ctx>,
-        rhs_unsigned: bool,
+        value: Option<&Expr>,
         span: Span,
     ) -> CodegenResult<()> {
         let (address, pointee_ll, pointee_ast) = self.codegen_place(target)?;
+        let (rhs, rhs_unsigned) = match value {
+            Some(value) => (self.codegen_expr(value)?, self.infer_expr_unsigned(value)),
+            // The width of the implicit `1` is normalized against the target
+            // inside `codegen_binop`.
+            None => (self.context.i64_type().const_int(1, false).into(), false),
+        };
         let lhs_unsigned = matches!(pointee_ast, Type::UInt(_) | Type::USize);
         let current = self
             .builder
