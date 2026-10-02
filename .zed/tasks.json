@@ -56,17 +56,7 @@
   },
   {
     "label": "Compile tests/main.xe",
-    "command": "cargo",
-    "args": [
-      "run",
-      "-p",
-      "xenonc",
-      "--",
-      "compile",
-      "tests/main.xe",
-      "--out-dir",
-      "xenon-build/"
-    ],
+    "command": "mkdir -p xenon-build/; and cargo run -p xenonc -- compile tests/main.xe --out-dir xenon-build/",
     "use_new_terminal": false,
     "allow_concurrent_runs": false,
     "reveal": "always"
@@ -80,7 +70,7 @@
   },
   {
     "label": "Compile + Run main.xe",
-    "command": "cargo run -p xenonc -- compile tests/main.xe --out-dir xenon-build/; and ./xenon-build/out; echo \"Exit code: $status\"",
+    "command": "mkdir -p xenon-build/; and cargo run -p xenonc -- compile tests/main.xe --out-dir xenon-build/; and ./xenon-build/out; echo \"Exit code: $status\"",
     "use_new_terminal": false,
     "allow_concurrent_runs": false,
     "reveal": "always"
