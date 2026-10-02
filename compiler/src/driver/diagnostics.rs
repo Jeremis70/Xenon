@@ -2,7 +2,7 @@ use ariadne::{Color, Label, Report, ReportKind, Source};
 
 use crate::driver::config::{ColorChoice, ErrorFormat};
 use crate::error::{CodegenError, FoldError, LexError, ParseError, SemanticError};
-use crate::frontend::tokens::Span;
+use crate::source::Span;
 
 /// Configures colour output based on the session's colour preference.
 fn color_config(color: ColorChoice) -> ariadne::Config {

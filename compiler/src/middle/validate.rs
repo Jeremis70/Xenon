@@ -4,6 +4,7 @@ use crate::error::{SemanticError, SemanticResult};
 use crate::frontend::ast::{
     BinOp, Expr, ExprKind, Function, Program, Stmt, StmtKind, Type, UnaryOp,
 };
+use crate::source::Span;
 use num_bigint::BigInt;
 
 fn is_integer_type(ty: &Type) -> bool {
@@ -42,11 +43,7 @@ fn types_equal(a: &Type, b: &Type) -> bool {
     a == b
 }
 
-fn assert_assignable(
-    expr_ty: &Type,
-    target: &Type,
-    span: crate::frontend::tokens::Span,
-) -> SemanticResult<()> {
+fn assert_assignable(expr_ty: &Type, target: &Type, span: Span) -> SemanticResult<()> {
     if types_equal(expr_ty, target) {
         return Ok(());
     }
@@ -65,11 +62,7 @@ fn assert_assignable(
     })
 }
 
-fn unify_arithmetic(
-    lhs: Type,
-    rhs: Type,
-    span: crate::frontend::tokens::Span,
-) -> SemanticResult<Type> {
+fn unify_arithmetic(lhs: Type, rhs: Type, span: Span) -> SemanticResult<Type> {
     match (&lhs, &rhs) {
         (l, r) if is_float_type(l) && is_float_type(r) => {
             if types_equal(l, r) {
@@ -99,7 +92,7 @@ fn unify_arithmetic(
     }
 }
 
-fn unify_compare(lhs: Type, rhs: Type, span: crate::frontend::tokens::Span) -> SemanticResult<()> {
+fn unify_compare(lhs: Type, rhs: Type, span: Span) -> SemanticResult<()> {
     if (is_integer_type(&lhs) || matches!(lhs, Type::Int(64)))
         && (is_integer_type(&rhs) || matches!(rhs, Type::Int(64)))
     {
@@ -125,7 +118,7 @@ fn unify_compare(lhs: Type, rhs: Type, span: crate::frontend::tokens::Span) -> S
     })
 }
 
-fn unify_shift(lhs: Type, rhs: Type, span: crate::frontend::tokens::Span) -> SemanticResult<Type> {
+fn unify_shift(lhs: Type, rhs: Type, span: Span) -> SemanticResult<Type> {
     match (&lhs, &rhs) {
         (l, r) if is_integer_type(l) && (is_integer_type(r) || matches!(r, Type::Int(64))) => {
             Ok(l.clone())
@@ -168,7 +161,7 @@ struct LoopFrame {
 }
 
 impl LoopFrame {
-    fn merge_break(&mut self, ty: Type, span: crate::frontend::tokens::Span) -> SemanticResult<()> {
+    fn merge_break(&mut self, ty: Type, span: Span) -> SemanticResult<()> {
         match &self.inferred {
             None => {
                 self.inferred = Some(ty);
@@ -533,12 +526,7 @@ fn infer_expr_with_expect(
     }
 }
 
-fn infer_binop(
-    op: &BinOp,
-    lhs_ty: Type,
-    rhs_ty: Type,
-    span: crate::frontend::tokens::Span,
-) -> SemanticResult<Type> {
+fn infer_binop(op: &BinOp, lhs_ty: Type, rhs_ty: Type, span: Span) -> SemanticResult<Type> {
     // Pointers are opaque addresses: only identity comparison between two
     // identical pointer types is meaningful. Arithmetic, bitwise, and ordering
     // operators are rejected until pointer arithmetic is specified.
@@ -586,12 +574,7 @@ fn infer_binop(
     }
 }
 
-fn check_constant_range(
-    name: &str,
-    value: &BigInt,
-    ty: &Type,
-    span: crate::frontend::tokens::Span,
-) -> SemanticResult<()> {
+fn check_constant_range(name: &str, value: &BigInt, ty: &Type, span: Span) -> SemanticResult<()> {
     let fits = match ty.bounds() {
         Some((min, max)) => value >= &min && value <= &max,
         None => true,

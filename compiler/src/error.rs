@@ -1,4 +1,5 @@
-use crate::frontend::tokens::Span;
+use crate::source::Span;
+use crate::types::Type;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[error("lexing error at {span:?}")]
@@ -95,7 +96,7 @@ pub enum SemanticError {
     ConstantOutOfRange {
         name: String,
         value: num_bigint::BigInt,
-        ty: crate::frontend::ast::Type,
+        ty: Type,
         span: Span,
     },
     #[error("type mismatch: expected `{expected}`, found `{found}`")]
