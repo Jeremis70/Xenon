@@ -21,14 +21,16 @@ Alpha. Expect breaking changes.
 
 ## Build and run
 
-Prerequisite: a recent Rust toolchain (stable).
+Prerequisites: a recent Rust toolchain (stable), LLVM development libraries, and
+`llvm-config` on your `PATH`. LLVM 22.1 is the version used by CI.
 
 - Build:
 	- `cargo build -p xenonc`
 - Run:
 	- `cargo run -p xenonc`
 - Compile a Xenon source file:
-	- `cargo run -- compile tests/main.xe --out-dir xenon-build/`
+	- `mkdir -p xenon-build/`
+	- `cargo run -p xenonc -- compile tests/main.xe --out-dir xenon-build/`
 - Type-check / parse / validate only (no codegen or link):
 	- `cargo run -p xenonc -- check tests/main.xe`
 - Run tests:
