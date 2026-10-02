@@ -1,18 +1,7 @@
 use crate::error::{ParseError, ParseResult};
+pub use crate::source::Span;
 use logos::Logos;
 use num_bigint::BigInt;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Span {
-    pub start: usize,
-    pub end: usize,
-}
-
-impl Span {
-    /// A zero-width span at position 0, used as a placeholder when no source
-    /// location is available (e.g. synthetic AST nodes in tests).
-    pub const ZERO: Span = Span { start: 0, end: 0 };
-}
 
 impl TokenKind {
     /// Returns `true` for all assignment operator tokens (`=`, `+=`, `-=`, …).

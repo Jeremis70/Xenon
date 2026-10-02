@@ -2,7 +2,7 @@ use crate::error::{FoldError, FoldResult};
 use crate::frontend::ast::{
     BinOp, Binding, Expr, ExprKind, Function, Program, Stmt, StmtKind, UnaryOp,
 };
-use crate::frontend::tokens::Span;
+use crate::source::Span;
 use num_bigint::BigInt;
 use num_traits::{ToPrimitive, Zero};
 

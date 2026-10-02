@@ -1,4 +1,4 @@
-use crate::frontend::ast::Type;
+use crate::types::Type;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -19,8 +19,8 @@ use inkwell::IntPredicate;
 
 use crate::error::{CodegenError, CodegenResult};
 use crate::frontend::ast::{BinOp, Expr, ExprKind, Function, Program, Stmt, StmtKind, UnaryOp};
-use crate::frontend::tokens::Span;
 use crate::middle::validate::infer_expr_type_after_validate;
+use crate::source::Span;
 use num_bigint::BigInt;
 use num_traits::ToPrimitive;
 
@@ -100,7 +100,7 @@ impl<'ctx, 'a> CodeGen<'ctx, 'a> {
         }
     }
 
-    fn llvm_type(&self, ty: &crate::frontend::ast::Type) -> CodegenResult<BasicTypeEnum<'ctx>> {
+    fn llvm_type(&self, ty: &crate::types::Type) -> CodegenResult<BasicTypeEnum<'ctx>> {
         Ok(match ty {
             Type::Bool => self.context.bool_type().into(),
             Type::Int(w) | Type::UInt(w) => {
