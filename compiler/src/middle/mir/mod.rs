@@ -8,6 +8,7 @@
 //!
 //! Module map:
 //! - [`body`]: [`Body`], locals, blocks, scopes, and phases.
+//! - [`build`]: construction of built MIR from THIR ([`build_mir`]).
 //! - [`syntax`]: statements, terminators, places, operands, and rvalues.
 //! - [`program`]: [`MirProgram`], function declarations and bodies.
 //! - [`typing`]: the single source of truth for MIR typing rules.
@@ -20,6 +21,7 @@
 //! See `docs/internals/mir.md` for the design and its invariants.
 
 pub mod body;
+pub mod build;
 pub mod builder;
 pub mod pretty;
 pub mod program;
@@ -34,6 +36,7 @@ pub use body::{
     OUTERMOST_SOURCE_SCOPE, PhaseError, RETURN_PLACE, START_BLOCK, SourceInfo, SourceScope,
     SourceScopeData,
 };
+pub use build::{LowerError, LowerErrorKind, build_body, build_mir};
 pub use builder::{BodyBuilder, BuildError};
 pub use program::{FnDecl, FnSig, MirProgram, ProgramError};
 pub use syntax::{

@@ -92,6 +92,19 @@ impl Type {
     pub fn is_bool(&self) -> bool {
         matches!(self, Type::Bool)
     }
+
+    /// Bit width of a floating-point type, `None` for non-floats.
+    ///
+    /// Float widths are target-independent, unlike `usize`/`isize`.
+    pub fn float_width(&self) -> Option<u32> {
+        match self {
+            Type::Float16 | Type::BFloat16 => Some(16),
+            Type::Float32 => Some(32),
+            Type::Float64 => Some(64),
+            Type::Float128 => Some(128),
+            _ => None,
+        }
+    }
 }
 
 /// Inclusive value range of an unsigned integer of `width` bits.

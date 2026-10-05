@@ -172,6 +172,18 @@ pub enum SemanticError {
     CannotDereference { found: String, span: Span },
     #[error("address literal requires a pointer or reference type in context")]
     AddressLiteralWithoutPointerType { span: Span },
+    #[error("literal {value} is out of range for type `{ty}`")]
+    LiteralOutOfRange {
+        value: num_bigint::BigInt,
+        ty: Type,
+        span: Span,
+    },
+    #[error("function `{name}` is defined more than once")]
+    DuplicateFunction {
+        name: String,
+        first_span: Span,
+        span: Span,
+    },
 }
 
 pub type SemanticResult<T> = Result<T, SemanticError>;
@@ -198,7 +210,9 @@ impl SemanticError {
             | SemanticError::UnknownAttribute { span, .. }
             | SemanticError::NotAPlaceExpression { span }
             | SemanticError::CannotDereference { span, .. }
-            | SemanticError::AddressLiteralWithoutPointerType { span } => Some(*span),
+            | SemanticError::AddressLiteralWithoutPointerType { span }
+            | SemanticError::LiteralOutOfRange { span, .. }
+            | SemanticError::DuplicateFunction { span, .. } => Some(*span),
             SemanticError::NoEntryPoint => None,
         }
     }

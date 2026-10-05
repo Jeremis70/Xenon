@@ -147,9 +147,9 @@ fn pretty_prints_deterministic_mir() -> Result<(), Box<dyn std::error::Error>> {
     let program = sample_program()?;
     let expected = "\
 // MIR for `add_one` (phase: built)
-fn add_one(_1: i32) -> i32 {
-    let _0: i32;
-    let _2: bool;
+fn add_one(i32 _1) -> i32 {
+    let i32 _0;
+    let bool _2;
     debug x => _1;
 
     bb0: {
@@ -167,8 +167,8 @@ fn add_one(_1: i32) -> i32 {
 
 // MIR for `main` (phase: built)
 fn main() -> i32 {
-    let _0: i32;
-    let _1: bool;
+    let i32 _0;
+    let bool _1;
 
     bb0: {
         _1 = const true;

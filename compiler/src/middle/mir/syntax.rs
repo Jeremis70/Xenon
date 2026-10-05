@@ -14,6 +14,8 @@ use num_bigint::BigInt;
 use crate::middle::ids::DefId;
 use crate::types::Type;
 
+pub use crate::middle::ops::{BinOp, CastKind, IndirectionKind, UnOp};
+
 use super::body::{BasicBlock, Local, SourceInfo};
 
 // ---------------------------------------------------------------------------
@@ -331,6 +333,28 @@ impl Constant {
         }
     }
 
+    /// The zero value of `ty`: `false`, `0`, `0.0`, or the null address.
+    ///
+    /// Returns `None` for types without a zero value; every type of the
+    /// language has one today, but `void` or `never` would not.
+    pub fn zero(ty: &Type) -> Option<Self> {
+        let value = if ty.is_bool() {
+            ConstValue::Bool(false)
+        } else if ty.is_integer() {
+            ConstValue::Int(BigInt::ZERO)
+        } else if ty.is_float() {
+            ConstValue::Float(0.0)
+        } else if ty.is_indirect() {
+            ConstValue::Address(BigInt::ZERO)
+        } else {
+            return None;
+        };
+        Some(Self {
+            ty: ty.clone(),
+            value,
+        })
+    }
+
     /// A raw address constant of pointer type `ty`.
     pub fn address(value: impl Into<BigInt>, ty: Type) -> Self {
         Self {
@@ -376,139 +400,6 @@ pub enum Rvalue {
     Cast(CastKind, Operand, Type),
     /// Takes the address of a place, producing a `*T` or `&T`.
     AddressOf(IndirectionKind, Place),
-}
-
-/// Binary operators.
-///
-/// Logical `&&`/`||` are not MIR operators: eager forms lower to `BitAnd` /
-/// `BitOr` on `bool`; short-circuiting forms lower to control flow.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum BinOp {
-    Add,
-    Sub,
-    Mul,
-    Div,
-    Rem,
-    BitAnd,
-    BitOr,
-    BitXor,
-    Shl,
-    Shr,
-    Eq,
-    Ne,
-    Lt,
-    Le,
-    Gt,
-    Ge,
-}
-
-impl BinOp {
-    /// `+ - * / %`
-    pub fn is_arithmetic(self) -> bool {
-        matches!(
-            self,
-            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem
-        )
-    }
-
-    /// `& | ^`
-    pub fn is_bitwise(self) -> bool {
-        matches!(self, BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor)
-    }
-
-    /// `<< >>`
-    pub fn is_shift(self) -> bool {
-        matches!(self, BinOp::Shl | BinOp::Shr)
-    }
-
-    /// `== != < <= > >=`; these produce `bool`.
-    pub fn is_comparison(self) -> bool {
-        matches!(
-            self,
-            BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge
-        )
-    }
-
-    /// Operators that [`Rvalue::Overflows`] accepts.
-    pub fn is_overflow_checkable(self) -> bool {
-        matches!(self, BinOp::Add | BinOp::Sub | BinOp::Mul)
-    }
-
-    /// The name used in pretty-printed MIR.
-    pub fn name(self) -> &'static str {
-        match self {
-            BinOp::Add => "Add",
-            BinOp::Sub => "Sub",
-            BinOp::Mul => "Mul",
-            BinOp::Div => "Div",
-            BinOp::Rem => "Rem",
-            BinOp::BitAnd => "BitAnd",
-            BinOp::BitOr => "BitOr",
-            BinOp::BitXor => "BitXor",
-            BinOp::Shl => "Shl",
-            BinOp::Shr => "Shr",
-            BinOp::Eq => "Eq",
-            BinOp::Ne => "Ne",
-            BinOp::Lt => "Lt",
-            BinOp::Le => "Le",
-            BinOp::Gt => "Gt",
-            BinOp::Ge => "Ge",
-        }
-    }
-}
-
-/// Unary operators.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum UnOp {
-    /// Arithmetic negation of an integer or float.
-    Neg,
-    /// Logical not of a `bool`, bitwise not of an integer.
-    Not,
-}
-
-impl UnOp {
-    /// The name used in pretty-printed MIR.
-    pub fn name(self) -> &'static str {
-        match self {
-            UnOp::Neg => "Neg",
-            UnOp::Not => "Not",
-        }
-    }
-}
-
-/// The conversion performed by an [`Rvalue::Cast`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum CastKind {
-    /// Integer to integer: truncates, zero-extends, or sign-extends
-    /// according to the widths and the source signedness.
-    IntToInt,
-    /// Float to float: rounds or extends.
-    FloatToFloat,
-    /// Integer to float.
-    IntToFloat,
-    /// Float to integer.
-    FloatToInt,
-    /// Pointer or reference to pointer or reference; the bits are unchanged.
-    PtrToPtr,
-}
-
-/// Whether an address is a raw pointer (`*T`) or a reference (`&T`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum IndirectionKind {
-    /// `*T`, an opaque pointer.
-    Pointer,
-    /// `&T`, an auto-dereferenced reference.
-    Reference,
-}
-
-impl IndirectionKind {
-    /// The pointer type of this kind pointing at `pointee`.
-    pub fn pointer_to(self, pointee: Type) -> Type {
-        match self {
-            IndirectionKind::Pointer => Type::Pointer(Box::new(pointee)),
-            IndirectionKind::Reference => Type::Reference(Box::new(pointee)),
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
