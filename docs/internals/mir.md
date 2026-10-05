@@ -37,9 +37,9 @@ Example dump:
 
 ```text
 // MIR for `add_one` (phase: built)
-fn add_one(_1: i32) -> i32 {
-    let _0: i32;
-    let _2: bool;
+fn add_one(i32 _1) -> i32 {
+    let i32 _0;
+    let bool _2;
     debug x => _1;
 
     bb0: {
@@ -93,6 +93,7 @@ A verification error is a compiler bug, never a user error.
 | File | Role |
 | --- | --- |
 | `body.rs` | `Body`, `Local`, `BasicBlock`, scopes, `MirPhase`, cached predecessors. |
+| `build/` | Construction of built MIR from THIR (`build_mir`); see below. |
 | `syntax.rs` | Statements, terminators, places, operands, rvalues, and their `Display`. |
 | `program.rs` | `MirProgram`: function declarations (`FnDecl`) and bodies, in `DefId` order. |
 | `typing.rs` | `place_ty`, `operand_ty`, `rvalue_ty`: the only typing rules. |
@@ -101,6 +102,57 @@ A verification error is a compiler bug, never a user error.
 | `traversal.rs` | `preorder`, `postorder`, `reverse_postorder`, `reachable_set`. |
 | `verify.rs` | The invariant checker. |
 | `pretty.rs` | Deterministic textual dumps. |
+
+## Construction
+
+`build::build_mir` lowers a `ThirProgram` to a `MirProgram` in the
+`Built` phase. Functions keep their THIR `DefId`s. THIR has already been
+checked, so a `LowerError` always means a compiler bug.
+
+As in rustc, each expression is lowered in the *category* its consumer
+needs:
+
+| Category | Produces | Used for |
+| --- | --- | --- |
+| `as_place` | a `Place` | assignment targets, `@x`, reads of variables |
+| `as_operand` | a constant or `copy place` | operator and call operands |
+| `as_rvalue` | one `Rvalue` | the right-hand side of an assignment |
+| `into(dest)` | writes into a *fresh* `dest` | calls, `a if c else b`, loops |
+
+Each lowering function takes the current block and returns a `Flow`: either
+`Continue(block, value)`, or `Diverge` when control never gets past the
+construct. Statements after a diverging one are not lowered.
+
+| File | Role |
+| --- | --- |
+| `build/mod.rs` | `build_mir`, `Builder`, `Flow`, `LowerError`. |
+| `build/scope.rs` | Lexical scopes, storage markers, loop frames. |
+| `build/expr.rs` | The expression categories and evaluation order. |
+| `build/stmt.rs` | Blocks and statements. |
+| `build/control_flow.rs` | `if`, loops, `break`, `continue`, `return`. |
+
+Lowering rules:
+
+- **Evaluation order is left to right.** A place operand is normally read
+  at the point where the operation runs. If an operand to its right has
+  side effects (a call or a loop), the place is copied into a temporary
+  first. For the same reason, the pointer in an assignment target `*p = e`
+  is copied before `e` runs when `e` has side effects.
+- **Compound assignment.** `x op= e` evaluates `e` first and then reads the
+  old value of `x`: `x = Op(copy x, e)`.
+- **Storage.** A user variable gets `StorageLive` where it is declared, and
+  `StorageDead` on every edge that leaves its scope: the end of the block,
+  `break`, `continue`, and `return`. Temporaries get no storage markers.
+  Each THIR block becomes one `SourceScope`.
+- **Loops** zero-initialize their destination. A `while` loop tests its
+  condition in a header block; a `do` loop tests it in a latch block after
+  the body. Exit and latch blocks are created only when something jumps to
+  them, so a loop that is never left has no exit and diverges.
+- **Named return values** are ordinary locals, zero-initialized at entry.
+- **Falling off the end** of a body ends with `EndOfBody`. Flow checking
+  reports it as a missing `return`.
+- **No runtime checks.** Built MIR has no overflow, division, or shift
+  checks. A later pass inserts them.
 
 ## Extending MIR
 

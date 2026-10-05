@@ -55,4 +55,5 @@
 # Compiler Internals
 
 - [Compiler Architecture](internals/compiler-architecture.md)
+- [THIR and Type Checking](internals/thir.md)
 - [MIR](internals/mir.md)

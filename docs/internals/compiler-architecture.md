@@ -21,7 +21,8 @@ never imports syntax modules and a backend never imports the AST:
 | `source.rs` | `Span`, byte ranges into the source. |
 | `types.rs` | `Type`, the semantic type shared by every stage. |
 | `index.rs` | `Idx`, `IndexVec<I, T>`, and the `newtype_index!` macro. |
-| `middle/ids.rs` | `DefId`, the identity of a function across IRs. |
+| `middle/ids.rs` | `DefId` (a function across IRs) and `BindingId` (a THIR variable). |
+| `middle/ops.rs` | Operators shared by THIR and MIR. |
 | `middle/target.rs` | `TargetSpec`: pointer width and integer ranges, without LLVM. |
 
 `frontend::tokens::Span` and `frontend::ast::Type` re-export the shared
@@ -41,8 +42,16 @@ lex → parse → resolve/typecheck → THIR → MIR build
     → MIR optimizations → backend (LLVM, Cranelift, ...) → link
 ```
 
-The MIR core (`middle/mir/`) is in place. It is not wired into the driver
-yet; the existing AST-based pipeline is unchanged. See [MIR](mir.md).
+Already in place:
+
+- the MIR core (`middle/mir/`);
+- type checking to THIR (`middle/typeck/`, `middle/thir/`);
+- MIR construction (`middle/mir/build/`).
+
+None of these are wired into the driver yet. The existing AST-based
+pipeline is unchanged, and `middle/validate.rs` still decides whether a
+program is accepted. See [THIR and Type Checking](thir.md) and
+[MIR](mir.md).
 
 ### Which checks go where
 

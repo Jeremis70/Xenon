@@ -34,13 +34,13 @@ pub fn write_body(program: &MirProgram, body: &Body, out: &mut dyn Write) -> fmt
         if index > 0 {
             out.write_str(", ")?;
         }
-        write!(out, "{arg}: {}", body.local_decls()[arg].ty)?;
+        write!(out, "{} {arg}", body.local_decls()[arg].ty)?;
     }
     writeln!(out, ") -> {} {{", body.return_ty())?;
 
     for (local, decl) in body.local_decls().iter_enumerated() {
         if body.local_kind(local) != LocalKind::Argument {
-            writeln!(out, "{INDENT}let {local}: {};", decl.ty)?;
+            writeln!(out, "{INDENT}let {} {local};", decl.ty)?;
         }
     }
     for (local, decl) in body.local_decls().iter_enumerated() {
