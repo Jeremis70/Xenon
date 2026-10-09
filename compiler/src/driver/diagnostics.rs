@@ -1,7 +1,8 @@
 use ariadne::{Color, Label, Report, ReportKind, Source};
 
 use crate::driver::config::{ColorChoice, ErrorFormat};
-use crate::error::{CodegenError, FoldError, LexError, ParseError, SemanticError};
+use crate::error::{FoldError, LexError, ParseError, SemanticError};
+use crate::middle::mir::analysis::AnalysisErrors;
 use crate::source::Span;
 
 /// Configures colour output based on the session's colour preference.
@@ -55,6 +56,64 @@ fn emit_json(diag: JsonDiagnostic<'_>) {
         Err(e) => {
             eprintln!(r#"{{"type":"error","message":"failed to serialize diagnostic: {e}"}}"#)
         }
+    }
+}
+
+/// Emits an internal MIR/backend failure without presenting it as a source
+/// semantic error.
+pub fn emit_internal_error(
+    message: &str,
+    code: &'static str,
+    format: ErrorFormat,
+    _color: ColorChoice,
+) {
+    match format {
+        ErrorFormat::Human => eprintln!("compiler error: {message}"),
+        ErrorFormat::Json => emit_json(JsonDiagnostic {
+            kind: "error",
+            message: message.to_owned(),
+            span: None,
+            code: Some(code),
+        }),
+    }
+}
+
+/// Emits MIR flow failures with the first source span when one is available.
+pub fn emit_mir_analysis_error(
+    err: &AnalysisErrors,
+    filename: &str,
+    src: &str,
+    format: ErrorFormat,
+    color: ColorChoice,
+) {
+    let span = err.0.first().map(|error| error.span);
+    match format {
+        ErrorFormat::Human => {
+            if let Some(span) = span {
+                let fid = filename.to_owned();
+                let report = Report::build(ReportKind::Error, (fid.clone(), span_range(span)))
+                    .with_config(color_config(color))
+                    .with_message("MIR flow analysis failed")
+                    .with_label(
+                        Label::new((fid.clone(), span_range(span)))
+                            .with_message(err.to_string())
+                            .with_color(Color::Red),
+                    )
+                    .finish();
+                try_eprint_report(report, fid, src);
+            } else {
+                eprintln!("MIR flow analysis failed: {err}");
+            }
+        }
+        ErrorFormat::Json => emit_json(JsonDiagnostic {
+            kind: "error",
+            message: err.to_string(),
+            span: span.map(|span| JsonSpan {
+                start: span.start,
+                end: span.end,
+            }),
+            code: Some("mir-analysis"),
+        }),
     }
 }
 
@@ -194,56 +253,6 @@ pub fn emit_fold_error(
                 end: span.end,
             }),
             code: Some("fold"),
-        }),
-    }
-}
-
-pub fn emit_codegen_error(
-    err: &CodegenError,
-    filename: &str,
-    src: &str,
-    format: ErrorFormat,
-    color: ColorChoice,
-) {
-    // Extract span from error variants that carry one.
-    let span = match err {
-        CodegenError::UnsupportedType { span, .. }
-        | CodegenError::UnsupportedOperator { span, .. }
-        | CodegenError::UndefinedVariable { span, .. }
-        | CodegenError::UndefinedFunction { span, .. }
-        | CodegenError::ArgumentCountMismatch { span, .. }
-        | CodegenError::MissingReturn { span, .. }
-        | CodegenError::DivisionByZero { span }
-        | CodegenError::ShiftOverflow { span }
-        | CodegenError::IntegerOverflow { span } => Some(*span),
-        _ => None,
-    };
-    match format {
-        ErrorFormat::Human => {
-            if let Some(span) = span {
-                let fid = filename.to_string();
-                let report = Report::build(ReportKind::Error, (fid.clone(), span_range(span)))
-                    .with_config(color_config(color))
-                    .with_message(format!("codegen error: {err}"))
-                    .with_label(
-                        Label::new((fid.clone(), span_range(span)))
-                            .with_message(err.to_string())
-                            .with_color(Color::Red),
-                    )
-                    .finish();
-                try_eprint_report(report, fid, src);
-            } else {
-                eprintln!("error: {err}");
-            }
-        }
-        ErrorFormat::Json => emit_json(JsonDiagnostic {
-            kind: "error",
-            message: err.to_string(),
-            span: span.map(|s| JsonSpan {
-                start: s.start,
-                end: s.end,
-            }),
-            code: Some("codegen"),
         }),
     }
 }

@@ -65,6 +65,49 @@ pub fn check_program(program: &ast::Program, target: &TargetSpec) -> SemanticRes
     Ok(ThirProgram { functions, entry })
 }
 
+/// Validates the executable entry-point contract without performing any
+/// backend work.
+pub fn validate_entry_point(program: &ast::Program) -> SemanticResult<()> {
+    for function in &program.functions {
+        for attribute in &function.attributes {
+            if attribute.name != "entry" {
+                return Err(SemanticError::UnknownAttribute {
+                    name: attribute.name.clone(),
+                    span: attribute.span,
+                });
+            }
+        }
+    }
+
+    let entries: Vec<_> = program
+        .functions
+        .iter()
+        .filter(|function| {
+            function
+                .attributes
+                .iter()
+                .any(|attribute| attribute.name == "entry")
+        })
+        .collect();
+    let entry = match entries.as_slice() {
+        [] => return Err(SemanticError::NoEntryPoint),
+        [entry] => *entry,
+        [first, duplicate, ..] => {
+            return Err(SemanticError::MultipleEntryPoints {
+                first_span: first.span,
+                span: duplicate.span,
+            });
+        }
+    };
+    if !entry.params.is_empty() {
+        return Err(SemanticError::EntryWithParams { span: entry.span });
+    }
+    if entry.return_type.ty != Type::Int(32) {
+        return Err(SemanticError::EntryWrongReturn { span: entry.span });
+    }
+    Ok(())
+}
+
 /// The signature of a function, as seen by callers.
 #[derive(Debug)]
 struct Signature {
