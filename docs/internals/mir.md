@@ -93,6 +93,7 @@ A verification error is a compiler bug, never a user error.
 | File | Role |
 | --- | --- |
 | `body.rs` | `Body`, `Local`, `BasicBlock`, scopes, `MirPhase`, cached predecessors. |
+| `analysis/` | Reachability, flow checks, local liveness, and runtime-check normalization. |
 | `build/` | Construction of built MIR from THIR (`build_mir`); see below. |
 | `syntax.rs` | Statements, terminators, places, operands, rvalues, and their `Display`. |
 | `program.rs` | `MirProgram`: function declarations (`FnDecl`) and bodies, in `DefId` order. |
@@ -130,6 +131,49 @@ construct. Statements after a diverging one are not lowered.
 | `build/expr.rs` | The expression categories and evaluation order. |
 | `build/stmt.rs` | Blocks and statements. |
 | `build/control_flow.rs` | `if`, loops, `break`, `continue`, `return`. |
+
+## Flow analysis and runtime contracts
+
+`analysis::analyze_program` verifies Built MIR, computes CFG reachability and
+definite initialization, and advances the program to `Checked` only when all
+reachable paths are valid. It diagnoses reachable fallthrough and reads of
+locals that are not initialized on every incoming path. Arguments begin
+initialized; `StorageLive` and `StorageDead` clear a local's initialized
+state. Call destinations become initialized only on the normal-return edge.
+Indirect places track initialization of their base pointer, not the memory
+they point to; aggregate field/index initialization is future work.
+
+`analysis::analyze_liveness` is a reusable backward local analysis. Results
+are owned by the caller rather than cached on `Body`, so a MIR mutation cannot
+leave stale analysis state.
+
+The language-level contracts are explicit: arithmetic uses the resolved
+operand type's width and conversions appear as MIR casts; logical operators
+evaluate both operands; references auto-dereference while raw pointers
+require explicit dereference. A loop expression yields its `break` value,
+uses zero for a conditional exit or a value-less break, and diverges when it
+has no exit. `usize`, `isize`, and address checks use the selected target's
+pointer width.
+
+Before a backend consumes MIR, `analysis::normalize_runtime_checks` advances
+Checked MIR to `Runtime`, splitting blocks and inserting explicit `Assert`
+terminators:
+
+- Integer division and remainder by zero trap. Signed minimum divided or
+  remaindered by `-1` also traps, avoiding backend-specific undefined or
+  poison behavior.
+- Shift counts trap when negative or at least the left operand's target bit
+  width. The comparison widens the count so the width itself is representable.
+- `OverflowMode::Checked` adds overflow guards for integer add, subtract,
+  multiply, and negation. `OverflowMode::Wrapping` leaves those operations
+  wrapping. This policy is passed explicitly and is independent of
+  optimization level.
+- Floating-point division follows IEEE behavior and is not guarded as integer
+  division.
+
+Operands are snapshotted before inserted checks, ensuring the check and the
+operation use the same values. No backend should invent or omit these semantic
+checks.
 
 Lowering rules:
 

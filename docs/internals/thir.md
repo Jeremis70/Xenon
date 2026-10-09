@@ -15,7 +15,7 @@ question the AST leaves open has an answer:
 Code that consumes THIR never infers types again and never looks at the AST.
 
 ```text
-AST ──typeck::check_program──▶ THIR ──mir::build_mir──▶ MIR (Built)
+AST ──typecheck::check_program──▶ THIR ──mir::build_mir──▶ MIR (Built)
 ```
 
 ## Module map
@@ -26,12 +26,12 @@ AST ──typeck::check_program──▶ THIR ──mir::build_mir──▶ MIR 
 | `middle/thir/mod.rs` | The THIR data types. |
 | `middle/thir/visit.rs` | A read-only `Visitor` that walks nodes in evaluation order. |
 | `middle/thir/pretty.rs` | Deterministic dumps (`x@b0`, `5_i32`, `(a as i64 [IntToInt])`). |
-| `middle/typeck/mod.rs` | `check_program`, plus the global and per-function contexts. |
-| `middle/typeck/scope.rs` | Lexical scopes that map names to bindings. |
-| `middle/typeck/literal.rs` | Classifies untyped literal expressions. |
-| `middle/typeck/expr.rs` | Expressions, places, literals, and calls. |
-| `middle/typeck/operator.rs` | Unary, binary, compound, shift, and comparison operators. |
-| `middle/typeck/stmt.rs` | Blocks, statements, `break`, and loops. |
+| `middle/typecheck/mod.rs` | `check_program`, plus the global and per-function contexts. |
+| `middle/typecheck/scope.rs` | Lexical scopes that map names to bindings. |
+| `middle/typecheck/literal.rs` | Classifies untyped literal expressions. |
+| `middle/typecheck/expr.rs` | Expressions, places, literals, and calls. |
+| `middle/typecheck/operator.rs` | Unary, binary, compound, shift, and comparison operators. |
+| `middle/typecheck/stmt.rs` | Blocks, statements, `break`, and loops. |
 
 ## Typing rules
 

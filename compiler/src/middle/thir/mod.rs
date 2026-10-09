@@ -1,6 +1,6 @@
 //! THIR: the typed high-level intermediate representation.
 //!
-//! THIR is the output of [type checking](crate::middle::typeck) and the
+//! THIR is the output of [type checking](crate::middle::typecheck) and the
 //! input of [MIR construction](crate::middle::mir::build). It keeps the tree
 //! shape of the source program, but every question the AST leaves open has
 //! been answered:

@@ -8,6 +8,7 @@
 //!
 //! Module map:
 //! - [`body`]: [`Body`], locals, blocks, scopes, and phases.
+//! - [`analysis`]: reachability, dataflow, and runtime-check normalization.
 //! - [`build`]: construction of built MIR from THIR ([`build_mir`]).
 //! - [`syntax`]: statements, terminators, places, operands, and rvalues.
 //! - [`program`]: [`MirProgram`], function declarations and bodies.
@@ -20,6 +21,7 @@
 //!
 //! See `docs/internals/mir.md` for the design and its invariants.
 
+pub mod analysis;
 pub mod body;
 pub mod build;
 pub mod builder;

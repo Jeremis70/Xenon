@@ -45,8 +45,10 @@ lex → parse → resolve/typecheck → THIR → MIR build
 Already in place:
 
 - the MIR core (`middle/mir/`);
-- type checking to THIR (`middle/typeck/`, `middle/thir/`);
-- MIR construction (`middle/mir/build/`).
+- type checking to THIR (`middle/typecheck/`, `middle/thir/`);
+- MIR construction (`middle/mir/build/`);
+- reusable MIR flow analysis and runtime-check normalization
+  (`middle/mir/analysis/`).
 
 None of these are wired into the driver yet. The existing AST-based
 pipeline is unchanged, and `middle/validate.rs` still decides whether a
