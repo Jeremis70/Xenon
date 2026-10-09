@@ -193,10 +193,14 @@ impl SwitchTargets {
 pub enum AssertKind {
     /// The arithmetic operation overflowed its type.
     Overflow(BinOp),
-    /// Integer division by zero (or `MIN / -1` overflow).
+    /// Integer division by zero.
     DivisionByZero,
-    /// Integer remainder by zero (or `MIN % -1` overflow).
+    /// Integer remainder by zero.
     RemainderByZero,
+    /// Signed division or remainder of the minimum value by `-1`.
+    SignedDivisionOverflow,
+    /// Signed remainder of the minimum value by `-1`.
+    SignedRemainderOverflow,
     /// Shift amount is negative or not smaller than the bit width.
     ShiftOutOfRange,
 }
@@ -213,6 +217,8 @@ impl AssertKind {
             AssertKind::RemainderByZero => {
                 "attempt to calculate the remainder with a divisor of zero"
             }
+            AssertKind::SignedDivisionOverflow => "attempt to divide with overflow",
+            AssertKind::SignedRemainderOverflow => "attempt to calculate remainder with overflow",
             AssertKind::ShiftOutOfRange => "attempt to shift out of range",
         }
     }
