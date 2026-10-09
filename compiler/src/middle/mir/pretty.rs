@@ -9,7 +9,7 @@ use std::fmt::{self, Write};
 
 use super::body::{Body, LocalKind};
 use super::program::MirProgram;
-use super::syntax::{Terminator, TerminatorKind};
+use super::syntax::{Terminator, TerminatorKind, write_call};
 
 const INDENT: &str = "    ";
 
@@ -26,7 +26,7 @@ pub fn write_mir_program(program: &MirProgram, out: &mut dyn Write) -> fmt::Resu
 
 /// Writes a single body. `program` supplies function names.
 pub fn write_body(program: &MirProgram, body: &Body, out: &mut dyn Write) -> fmt::Result {
-    let name = function_name(program, body.def_id());
+    let name = program.fn_name(body.def_id());
     writeln!(out, "// MIR for `{name}` (phase: {})", body.phase())?;
 
     write!(out, "fn {name}(")?;
@@ -72,45 +72,19 @@ pub fn mir_program_to_string(program: &MirProgram) -> String {
     out
 }
 
-/// Renders a single body as a string.
-pub fn body_to_string(program: &MirProgram, body: &Body) -> String {
-    let mut out = String::new();
-    // Formatting into a `String` cannot fail.
-    let _ = write_body(program, body, &mut out);
-    out
-}
-
 /// Writes a terminator, resolving callee names through `program`.
 fn write_terminator(
     program: &MirProgram,
     terminator: &Terminator,
     out: &mut dyn Write,
 ) -> fmt::Result {
-    let TerminatorKind::Call {
-        func,
-        args,
-        destination,
-        target,
-    } = &terminator.kind
-    else {
-        return write!(out, "{}", terminator.kind);
-    };
-
-    write!(out, "{destination} = {}(", function_name(program, *func))?;
-    for (index, arg) in args.iter().enumerate() {
-        if index > 0 {
-            out.write_str(", ")?;
-        }
-        write!(out, "{arg}")?;
+    match &terminator.kind {
+        TerminatorKind::Call {
+            func,
+            args,
+            destination,
+            target,
+        } => write_call(out, program.fn_name(*func), args, destination, *target),
+        kind => write!(out, "{kind}"),
     }
-    match target {
-        Some(target) => write!(out, ") -> {target}"),
-        None => out.write_str(") -> !"),
-    }
-}
-
-fn function_name(program: &MirProgram, def_id: crate::middle::ids::DefId) -> String {
-    program
-        .decl(def_id)
-        .map_or_else(|| def_id.to_string(), |decl| decl.name.clone())
 }

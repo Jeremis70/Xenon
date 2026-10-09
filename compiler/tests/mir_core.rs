@@ -376,6 +376,7 @@ fn phases_only_move_forward() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(
         body.advance_phase(MirPhase::Checked),
         Err(PhaseError {
+            def_id: main,
             from: MirPhase::Runtime,
             to: MirPhase::Checked
         })

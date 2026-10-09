@@ -99,3 +99,51 @@ fn custom_entry_and_user_main_get_a_verified_mir_wrapper() {
     assert!(llvm_ir.contains("define i32 @_xe.main()"), "{llvm_ir}");
     assert!(llvm_ir.contains("call i32 @start()"), "{llvm_ir}");
 }
+
+/// Compiles `source` (without an entry point) to LLVM IR text.
+fn ir_for(source: &str) -> String {
+    let dir = tempfile::tempdir().expect("tempdir");
+    emit_ir(&build_mir_for_source(source), &dir.path().join("out.ll"))
+}
+
+#[test]
+fn integer_operations_follow_signedness() {
+    let unsigned = ir_for(
+        "fn f(u32 a, u32 b)->bool { return a < b; }\n\
+         fn g(u32 a, u32 b)->u32 { return a / b; }\n\
+         fn h(u32 a, u32 b)->u32 { return a >> b; }\n",
+    );
+    assert!(unsigned.contains("icmp ult"), "{unsigned}");
+    assert!(unsigned.contains("udiv"), "{unsigned}");
+    assert!(unsigned.contains("lshr"), "{unsigned}");
+
+    let signed = ir_for(
+        "fn f(i32 a, i32 b)->bool { return a < b; }\n\
+         fn g(i32 a, i32 b)->i32 { return a / b; }\n\
+         fn h(i32 a, i32 b)->i32 { return a >> b; }\n",
+    );
+    assert!(signed.contains("icmp slt"), "{signed}");
+    assert!(signed.contains("sdiv"), "{signed}");
+    assert!(signed.contains("ashr"), "{signed}");
+}
+
+#[test]
+fn float_and_pointer_comparisons_lower_to_compares() {
+    let ir = ir_for(
+        "fn f(f64 a, f64 b)->bool { return a <= b; }\n\
+         fn g(*i32 a, *i32 b)->bool { return a == b; }\n",
+    );
+    assert!(ir.contains("fcmp ole double"), "{ir}");
+    assert!(ir.contains("ptrtoint"), "{ir}");
+    assert!(ir.contains("icmp eq"), "{ir}");
+}
+
+#[test]
+fn pointer_sized_integers_use_the_target_width() {
+    let ir = ir_for("fn f(usize a, isize b)->usize { return a; }");
+    let width = TargetSpec::host().pointer_width();
+    assert!(
+        ir.contains(&format!("define i{width} @f(i{width} %0, i{width} %1)")),
+        "{ir}"
+    );
+}

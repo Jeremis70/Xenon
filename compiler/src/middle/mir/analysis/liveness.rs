@@ -6,10 +6,11 @@
 
 use std::collections::BTreeSet;
 
-use crate::index::{Idx, IndexVec};
+use crate::index::IndexVec;
+use crate::middle::mir::body::{BasicBlock, Body, Local, Location};
+use crate::middle::mir::visit::{MutatingUseContext, PlaceContext, Visitor};
 
-use super::super::body::{BasicBlock, Body, Local};
-use super::super::syntax::{Operand, Place, Rvalue, StatementKind, TerminatorKind};
+use super::edge_definition;
 
 /// The locals live on entry to and exit from each basic block.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,137 +44,70 @@ impl Liveness {
 /// pointee. Taking the address of a direct local counts as a use of its
 /// storage.
 pub fn analyze_liveness(body: &Body) -> Liveness {
-    let block_count = body.basic_blocks().len();
-    let mut uses = IndexVec::from_elem_n(BTreeSet::new(), block_count);
-    let mut defs = IndexVec::from_elem_n(BTreeSet::new(), block_count);
+    let blocks = body.basic_blocks();
+    let transfer: IndexVec<BasicBlock, UseDef> = blocks
+        .iter_enumerated()
+        .map(|(block, data)| {
+            let mut use_def = UseDef::default();
+            use_def.visit_basic_block_data(block, data);
+            use_def
+        })
+        .collect();
 
-    for (block, data) in body.basic_blocks().iter_enumerated() {
-        let mut collector = UsageCollector::default();
-        for statement in &data.statements {
-            match &statement.kind {
-                StatementKind::Assign(assign) => {
-                    let (place, rvalue) = &**assign;
-                    collect_rvalue(rvalue, &mut collector);
-                    collect_store(place, &mut collector);
-                }
-                StatementKind::StorageLive(_)
-                | StatementKind::StorageDead(_)
-                | StatementKind::Nop => {}
-            }
-        }
-        match &data.terminator.kind {
-            TerminatorKind::SwitchInt { discr, .. }
-            | TerminatorKind::Assert { cond: discr, .. } => {
-                collect_operand(discr, &mut collector);
-            }
-            TerminatorKind::Call {
-                args, destination, ..
-            } => {
-                for arg in args {
-                    collect_operand(arg, &mut collector);
-                }
-                if !destination.projection.is_empty() {
-                    collector.read(destination.local);
-                }
-            }
-            TerminatorKind::Return => collector.read(Local::new(0)),
-            TerminatorKind::Goto { .. }
-            | TerminatorKind::Unreachable
-            | TerminatorKind::EndOfBody => {}
-        }
-        uses[block] = collector.uses;
-        defs[block] = collector.defs;
-    }
-
-    let mut live_in = IndexVec::from_elem_n(BTreeSet::new(), block_count);
-    let mut live_out = IndexVec::from_elem_n(BTreeSet::new(), block_count);
-    loop {
-        let mut changed = false;
-        for (block, data) in body.basic_blocks().iter_enumerated().rev() {
+    let mut live_in = IndexVec::from_elem_n(BTreeSet::new(), blocks.len());
+    let mut live_out = IndexVec::from_elem_n(BTreeSet::new(), blocks.len());
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for (block, data) in blocks.iter_enumerated().rev() {
+            let terminator = &data.terminator.kind;
             let mut new_out = BTreeSet::new();
-            for successor in data.terminator.kind.successors() {
-                let Some(mut edge_live) = live_in.get(successor).cloned() else {
-                    continue;
-                };
-                if let TerminatorKind::Call {
-                    destination,
-                    target: Some(target),
-                    ..
-                } = &data.terminator.kind
-                    && *target == successor
-                    && destination.projection.is_empty()
-                {
-                    edge_live.remove(&destination.local);
-                }
-                new_out.extend(edge_live);
+            for successor in terminator.successors() {
+                let defined = edge_definition(terminator, successor);
+                // Edges to nonexistent blocks are left to the verifier.
+                new_out.extend(
+                    live_in
+                        .get(successor)
+                        .into_iter()
+                        .flatten()
+                        .filter(|local| Some(**local) != defined),
+                );
             }
-            let mut new_in = uses[block].clone();
-            new_in.extend(new_out.difference(&defs[block]).copied());
-            if live_out[block] != new_out {
-                live_out[block] = new_out;
-                changed = true;
-            }
-            if live_in[block] != new_in {
-                live_in[block] = new_in;
-                changed = true;
-            }
-        }
-        if !changed {
-            break;
+            let UseDef { uses, defs } = &transfer[block];
+            let mut new_in = uses.clone();
+            new_in.extend(new_out.difference(defs));
+
+            changed |= live_out[block] != new_out || live_in[block] != new_in;
+            live_out[block] = new_out;
+            live_in[block] = new_in;
         }
     }
 
     Liveness { live_in, live_out }
 }
 
+/// The upward-exposed uses and the definitions of one block.
 #[derive(Debug, Default)]
-struct UsageCollector {
+struct UseDef {
     uses: BTreeSet<Local>,
     defs: BTreeSet<Local>,
 }
 
-impl UsageCollector {
-    fn read(&mut self, local: Local) {
-        if !self.defs.contains(&local) {
-            self.uses.insert(local);
+impl Visitor for UseDef {
+    fn visit_local(&mut self, local: &Local, context: PlaceContext, _location: Location) {
+        match context {
+            PlaceContext::MutatingUse(MutatingUseContext::Store) => {
+                self.defs.insert(*local);
+            }
+            PlaceContext::NonMutatingUse(_)
+            | PlaceContext::MutatingUse(MutatingUseContext::AddressOf) => {
+                if !self.defs.contains(local) {
+                    self.uses.insert(*local);
+                }
+            }
+            // Call destinations are defined on the return edge, see
+            // `edge_definition`; storage markers neither use nor define.
+            PlaceContext::MutatingUse(MutatingUseContext::Call) | PlaceContext::NonUse(_) => {}
         }
-    }
-
-    fn write(&mut self, local: Local) {
-        self.defs.insert(local);
-    }
-}
-
-fn collect_operand(operand: &Operand, usage: &mut UsageCollector) {
-    if let Operand::Copy(place) = operand {
-        collect_place_read(place, usage);
-    }
-}
-
-fn collect_place_read(place: &Place, usage: &mut UsageCollector) {
-    usage.read(place.local);
-}
-
-fn collect_store(place: &Place, usage: &mut UsageCollector) {
-    if place.projection.is_empty() {
-        usage.write(place.local);
-    } else {
-        usage.read(place.local);
-    }
-}
-
-fn collect_rvalue(rvalue: &Rvalue, usage: &mut UsageCollector) {
-    match rvalue {
-        Rvalue::Use(operand) | Rvalue::UnaryOp(_, operand) | Rvalue::Cast(_, operand, _) => {
-            collect_operand(operand, usage);
-        }
-        Rvalue::BinaryOp(_, operands) | Rvalue::Overflows(_, operands) => {
-            collect_operand(&operands.0, usage);
-            collect_operand(&operands.1, usage);
-        }
-        Rvalue::AddressOf(_, place) if !place.projection.is_empty() => {
-            usage.read(place.local);
-        }
-        Rvalue::AddressOf(_, place) => usage.read(place.local),
     }
 }

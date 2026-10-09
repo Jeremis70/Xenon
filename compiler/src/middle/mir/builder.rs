@@ -15,8 +15,7 @@ use crate::source::Span;
 use crate::types::Type;
 
 use super::body::{
-    BasicBlock, BasicBlockData, Body, Local, LocalDecl, OUTERMOST_SOURCE_SCOPE, SourceInfo,
-    SourceScope, SourceScopeData,
+    BasicBlock, BasicBlockData, Body, Local, LocalDecl, SourceInfo, SourceScope, SourceScopeData,
 };
 use super::syntax::{Place, Rvalue, Statement, StatementKind, Terminator, TerminatorKind};
 use super::typing::HasLocalDecls;
@@ -112,14 +111,7 @@ impl BodyBuilder {
 
     /// Declares an unnamed temporary in the outermost scope.
     pub fn new_temp(&mut self, ty: Type, span: Span) -> Local {
-        self.local_decls.push(LocalDecl {
-            ty,
-            source_info: SourceInfo {
-                span,
-                scope: OUTERMOST_SOURCE_SCOPE,
-            },
-            debug_name: None,
-        })
+        self.local_decls.push(LocalDecl::temp(ty, span))
     }
 
     /// Creates an empty, unterminated block.
@@ -149,11 +141,7 @@ impl BodyBuilder {
         place: Place,
         rvalue: Rvalue,
     ) {
-        self.push_kind(
-            block,
-            source_info,
-            StatementKind::Assign(Box::new((place, rvalue))),
-        );
+        self.push(block, Statement::assign(source_info, place, rvalue));
     }
 
     /// Appends `StorageLive(local)` to `block`.

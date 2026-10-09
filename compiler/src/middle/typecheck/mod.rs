@@ -57,12 +57,18 @@ pub fn check_program(program: &ast::Program, target: &TargetSpec) -> SemanticRes
     for function in &program.functions {
         functions.push(FnCtxt::new(&globals, function).check_function(function)?);
     }
-    let entry = program
-        .functions
-        .iter()
-        .position(|function| function.attributes.iter().any(|attr| attr.name == "entry"))
-        .map(DefId::new);
+    let entry = program.functions.iter().position(is_entry).map(DefId::new);
     Ok(ThirProgram { functions, entry })
+}
+
+/// The attribute marking the program entry point.
+const ENTRY_ATTRIBUTE: &str = "entry";
+
+fn is_entry(function: &ast::Function) -> bool {
+    function
+        .attributes
+        .iter()
+        .any(|attribute| attribute.name == ENTRY_ATTRIBUTE)
 }
 
 /// Validates the executable entry-point contract without performing any
@@ -70,7 +76,7 @@ pub fn check_program(program: &ast::Program, target: &TargetSpec) -> SemanticRes
 pub fn validate_entry_point(program: &ast::Program) -> SemanticResult<()> {
     for function in &program.functions {
         for attribute in &function.attributes {
-            if attribute.name != "entry" {
+            if attribute.name != ENTRY_ATTRIBUTE {
                 return Err(SemanticError::UnknownAttribute {
                     name: attribute.name.clone(),
                     span: attribute.span,
@@ -79,16 +85,7 @@ pub fn validate_entry_point(program: &ast::Program) -> SemanticResult<()> {
         }
     }
 
-    let entries: Vec<_> = program
-        .functions
-        .iter()
-        .filter(|function| {
-            function
-                .attributes
-                .iter()
-                .any(|attribute| attribute.name == "entry")
-        })
-        .collect();
+    let entries: Vec<_> = program.functions.iter().filter(|f| is_entry(f)).collect();
     let entry = match entries.as_slice() {
         [] => return Err(SemanticError::NoEntryPoint),
         [entry] => *entry,

@@ -148,10 +148,7 @@ impl Builder<'_> {
     ) -> LowerResult<Rvalue> {
         let (block, lhs) = unpack!(self.as_ordered_operand(block, lhs, has_side_effects(rhs)));
         let (block, rhs) = unpack!(self.as_operand(block, rhs));
-        Ok(Flow::Continue(
-            block,
-            Rvalue::BinaryOp(op, Box::new((lhs, rhs))),
-        ))
+        Ok(Flow::Continue(block, Rvalue::binary(op, lhs, rhs)))
     }
 
     /// Lowers `expr` into a new temporary.

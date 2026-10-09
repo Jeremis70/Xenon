@@ -1,246 +1,96 @@
-use std::fmt;
 use std::path::PathBuf;
 
-#[cfg(feature = "llvm-backend")]
-use crate::backend::contract::Backend;
-#[cfg(feature = "llvm-backend")]
-use crate::backend::contract::CodegenOptions;
 use crate::backend::contract::{ArtifactKind, OutputRequest};
-#[cfg(feature = "llvm-backend")]
-use crate::backend::llvm::LlvmBackend;
+use crate::backend::link::link_executable;
 use crate::driver::config::{CheckEmitKind, CompileEmitKind, OptLevel, StopAfter};
-use crate::driver::diagnostics;
+use crate::driver::diagnostics::Emitter;
 use crate::driver::session::Session;
-use crate::error::SemanticError;
+use crate::frontend::ast::Program;
 use crate::frontend::lexer::lex;
 use crate::frontend::parser::Parser;
-use crate::frontend::tokens::Token;
-
-use crate::backend::link::link_executable;
-use crate::frontend::ast::Program;
 use crate::middle::constant_fold::fold_constants;
+use crate::middle::mir::MirProgram;
 use crate::middle::mir::analysis::{
-    AnalysisErrors, OverflowMode, RuntimeCheckPolicy, analyze_program, normalize_runtime_checks,
+    OverflowMode, RuntimeCheckPolicy, analyze_program, normalize_runtime_checks,
 };
 use crate::middle::mir::build::build_mir;
 use crate::middle::mir::pretty::mir_program_to_string;
 use crate::middle::target::TargetSpec;
 use crate::middle::typecheck::{check_program, validate_entry_point};
 
-/// Parsed program plus combined source and primary path for diagnostics.
-pub struct ParsedSource {
-    pub program: Program,
-    pub combined_source: String,
-    pub first_path: String,
+/// Why a command failed.
+enum Failure {
+    /// The error has already been reported.
+    Reported,
+    /// A failure of the compiler itself, still to be reported.
+    Internal { code: &'static str, message: String },
 }
 
-/// Lex, parse, and fold source-level constants. Semantic checks are performed
-/// by the typed MIR pipeline rather than the legacy AST validator.
-pub fn parse_source(session: &Session) -> Option<ParsedSource> {
-    let mut tokens: Vec<Token> = Vec::new();
-    let mut combined_source = String::new();
-    let first_path = session
-        .source
-        .first()
-        .map(|s| s.path.display().to_string())
-        .unwrap_or_else(|| "<unknown>".into());
-
-    for source in &session.source {
-        if session.verbose {
-            println!("Compiling source file: {:?}", source.path);
-        }
-        let source_tokens = match lex(&source.content) {
-            Ok(tokens) => tokens,
-            Err(err) => {
-                diagnostics::emit_lex_error(
-                    &err,
-                    &source.path.display().to_string(),
-                    &source.content,
-                    session.error_format,
-                    session.color,
-                );
-                return None;
-            }
-        };
-        combined_source.push_str(&source.content);
-        tokens.extend(source_tokens);
+fn internal(code: &'static str, message: impl Into<String>) -> Failure {
+    Failure::Internal {
+        code,
+        message: message.into(),
     }
+}
 
+/// Reports `result` and turns it into a process exit code.
+fn exit_code(session: &Session, result: Result<(), Failure>) -> i32 {
+    match result {
+        Ok(()) => 0,
+        Err(Failure::Reported) => 1,
+        Err(Failure::Internal { code, message }) => {
+            Emitter::without_source(session).internal_error(&message, code);
+            1
+        }
+    }
+}
+
+pub fn compile(session: &Session) -> i32 {
+    exit_code(session, run_compile(session))
+}
+
+pub fn check(session: &Session) -> i32 {
+    exit_code(session, run_check(session))
+}
+
+fn run_compile(session: &Session) -> Result<(), Failure> {
     if session.verbose {
         println!("Stage: {:?}", session.stop_after);
         println!("Emit: {:?}", session.compile_emit);
     }
+    let emits = |kind| session.compile_emit.contains(&kind);
+    let wants_link = emits(CompileEmitKind::Link);
+    let wants_object = wants_link || emits(CompileEmitKind::Obj);
+    let wants_ir = wants_link || emits(CompileEmitKind::Ir);
+    let wants_mir = emits(CompileEmitKind::Mir);
+    let single_artifact = [wants_object, wants_ir, wants_mir]
+        .into_iter()
+        .filter(|&requested| requested)
+        .count()
+        == 1;
 
-    let mut parser = Parser::new(&tokens);
-    let program = match parser.parse_program() {
-        Ok(p) => p,
-        Err(e) => {
-            diagnostics::emit_parse_error(
-                &e,
-                &first_path,
-                &combined_source,
-                session.error_format,
-                session.color,
-            );
-            return None;
-        }
-    };
-
-    let program = match fold_constants(program) {
-        Ok(p) => p,
-        Err(e) => {
-            diagnostics::emit_fold_error(
-                &e,
-                &first_path,
-                &combined_source,
-                session.error_format,
-                session.color,
-            );
-            return None;
-        }
-    };
-
-    if let Err(error) = validate_entry_point(&program) {
-        diagnostics::emit_semantic_error(
-            &error,
-            &first_path,
-            &combined_source,
-            session.error_format,
-            session.color,
-        );
-        return None;
-    }
-
-    Some(ParsedSource {
-        program,
-        combined_source,
-        first_path,
-    })
-}
-
-#[derive(Debug)]
-enum MirPipelineError {
-    Semantic(SemanticError),
-    Analysis(AnalysisErrors),
-    Internal(String),
-}
-
-impl fmt::Display for MirPipelineError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Semantic(error) => write!(f, "{error}"),
-            Self::Analysis(error) => write!(f, "{error}"),
-            Self::Internal(error) => f.write_str(error),
-        }
-    }
-}
-
-fn emit_mir_pipeline_error(session: &Session, parsed: &ParsedSource, error: &MirPipelineError) {
-    match error {
-        MirPipelineError::Semantic(error) => diagnostics::emit_semantic_error(
-            error,
-            &parsed.first_path,
-            &parsed.combined_source,
-            session.error_format,
-            session.color,
-        ),
-        MirPipelineError::Analysis(error) => diagnostics::emit_mir_analysis_error(
-            error,
-            &parsed.first_path,
-            &parsed.combined_source,
-            session.error_format,
-            session.color,
-        ),
-        MirPipelineError::Internal(error) => {
-            diagnostics::emit_internal_error(error, "compiler", session.error_format, session.color)
-        }
-    }
-}
-
-fn build_runtime_mir(
-    session: &Session,
-    parsed: &ParsedSource,
-) -> Result<crate::middle::mir::MirProgram, MirPipelineError> {
-    if session.target.is_some() {
-        return Err(MirPipelineError::Internal(
-            "custom compilation targets are not supported yet".to_owned(),
+    if !matches!(session.stop_after, StopAfter::Mir | StopAfter::Link) {
+        return Err(internal(
+            "stage",
+            "requested compile stage is not implemented",
         ));
     }
-    let target = TargetSpec::host();
-    let thir = check_program(&parsed.program, &target).map_err(MirPipelineError::Semantic)?;
-    let mut mir = build_mir(&thir)
-        .map_err(|error| MirPipelineError::Internal(format!("MIR lowering failed: {error}")))?;
-    analyze_program(&mut mir, &target).map_err(MirPipelineError::Analysis)?;
-    let overflow = if session.opt_level.is_none_or(|level| level == OptLevel::O0) {
-        OverflowMode::Checked
-    } else {
-        OverflowMode::Wrapping
-    };
-    normalize_runtime_checks(&mut mir, &target, RuntimeCheckPolicy { overflow }).map_err(
-        |error| MirPipelineError::Internal(format!("MIR runtime normalization failed: {error}")),
-    )?;
-    Ok(mir)
-}
-
-pub fn compile(session: &Session) -> i32 {
-    if !matches!(session.stop_after, StopAfter::Mir | StopAfter::Link) {
-        diagnostics::emit_internal_error(
-            "requested compile stage is not implemented",
-            "stage",
-            session.error_format,
-            session.color,
-        );
-        return 1;
-    }
-    let parsed = match parse_source(session) {
-        Some(p) => p,
-        None => return 1,
-    };
-    let mir = match build_runtime_mir(session, &parsed) {
-        Ok(mir) => mir,
-        Err(error) => {
-            emit_mir_pipeline_error(session, &parsed, &error);
-            return 1;
-        }
-    };
-
-    let out_dir: PathBuf = session
-        .out_dir
-        .clone()
-        .unwrap_or_else(|| PathBuf::from("."));
-
-    let mut outputs = Vec::new();
-    let wants_link = session.compile_emit.contains(&CompileEmitKind::Link);
-    let wants_object = wants_link || session.compile_emit.contains(&CompileEmitKind::Obj);
-    let wants_ir = wants_link || session.compile_emit.contains(&CompileEmitKind::Ir);
-    let wants_mir = session.compile_emit.contains(&CompileEmitKind::Mir);
     if session.stop_after == StopAfter::Mir
         && session
             .compile_emit
             .iter()
             .any(|kind| *kind != CompileEmitKind::Mir)
     {
-        diagnostics::emit_internal_error(
-            "compile outputs beyond MIR conflict with `--stage mir`",
+        return Err(internal(
             "stage",
-            session.error_format,
-            session.color,
-        );
-        return 1;
+            "compile outputs beyond MIR conflict with `--stage mir`",
+        ));
     }
-    let single_artifact = [wants_object, wants_ir, wants_mir]
-        .into_iter()
-        .filter(|requested| *requested)
-        .count()
-        == 1;
     if session.output.is_some() && !wants_link && !single_artifact {
-        diagnostics::emit_internal_error(
-            "`--output` with multiple non-link artifacts is not supported",
+        return Err(internal(
             "output",
-            session.error_format,
-            session.color,
-        );
-        return 1;
+            "`--output` with multiple non-link artifacts is not supported",
+        ));
     }
     if session.compile_emit.iter().any(|kind| {
         !matches!(
@@ -251,41 +101,37 @@ pub fn compile(session: &Session) -> i32 {
                 | CompileEmitKind::Mir
         )
     }) {
-        diagnostics::emit_internal_error(
-            "requested compile output kind is not implemented",
+        return Err(internal(
             "output",
-            session.error_format,
-            session.color,
-        );
-        return 1;
+            "requested compile output kind is not implemented",
+        ));
     }
 
-    let explicit_output = session.output.as_ref();
-    let obj_path = if wants_object && !wants_link && single_artifact {
-        explicit_output
-            .cloned()
-            .unwrap_or_else(|| out_dir.join("out.o"))
-    } else {
-        out_dir.join("out.o")
+    let target = target_spec(session)?;
+    let mir = lower_to_runtime_mir(session, &target)?;
+
+    // `--output` names the executable, or else the only requested artifact.
+    let out_dir = session
+        .out_dir
+        .clone()
+        .unwrap_or_else(|| PathBuf::from("."));
+    let artifact_path = |requested: bool, file_name: &str| match &session.output {
+        Some(output) if requested && !wants_link && single_artifact => output.clone(),
+        _ => out_dir.join(file_name),
     };
-    let ll_path = if wants_ir && !wants_link && single_artifact {
-        explicit_output
-            .cloned()
-            .unwrap_or_else(|| out_dir.join("out.ll"))
-    } else {
-        out_dir.join("out.ll")
-    };
-    let mir_path = if wants_mir && single_artifact {
-        explicit_output
-            .cloned()
-            .unwrap_or_else(|| out_dir.join("out.mir"))
-    } else {
-        out_dir.join("out.mir")
-    };
+    let obj_path = artifact_path(wants_object, "out.o");
+    let ll_path = artifact_path(wants_ir, "out.ll");
+    let mir_path = artifact_path(wants_mir, "out.mir");
     let exe_path = session
         .output
         .clone()
         .unwrap_or_else(|| out_dir.join("out"));
+
+    if wants_mir {
+        std::fs::write(&mir_path, mir_program_to_string(&mir))
+            .map_err(|error| internal("output", format!("failed to write MIR output: {error}")))?;
+    }
+    let mut outputs = Vec::new();
     if wants_object {
         outputs.push(OutputRequest {
             kind: ArtifactKind::Object,
@@ -298,125 +144,188 @@ pub fn compile(session: &Session) -> i32 {
             path: ll_path.clone(),
         });
     }
-    if wants_mir && let Err(error) = std::fs::write(&mir_path, mir_program_to_string(&mir)) {
-        diagnostics::emit_internal_error(
-            &format!("failed to write MIR output: {error}"),
-            "output",
-            session.error_format,
-            session.color,
-        );
-        return 1;
-    }
     if !outputs.is_empty() {
-        #[cfg(feature = "llvm-backend")]
-        {
-            let optimization = optimization_level(session.opt_level);
-            if let Err(error) = LlvmBackend.emit(
-                &mir,
-                &TargetSpec::host(),
-                CodegenOptions { optimization },
-                &outputs,
-            ) {
-                diagnostics::emit_internal_error(
-                    &format!("{} backend error: {error}", LlvmBackend.name()),
-                    "backend",
-                    session.error_format,
-                    session.color,
-                );
-                return 1;
-            }
-        }
-        #[cfg(not(feature = "llvm-backend"))]
-        {
-            diagnostics::emit_internal_error(
-                "native code generation is unavailable: build xenonc with the `llvm-backend` feature",
-                "backend",
-                session.error_format,
-                session.color,
-            );
-            return 1;
-        }
+        emit_native(session, &mir, &target, &outputs)?;
     }
-    if wants_link && let Err(e) = link_executable(&obj_path, &exe_path) {
-        diagnostics::emit_internal_error(
-            &format!("link error: {e}"),
-            "link",
-            session.error_format,
-            session.color,
-        );
-        return 1;
+    if wants_link {
+        link_executable(&obj_path, &exe_path)
+            .map_err(|error| internal("link", format!("link error: {error}")))?;
     }
 
     if !session.quiet {
-        if wants_ir {
-            println!("Wrote: {:?}", ll_path);
-        }
-        if wants_object {
-            println!("Wrote: {:?}", obj_path);
-        }
-        if wants_mir {
-            println!("Wrote: {:?}", mir_path);
-        }
-        if wants_link {
-            println!("Wrote: {:?}", exe_path);
+        let written = [
+            (wants_ir, &ll_path),
+            (wants_object, &obj_path),
+            (wants_mir, &mir_path),
+            (wants_link, &exe_path),
+        ];
+        for (_, path) in written.iter().filter(|(requested, _)| *requested) {
+            println!("Wrote: {path:?}");
         }
     }
-
-    0
+    Ok(())
 }
 
-pub fn check(session: &Session) -> i32 {
-    if session.stop_after != StopAfter::Mir {
-        diagnostics::emit_internal_error(
-            "only `check --stage mir` is currently implemented",
-            "stage",
-            session.error_format,
-            session.color,
-        );
-        return 1;
-    }
-    let Some(parsed) = parse_source(session) else {
-        return 1;
-    };
-    let mir = match build_runtime_mir(session, &parsed) {
-        Ok(mir) => mir,
-        Err(error) => {
-            emit_mir_pipeline_error(session, &parsed, &error);
-            return 1;
-        }
-    };
-
+fn run_check(session: &Session) -> Result<(), Failure> {
     if session.verbose {
         println!("Stage: {:?}", session.stop_after);
         println!("Emit: {:?}", session.check_emit);
     }
-
-    if session.check_emit.contains(&CheckEmitKind::Mir) {
-        print!("{}", mir_program_to_string(&mir));
+    if session.stop_after != StopAfter::Mir {
+        return Err(internal(
+            "stage",
+            "only `check --stage mir` is currently implemented",
+        ));
     }
     if session
         .check_emit
         .iter()
         .any(|kind| !matches!(kind, CheckEmitKind::Mir | CheckEmitKind::Metadata))
     {
-        diagnostics::emit_internal_error(
-            "requested check output kind is not implemented",
+        return Err(internal(
             "output",
-            session.error_format,
-            session.color,
-        );
-        return 1;
+            "requested check output kind is not implemented",
+        ));
     }
 
-    0
+    let target = target_spec(session)?;
+    let mir = lower_to_runtime_mir(session, &target)?;
+    if session.check_emit.contains(&CheckEmitKind::Mir) {
+        print!("{}", mir_program_to_string(&mir));
+    }
+    Ok(())
+}
+
+/// The compilation target. Only the host is supported so far.
+fn target_spec(session: &Session) -> Result<TargetSpec, Failure> {
+    match session.target {
+        Some(_) => Err(internal(
+            "target",
+            "custom compilation targets are not supported yet",
+        )),
+        None => Ok(TargetSpec::host()),
+    }
+}
+
+/// Parsed program plus combined source and primary path for diagnostics.
+struct ParsedSource {
+    program: Program,
+    combined_source: String,
+    first_path: String,
+}
+
+/// Lexes, parses, and folds source-level constants, and validates the entry
+/// point.
+fn parse_source(session: &Session) -> Result<ParsedSource, Failure> {
+    let mut tokens = Vec::new();
+    let mut combined_source = String::new();
+    for source in &session.source {
+        if session.verbose {
+            println!("Compiling source file: {:?}", source.path);
+        }
+        let path = source.path.display().to_string();
+        let source_tokens = lex(&source.content).map_err(|error| {
+            Emitter::new(session, &path, &source.content).lex_error(&error);
+            Failure::Reported
+        })?;
+        combined_source.push_str(&source.content);
+        tokens.extend(source_tokens);
+    }
+    let first_path = session
+        .source
+        .first()
+        .map_or_else(|| "<unknown>".into(), |s| s.path.display().to_string());
+
+    let emitter = Emitter::new(session, &first_path, &combined_source);
+    let program = Parser::new(&tokens).parse_program().map_err(|error| {
+        emitter.parse_error(&error);
+        Failure::Reported
+    })?;
+    let program = fold_constants(program).map_err(|error| {
+        emitter.fold_error(&error);
+        Failure::Reported
+    })?;
+    validate_entry_point(&program).map_err(|error| {
+        emitter.semantic_error(&error);
+        Failure::Reported
+    })?;
+
+    Ok(ParsedSource {
+        program,
+        combined_source,
+        first_path,
+    })
+}
+
+/// Runs the frontend and the MIR pipeline up to Runtime MIR, reporting any
+/// error.
+fn lower_to_runtime_mir(session: &Session, target: &TargetSpec) -> Result<MirProgram, Failure> {
+    let parsed = parse_source(session)?;
+    let emitter = Emitter::new(session, &parsed.first_path, &parsed.combined_source);
+
+    let thir = check_program(&parsed.program, target).map_err(|error| {
+        emitter.semantic_error(&error);
+        Failure::Reported
+    })?;
+    let mut mir = build_mir(&thir)
+        .map_err(|error| internal("compiler", format!("MIR lowering failed: {error}")))?;
+    analyze_program(&mut mir, target).map_err(|errors| {
+        emitter.analysis_errors(&errors);
+        Failure::Reported
+    })?;
+
+    let overflow = match session.opt_level {
+        None | Some(OptLevel::O0) => OverflowMode::Checked,
+        Some(_) => OverflowMode::Wrapping,
+    };
+    normalize_runtime_checks(&mut mir, target, RuntimeCheckPolicy { overflow }).map_err(
+        |error| {
+            internal(
+                "compiler",
+                format!("MIR runtime normalization failed: {error}"),
+            )
+        },
+    )?;
+    Ok(mir)
 }
 
 #[cfg(feature = "llvm-backend")]
-fn optimization_level(level: Option<OptLevel>) -> u8 {
-    match level {
+fn emit_native(
+    session: &Session,
+    mir: &MirProgram,
+    target: &TargetSpec,
+    outputs: &[OutputRequest],
+) -> Result<(), Failure> {
+    use crate::backend::contract::{Backend, CodegenOptions};
+    use crate::backend::llvm::LlvmBackend;
+
+    let optimization = match session.opt_level {
         None | Some(OptLevel::O0) => 0,
         Some(OptLevel::O1) => 1,
         Some(OptLevel::O2) => 2,
         Some(OptLevel::O3 | OptLevel::Os | OptLevel::Oz) => 3,
-    }
+    };
+    let backend = LlvmBackend;
+    backend
+        .emit(mir, target, CodegenOptions { optimization }, outputs)
+        .map_err(|error| {
+            internal(
+                "backend",
+                format!("{} backend error: {error}", backend.name()),
+            )
+        })?;
+    Ok(())
+}
+
+#[cfg(not(feature = "llvm-backend"))]
+fn emit_native(
+    _session: &Session,
+    _mir: &MirProgram,
+    _target: &TargetSpec,
+    _outputs: &[OutputRequest],
+) -> Result<(), Failure> {
+    Err(internal(
+        "backend",
+        "native code generation is unavailable: build xenonc with the `llvm-backend` feature",
+    ))
 }

@@ -64,8 +64,8 @@ use crate::middle::thir::{self, ThirProgram};
 use crate::types::Type;
 
 use super::{
-    BasicBlock, Body, BodyBuilder, BuildError, FnDecl, FnSig, Local, LocalDecl, MirProgram,
-    ProgramError, START_BLOCK, SourceInfo, TerminatorKind,
+    BasicBlock, Body, BodyBuilder, BuildError, Constant, FnDecl, FnSig, Local, LocalDecl,
+    MirProgram, Operand, ProgramError, Rvalue, START_BLOCK, SourceInfo, TerminatorKind,
 };
 use scope::Scopes;
 
@@ -211,7 +211,7 @@ impl<'thir> Builder<'thir> {
 
         if let Some(binding) = function.named_return {
             let local = self.declare_binding(START_BLOCK, binding)?;
-            let zero = self.zero_rvalue(&function.bindings[binding].ty)?;
+            let zero = zero_rvalue(&function.bindings[binding].ty)?;
             self.cfg
                 .push_assign(START_BLOCK, source_info, local.into(), zero);
         }
@@ -233,6 +233,12 @@ impl<'thir> Builder<'thir> {
             .flatten()
             .ok_or(LowerErrorKind::UnboundBinding(binding))
     }
+}
+
+/// The rvalue `const 0` of type `ty`.
+fn zero_rvalue(ty: &Type) -> Result<Rvalue, LowerErrorKind> {
+    let zero = Constant::zero(ty).ok_or_else(|| LowerErrorKind::NoZeroValue(ty.clone()))?;
+    Ok(Rvalue::Use(Operand::constant(zero)))
 }
 
 /// The declaration of the MIR local of `binding`.

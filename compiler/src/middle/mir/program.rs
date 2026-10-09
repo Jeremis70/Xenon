@@ -9,7 +9,7 @@ use crate::middle::ids::DefId;
 use crate::source::Span;
 use crate::types::Type;
 
-use super::body::Body;
+use super::body::{Body, MirPhase, PhaseError};
 
 /// The type signature of a function.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -77,6 +77,14 @@ impl MirProgram {
         self.decls.get(def_id)
     }
 
+    /// The source name of `def_id`, or its index if it is undeclared.
+    ///
+    /// Meant for diagnostics and dumps, which must not fail on bad MIR.
+    pub fn fn_name(&self, def_id: DefId) -> String {
+        self.decl(def_id)
+            .map_or_else(|| def_id.to_string(), |decl| decl.name.clone())
+    }
+
     /// Attaches the body of an already declared function.
     pub fn set_body(&mut self, body: Body) -> Result<(), ProgramError> {
         let def_id = body.def_id();
@@ -110,15 +118,19 @@ impl MirProgram {
         self.bodies.values_mut()
     }
 
-    /// Splits the program into read-only declarations and mutable bodies,
-    /// so a pass can rewrite bodies while consulting callee signatures.
-    pub fn decls_and_bodies_mut(
-        &mut self,
-    ) -> (
-        &IndexVec<DefId, FnDecl>,
-        impl ExactSizeIterator<Item = &mut Body> + '_,
-    ) {
-        (&self.decls, self.bodies.values_mut())
+    /// Moves every body to phase `to`.
+    ///
+    /// Atomic: if any body is already past `to`, no body moves.
+    pub fn advance_phase(&mut self, to: MirPhase) -> Result<(), PhaseError> {
+        if let Some(body) = self.bodies().find(|body| body.phase() > to) {
+            return Err(PhaseError {
+                def_id: body.def_id(),
+                from: body.phase(),
+                to,
+            });
+        }
+        self.bodies_mut()
+            .try_for_each(|body| body.advance_phase(to))
     }
 
     /// Marks `def_id` as the program entry point.
