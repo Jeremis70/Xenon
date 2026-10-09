@@ -143,7 +143,7 @@ pub struct CompilePipelineArgs {
 #[derive(Args, Debug)]
 pub struct CheckPipelineArgs {
     /// Stop checking after this stage.
-    #[arg(long, value_enum, default_value_t = CheckStage::Borrowck)]
+    #[arg(long, value_enum, default_value_t = CheckStage::Mir)]
     pub stage: CheckStage,
 }
 

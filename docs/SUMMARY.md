@@ -51,3 +51,9 @@
 - [Design Rationale](reference/design-rationale.md)
 - [Roadmap](reference/roadmap.md)
 - [Changelog](reference/changelog.md)
+
+# Compiler Internals
+
+- [Compiler Architecture](internals/compiler-architecture.md)
+- [THIR and Type Checking](internals/thir.md)
+- [MIR](internals/mir.md)
