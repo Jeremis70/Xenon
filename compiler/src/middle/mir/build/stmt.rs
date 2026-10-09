@@ -46,7 +46,7 @@ impl Builder<'_> {
                 let (block, place) = unpack!(self.assignment_target(block, place, value));
                 let (block, value) = unpack!(self.as_operand(block, value));
                 // The old value is read after `value` has been evaluated.
-                let rvalue = Rvalue::BinaryOp(*op, Box::new((Operand::Copy(place.clone()), value)));
+                let rvalue = Rvalue::binary(*op, Operand::Copy(place.clone()), value);
                 let source_info = self.source_info(stmt.span);
                 self.cfg.push_assign(block, source_info, place, rvalue);
                 Ok(Flow::Continue(block, ()))

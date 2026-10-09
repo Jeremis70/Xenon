@@ -234,13 +234,9 @@ struct Checker<'a> {
 impl Checker<'_> {
     fn report(&mut self, kind: VerifyErrorKind) {
         let def_id = self.body.def_id();
-        let function = self
-            .program
-            .decl(def_id)
-            .map_or_else(|| def_id.to_string(), |decl| decl.name.clone());
         self.errors.push(VerifyError {
             def_id,
-            function,
+            function: self.program.fn_name(def_id),
             site: self.site,
             kind,
         });
@@ -424,10 +420,9 @@ impl Checker<'_> {
                 return;
             }
             ConstValue::Int(value) => self.target.int_bounds(ty).map(|bounds| (value, bounds)),
-            ConstValue::Address(value) => ty.is_indirect().then(|| {
-                let width = self.target.pointer_width();
-                (value, (BigInt::ZERO, (BigInt::from(1) << width) - 1))
-            }),
+            ConstValue::Address(value) => ty
+                .is_indirect()
+                .then(|| (value, self.target.address_bounds())),
         };
         match range {
             None => self.report(VerifyErrorKind::ConstantKindMismatch(ty.clone())),

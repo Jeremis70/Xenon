@@ -39,6 +39,11 @@ impl TargetSpec {
         }
     }
 
+    /// Inclusive `(min, max)` range of a raw address on this target.
+    pub fn address_bounds(&self) -> (BigInt, BigInt) {
+        unsigned_bounds(self.pointer_width)
+    }
+
     /// Inclusive `(min, max)` range of an integer type on this target.
     ///
     /// Unlike [`Type::bounds`], this also resolves `usize` and `isize`.

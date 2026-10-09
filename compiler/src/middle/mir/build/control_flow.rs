@@ -22,8 +22,8 @@ use crate::source::Span;
 use crate::types::Type;
 
 use super::super::{BasicBlock, Operand, Place, RETURN_PLACE, SwitchTargets, TerminatorKind};
-use super::scope::LoopScope;
-use super::{Builder, Flow, LowerErrorKind, LowerResult};
+use super::scope::{LoopJump, LoopScope};
+use super::{Builder, Flow, LowerErrorKind, LowerResult, zero_rvalue};
 
 impl Builder<'_> {
     /// Lowers an `if` statement.
@@ -139,7 +139,7 @@ impl Builder<'_> {
         span: Span,
     ) -> LowerResult<()> {
         let source_info = self.source_info(span);
-        let zero = self.zero_rvalue(ty)?;
+        let zero = zero_rvalue(ty)?;
         self.cfg
             .push_assign(block, source_info, destination.clone(), zero);
 
@@ -166,7 +166,7 @@ impl Builder<'_> {
                 self.push_loop(destination, None, None);
                 let body_flow = self.lower_block(start, body)?;
                 if let Flow::Continue(end, ()) = body_flow {
-                    let (_, latch) = self.continue_target()?;
+                    let (_, latch) = self.loop_target(LoopJump::Continue)?;
                     self.cfg.goto(end, source_info, latch);
                 }
                 let mut frame = self.pop_loop()?;
@@ -231,24 +231,28 @@ impl Builder<'_> {
     ) -> LowerResult<()> {
         let block = match value {
             Some(value) => {
-                let destination = self
-                    .innermost_loop(LowerErrorKind::BreakOutsideLoop)?
-                    .destination
-                    .clone();
+                let destination = self.innermost_loop()?.destination.clone();
                 unpack!(self.into(block, destination, value)).0
             }
             None => block,
         };
-        let (depth, target) = self.break_target()?;
-        self.exit_scopes(block, depth, span);
-        let source_info = self.source_info(span);
-        self.cfg.goto(block, source_info, target);
-        Ok(Flow::Diverge)
+        self.lower_loop_jump(block, LoopJump::Break, span)
     }
 
     /// Lowers `continue`.
     pub(super) fn lower_continue(&mut self, block: BasicBlock, span: Span) -> LowerResult<()> {
-        let (depth, target) = self.continue_target()?;
+        self.lower_loop_jump(block, LoopJump::Continue, span)
+    }
+
+    /// Leaves the scopes inside the innermost loop and jumps to the target
+    /// of `jump`.
+    fn lower_loop_jump(
+        &mut self,
+        block: BasicBlock,
+        jump: LoopJump,
+        span: Span,
+    ) -> LowerResult<()> {
+        let (depth, target) = self.loop_target(jump)?;
         self.exit_scopes(block, depth, span);
         let source_info = self.source_info(span);
         self.cfg.goto(block, source_info, target);

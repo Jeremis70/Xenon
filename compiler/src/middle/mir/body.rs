@@ -221,8 +221,10 @@ impl std::ops::Deref for BasicBlocks {
 
 /// Error returned by [`Body::advance_phase`].
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
-#[error("cannot move MIR from phase `{from}` back to phase `{to}`")]
+#[error("cannot move MIR of `{def_id}` from phase `{from}` back to phase `{to}`")]
 pub struct PhaseError {
+    /// The function whose body was asked to move back.
+    pub def_id: DefId,
     /// The phase the body is in.
     pub from: MirPhase,
     /// The requested phase.
@@ -283,6 +285,7 @@ impl Body {
     pub fn advance_phase(&mut self, to: MirPhase) -> Result<(), PhaseError> {
         if to < self.phase {
             return Err(PhaseError {
+                def_id: self.def_id,
                 from: self.phase,
                 to,
             });
@@ -360,10 +363,14 @@ impl Body {
         self.span
     }
 
-    /// Returns the terminator location of `block`, if the block exists.
-    pub fn terminator_loc(&self, block: BasicBlock) -> Option<Location> {
-        self.basic_blocks
-            .get(block)
-            .map(|data| data.terminator_location(block))
+    /// The source info of the statement or terminator at `location`, if it
+    /// exists.
+    pub fn source_info(&self, location: Location) -> Option<&SourceInfo> {
+        let data = self.basic_blocks.get(location.block)?;
+        match data.statements.get(location.statement_index) {
+            Some(statement) => Some(&statement.source_info),
+            None => (location.statement_index == data.statements.len())
+                .then_some(&data.terminator.source_info),
+        }
     }
 }

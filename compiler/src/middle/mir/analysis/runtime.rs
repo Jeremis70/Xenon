@@ -5,16 +5,14 @@
 //! the checks nor the operation can observe a different value. The overflow
 //! mode is supplied explicitly and is independent of optimization level.
 
+use num_bigint::BigInt;
 use thiserror::Error;
 
-use num_bigint::BigInt;
-
-use crate::index::Idx;
 use crate::middle::mir::body::{BasicBlock, BasicBlockData, Body, MirPhase, SourceInfo};
 use crate::middle::mir::program::MirProgram;
 use crate::middle::mir::syntax::{
     AssertKind, BinOp, CastKind, Constant, Operand, Rvalue, Statement, StatementKind, Terminator,
-    TerminatorKind,
+    TerminatorKind, UnOp,
 };
 use crate::middle::mir::typing::{self, TypingError};
 use crate::middle::mir::verify::{VerifyErrors, verify_program};
@@ -83,29 +81,29 @@ pub fn normalize_runtime_checks(
     if target.pointer_width() == 0 {
         return Err(RuntimeCheckError::InvalidTargetPointerWidth);
     }
-    verify_program(program, target).map_err(verify_error)?;
-    let mut normalized = program.clone();
-    for body in normalized.bodies() {
-        if body.phase() != MirPhase::Checked {
-            let function = normalized
-                .decl(body.def_id())
-                .map_or_else(|| body.def_id().to_string(), |decl| decl.name.clone());
-            return Err(RuntimeCheckError::InvalidPhase {
-                function,
-                phase: body.phase(),
-            });
-        }
+    let invalid_mir = |errors: VerifyErrors| RuntimeCheckError::InvalidMir(errors.to_string());
+    verify_program(program, target).map_err(invalid_mir)?;
+    if let Some(body) = program
+        .bodies()
+        .find(|body| body.phase() != MirPhase::Checked)
+    {
+        return Err(RuntimeCheckError::InvalidPhase {
+            function: program.fn_name(body.def_id()),
+            phase: body.phase(),
+        });
     }
 
+    let mut normalized = program.clone();
     for body in normalized.bodies_mut() {
         normalize_body(body, target, policy)?;
-        body.advance_phase(MirPhase::Runtime)
-            .map_err(|error| RuntimeCheckError::InvalidPhase {
-                function: body.def_id().to_string(),
-                phase: error.from,
-            })?;
     }
-    verify_program(&normalized, target).map_err(verify_error)?;
+    normalized
+        .advance_phase(MirPhase::Runtime)
+        .map_err(|error| RuntimeCheckError::InvalidPhase {
+            function: program.fn_name(error.def_id),
+            phase: error.from,
+        })?;
+    verify_program(&normalized, target).map_err(invalid_mir)?;
     *program = normalized;
     Ok(())
 }
@@ -115,287 +113,228 @@ fn normalize_body(
     target: &TargetSpec,
     policy: RuntimeCheckPolicy,
 ) -> Result<(), RuntimeCheckError> {
-    let original_block_count = body.basic_blocks().len();
-    for block_index in 0..original_block_count {
-        let block = BasicBlock::new(block_index);
-        let original = body.basic_blocks()[block].clone();
-        let mut current = block;
-        let mut statements = Vec::new();
-        let mut segments = Vec::new();
-
-        for mut statement in original.statements {
-            let checks = match &mut statement.kind {
+    // Blocks appended while splitting contain no unchecked operations.
+    for block in body.basic_blocks().indices() {
+        let BasicBlockData {
+            statements,
+            terminator,
+        } = body.basic_blocks()[block].clone();
+        let mut guards = Guards {
+            body: &mut *body,
+            target,
+            policy,
+            block,
+            statements: Vec::new(),
+            source_info: terminator.source_info,
+        };
+        for mut statement in statements {
+            match &mut statement.kind {
                 StatementKind::Assign(assign) => {
-                    operation_checks(body, target, policy, statement.source_info, &mut assign.1)?
+                    guards.source_info = statement.source_info;
+                    guards.guard_rvalue(&mut assign.1)?;
                 }
                 StatementKind::StorageLive(_)
                 | StatementKind::StorageDead(_)
-                | StatementKind::Nop => Vec::new(),
-            };
-            if checks.is_empty() {
-                statements.push(statement);
-                continue;
+                | StatementKind::Nop => {}
             }
-
-            for check in checks {
-                statements.extend(check.statements);
-                let continuation = append_placeholder_block(body, statement.source_info);
-                segments.push((
-                    current,
-                    BasicBlockData {
-                        statements: std::mem::take(&mut statements),
-                        terminator: Terminator {
-                            source_info: statement.source_info,
-                            kind: TerminatorKind::Assert {
-                                cond: check.condition,
-                                expected: false,
-                                kind: check.kind,
-                                target: continuation,
-                            },
-                        },
-                    },
-                ));
-                current = continuation;
-            }
-            statements.push(statement);
+            guards.statements.push(statement);
         }
-
-        segments.push((
-            current,
-            BasicBlockData {
-                statements,
-                terminator: original.terminator,
-            },
-        ));
-        for (segment_block, data) in segments {
-            body.basic_blocks_mut()[segment_block] = data;
-        }
+        guards.finish(terminator);
     }
     Ok(())
 }
 
-struct Guard {
+/// Inserts guards in front of the operations of one block, splitting it at
+/// every guard.
+struct Guards<'a> {
+    body: &'a mut Body,
+    target: &'a TargetSpec,
+    policy: RuntimeCheckPolicy,
+    /// The block being filled.
+    block: BasicBlock,
+    /// Statements of `block` so far.
     statements: Vec<Statement>,
-    condition: Operand,
-    kind: AssertKind,
+    /// Source info of the guarded operation.
+    source_info: SourceInfo,
 }
 
-fn operation_checks(
-    body: &mut Body,
-    target: &TargetSpec,
-    policy: RuntimeCheckPolicy,
-    source_info: SourceInfo,
-    rvalue: &mut Rvalue,
-) -> Result<Vec<Guard>, RuntimeCheckError> {
-    match rvalue {
-        Rvalue::BinaryOp(op, operands) => {
-            binary_operation_checks(body, target, policy, source_info, *op, operands)
-        }
-        Rvalue::UnaryOp(crate::middle::ops::UnOp::Neg, operand)
-            if policy.overflow == OverflowMode::Checked =>
-        {
-            let ty = typing::operand_ty(operand, body)?.clone();
-            if !ty.is_integer() {
-                return Ok(Vec::new());
+impl Guards<'_> {
+    /// Adds the guards `rvalue` needs, rewriting its operands to snapshots
+    /// where a guard reads them too.
+    fn guard_rvalue(&mut self, rvalue: &mut Rvalue) -> Result<(), RuntimeCheckError> {
+        match rvalue {
+            Rvalue::BinaryOp(op, operands) => {
+                let (lhs, rhs) = &mut **operands;
+                self.guard_binary(*op, lhs, rhs)
             }
-            let mut setup = Vec::new();
-            let stable = snapshot(body, operand.clone(), &ty, source_info, &mut setup);
-            *operand = stable.clone();
-            let flag = body.new_temp(Type::Bool, source_info.span);
-            setup.push(assign(
-                source_info,
-                flag.into(),
-                Rvalue::Overflows(
-                    BinOp::Sub,
-                    Box::new((Operand::constant(Constant::int(0, ty)), stable)),
-                ),
-            ));
-            Ok(vec![Guard {
-                statements: setup,
-                condition: Operand::Copy(flag.into()),
-                kind: AssertKind::Overflow(BinOp::Sub),
-            }])
+            Rvalue::UnaryOp(UnOp::Neg, operand)
+                if self.policy.overflow == OverflowMode::Checked =>
+            {
+                let ty = typing::operand_ty(operand, &*self.body)?.clone();
+                if ty.is_integer() {
+                    self.snapshot(operand, &ty);
+                    let zero = Operand::constant(Constant::int(0, ty));
+                    let overflows = self.temp(
+                        Type::Bool,
+                        Rvalue::overflows(BinOp::Sub, zero, operand.clone()),
+                    );
+                    self.trap_if(overflows, AssertKind::Overflow(BinOp::Sub));
+                }
+                Ok(())
+            }
+            Rvalue::Use(_)
+            | Rvalue::UnaryOp(..)
+            | Rvalue::Overflows(..)
+            | Rvalue::Cast(..)
+            | Rvalue::AddressOf(..) => Ok(()),
         }
-        _ => Ok(Vec::new()),
-    }
-}
-
-fn binary_operation_checks(
-    body: &mut Body,
-    target: &TargetSpec,
-    policy: RuntimeCheckPolicy,
-    source_info: SourceInfo,
-    op: BinOp,
-    operands: &mut Box<(Operand, Operand)>,
-) -> Result<Vec<Guard>, RuntimeCheckError> {
-    let (lhs, rhs) = &mut **operands;
-    let lhs_ty = typing::operand_ty(lhs, body)?.clone();
-    let rhs_ty = typing::operand_ty(rhs, body)?.clone();
-    let is_integer = lhs_ty.is_integer();
-    let needs_overflow =
-        policy.overflow == OverflowMode::Checked && is_integer && op.is_overflow_checkable();
-    let needs_zero_check = is_integer && matches!(op, BinOp::Div | BinOp::Rem);
-    let needs_shift_check = is_integer && op.is_shift();
-    if !(needs_overflow || needs_zero_check || needs_shift_check) {
-        return Ok(Vec::new());
     }
 
-    let mut setup = Vec::new();
-    *lhs = snapshot(body, lhs.clone(), &lhs_ty, source_info, &mut setup);
-    *rhs = snapshot(body, rhs.clone(), &rhs_ty, source_info, &mut setup);
-    let mut guards = Vec::new();
+    fn guard_binary(
+        &mut self,
+        op: BinOp,
+        lhs: &mut Operand,
+        rhs: &mut Operand,
+    ) -> Result<(), RuntimeCheckError> {
+        let lhs_ty = typing::operand_ty(lhs, &*self.body)?.clone();
+        let rhs_ty = typing::operand_ty(rhs, &*self.body)?.clone();
+        if !lhs_ty.is_integer() {
+            return Ok(());
+        }
+        let checks_overflow =
+            self.policy.overflow == OverflowMode::Checked && op.is_overflow_checkable();
+        let checks_divisor = matches!(op, BinOp::Div | BinOp::Rem);
+        if !(checks_overflow || checks_divisor || op.is_shift()) {
+            return Ok(());
+        }
 
-    if needs_overflow {
-        let flag = body.new_temp(Type::Bool, source_info.span);
-        setup.push(assign(
-            source_info,
-            flag.into(),
-            Rvalue::Overflows(op, Box::new((lhs.clone(), rhs.clone()))),
-        ));
-        guards.push(Guard {
-            statements: std::mem::take(&mut setup),
-            condition: Operand::Copy(flag.into()),
-            kind: AssertKind::Overflow(op),
-        });
-    }
+        self.snapshot(lhs, &lhs_ty);
+        self.snapshot(rhs, &rhs_ty);
 
-    if needs_zero_check {
-        let zero = Operand::constant(Constant::int(0, rhs_ty.clone()));
-        let is_zero = body.new_temp(Type::Bool, source_info.span);
-        let mut statements = std::mem::take(&mut setup);
-        statements.push(assign(
-            source_info,
-            is_zero.into(),
-            Rvalue::BinaryOp(BinOp::Eq, Box::new((rhs.clone(), zero))),
-        ));
-        guards.push(Guard {
-            statements,
-            condition: Operand::Copy(is_zero.into()),
-            kind: if op == BinOp::Rem {
+        if checks_overflow {
+            let overflows = self.temp(Type::Bool, Rvalue::overflows(op, lhs.clone(), rhs.clone()));
+            self.trap_if(overflows, AssertKind::Overflow(op));
+        }
+
+        if checks_divisor {
+            let is_rem = op == BinOp::Rem;
+            let zero = Operand::constant(Constant::int(0, rhs_ty.clone()));
+            let is_zero = self.temp(Type::Bool, Rvalue::binary(BinOp::Eq, rhs.clone(), zero));
+            let kind = if is_rem {
                 AssertKind::RemainderByZero
             } else {
                 AssertKind::DivisionByZero
-            },
-        });
+            };
+            self.trap_if(is_zero, kind);
+
+            if lhs_ty.is_signed_integer() {
+                let (min, _) = self
+                    .target
+                    .int_bounds(&lhs_ty)
+                    .ok_or_else(|| RuntimeCheckError::MissingIntegerBounds(lhs_ty.clone()))?;
+                let min = Operand::constant(Constant::int(min, lhs_ty.clone()));
+                let minus_one = Operand::constant(Constant::int(-1, rhs_ty.clone()));
+                let is_min = self.temp(Type::Bool, Rvalue::binary(BinOp::Eq, lhs.clone(), min));
+                let is_minus_one = self.temp(
+                    Type::Bool,
+                    Rvalue::binary(BinOp::Eq, rhs.clone(), minus_one),
+                );
+                let overflows = self.temp(
+                    Type::Bool,
+                    Rvalue::binary(BinOp::BitAnd, is_min, is_minus_one),
+                );
+                let kind = if is_rem {
+                    AssertKind::SignedRemainderOverflow
+                } else {
+                    AssertKind::SignedDivisionOverflow
+                };
+                self.trap_if(overflows, kind);
+            }
+        }
+
+        if op.is_shift() {
+            self.guard_shift_amount(&lhs_ty, rhs, &rhs_ty)?;
+        }
+        Ok(())
     }
 
-    if needs_zero_check && lhs_ty.is_signed_integer() {
-        let (min, _) = target
-            .int_bounds(&lhs_ty)
-            .ok_or_else(|| RuntimeCheckError::MissingIntegerBounds(lhs_ty.clone()))?;
-        let min_operand = Operand::constant(Constant::int(min, lhs_ty.clone()));
-        let minus_one = Operand::constant(Constant::int(-1, rhs_ty.clone()));
-        let is_min = body.new_temp(Type::Bool, source_info.span);
-        let is_minus_one = body.new_temp(Type::Bool, source_info.span);
-        let is_overflow = body.new_temp(Type::Bool, source_info.span);
-        let statements = vec![
-            assign(
-                source_info,
-                is_min.into(),
-                Rvalue::BinaryOp(BinOp::Eq, Box::new((lhs.clone(), min_operand))),
-            ),
-            assign(
-                source_info,
-                is_minus_one.into(),
-                Rvalue::BinaryOp(BinOp::Eq, Box::new((rhs.clone(), minus_one))),
-            ),
-            assign(
-                source_info,
-                is_overflow.into(),
-                Rvalue::BinaryOp(
-                    BinOp::BitAnd,
-                    Box::new((
-                        Operand::Copy(is_min.into()),
-                        Operand::Copy(is_minus_one.into()),
-                    )),
-                ),
-            ),
-        ];
-        guards.push(Guard {
-            statements,
-            condition: Operand::Copy(is_overflow.into()),
-            kind: if op == BinOp::Rem {
-                AssertKind::SignedRemainderOverflow
-            } else {
-                AssertKind::SignedDivisionOverflow
-            },
-        });
-    }
-
-    if needs_shift_check {
-        let lhs_width = target
-            .int_width(&lhs_ty)
-            .ok_or_else(|| RuntimeCheckError::MissingIntegerWidth(lhs_ty.clone()))?;
-        let rhs_width = target
-            .int_width(&rhs_ty)
-            .ok_or_else(|| RuntimeCheckError::MissingIntegerWidth(rhs_ty.clone()))?;
-        let limit_width = u32::BITS - lhs_width.leading_zeros();
-        let comparison_ty = Type::UInt(rhs_width.max(limit_width));
-        let shifted = if rhs_ty == comparison_ty {
-            rhs.clone()
-        } else {
-            let widened = body.new_temp(comparison_ty.clone(), source_info.span);
-            setup.push(assign(
-                source_info,
-                widened.into(),
-                Rvalue::Cast(CastKind::IntToInt, rhs.clone(), comparison_ty.clone()),
-            ));
-            Operand::Copy(widened.into())
+    /// Traps unless `0 <= amount < bit width of value_ty`.
+    ///
+    /// The amount is compared as an unsigned integer wide enough to hold
+    /// both the amount and the bit width, so a negative amount compares as
+    /// too large.
+    fn guard_shift_amount(
+        &mut self,
+        value_ty: &Type,
+        amount: &Operand,
+        amount_ty: &Type,
+    ) -> Result<(), RuntimeCheckError> {
+        let width_of = |ty: &Type| {
+            self.target
+                .int_width(ty)
+                .ok_or_else(|| RuntimeCheckError::MissingIntegerWidth(ty.clone()))
         };
-        let too_large = body.new_temp(Type::Bool, source_info.span);
-        setup.push(assign(
-            source_info,
-            too_large.into(),
-            Rvalue::BinaryOp(
-                BinOp::Ge,
-                Box::new((
-                    shifted,
-                    Operand::constant(Constant::int(BigInt::from(lhs_width), comparison_ty)),
-                )),
-            ),
-        ));
-        guards.push(Guard {
-            statements: std::mem::take(&mut setup),
-            condition: Operand::Copy(too_large.into()),
-            kind: AssertKind::ShiftOutOfRange,
+        let value_width = width_of(value_ty)?;
+        let amount_width = width_of(amount_ty)?;
+        let limit_width = u32::BITS - value_width.leading_zeros();
+        let comparison_ty = Type::UInt(amount_width.max(limit_width));
+
+        let amount = if *amount_ty == comparison_ty {
+            amount.clone()
+        } else {
+            let cast = Rvalue::Cast(CastKind::IntToInt, amount.clone(), comparison_ty.clone());
+            self.temp(comparison_ty.clone(), cast)
+        };
+        let limit = Operand::constant(Constant::int(BigInt::from(value_width), comparison_ty));
+        let too_large = self.temp(Type::Bool, Rvalue::binary(BinOp::Ge, amount, limit));
+        self.trap_if(too_large, AssertKind::ShiftOutOfRange);
+        Ok(())
+    }
+
+    /// Evaluates `rvalue` into a fresh temporary of type `ty`.
+    fn temp(&mut self, ty: Type, rvalue: Rvalue) -> Operand {
+        let temp = self.body.new_temp(ty, self.source_info.span);
+        self.statements
+            .push(Statement::assign(self.source_info, temp.into(), rvalue));
+        Operand::Copy(temp.into())
+    }
+
+    /// Copies a place operand into a temporary, so that the guards and the
+    /// operation read the same value.
+    fn snapshot(&mut self, operand: &mut Operand, ty: &Type) {
+        if let Operand::Copy(_) = operand {
+            *operand = self.temp(ty.clone(), Rvalue::Use(operand.clone()));
+        }
+    }
+
+    /// Ends the current block with an assertion that traps with `kind` when
+    /// `condition` is true, and continues in a new block.
+    fn trap_if(&mut self, condition: Operand, kind: AssertKind) {
+        let continuation = self.body.basic_blocks_mut().push(BasicBlockData {
+            statements: Vec::new(),
+            terminator: Terminator {
+                source_info: self.source_info,
+                kind: TerminatorKind::Unreachable,
+            },
         });
+        self.finish(Terminator {
+            source_info: self.source_info,
+            kind: TerminatorKind::Assert {
+                cond: condition,
+                expected: false,
+                kind,
+                target: continuation,
+            },
+        });
+        self.block = continuation;
     }
 
-    Ok(guards)
-}
-
-fn snapshot(
-    body: &mut Body,
-    operand: Operand,
-    ty: &Type,
-    source_info: SourceInfo,
-    statements: &mut Vec<Statement>,
-) -> Operand {
-    if matches!(operand, Operand::Constant(_)) {
-        return operand;
+    /// Stores the statements collected so far into the current block, ended
+    /// by `terminator`.
+    fn finish(&mut self, terminator: Terminator) {
+        self.body.basic_blocks_mut()[self.block] = BasicBlockData {
+            statements: std::mem::take(&mut self.statements),
+            terminator,
+        };
     }
-    let temp = body.new_temp(ty.clone(), source_info.span);
-    statements.push(assign(source_info, temp.into(), Rvalue::Use(operand)));
-    Operand::Copy(temp.into())
-}
-
-fn assign(source_info: SourceInfo, place: crate::middle::mir::Place, rvalue: Rvalue) -> Statement {
-    Statement {
-        source_info,
-        kind: StatementKind::Assign(Box::new((place, rvalue))),
-    }
-}
-
-fn append_placeholder_block(body: &mut Body, source_info: SourceInfo) -> BasicBlock {
-    body.basic_blocks_mut().push(BasicBlockData {
-        statements: Vec::new(),
-        terminator: Terminator {
-            source_info,
-            kind: TerminatorKind::Unreachable,
-        },
-    })
-}
-
-fn verify_error(errors: VerifyErrors) -> RuntimeCheckError {
-    RuntimeCheckError::InvalidMir(errors.to_string())
 }

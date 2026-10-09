@@ -216,8 +216,8 @@ impl FnCtxt<'_, '_> {
             Some(ty) if ty.is_indirect() => ty.clone(),
             _ => return Err(SemanticError::AddressLiteralWithoutPointerType { span }),
         };
-        let limit = BigInt::from(1u8) << self.target().pointer_width();
-        if value.sign() == num_bigint::Sign::Minus || value >= &limit {
+        let (min, max) = self.target().address_bounds();
+        if *value < min || *value > max {
             return Err(SemanticError::LiteralOutOfRange {
                 value: value.clone(),
                 ty,

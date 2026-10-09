@@ -31,6 +31,16 @@ pub struct Statement {
     pub kind: StatementKind,
 }
 
+impl Statement {
+    /// The statement `place = rvalue`.
+    pub fn assign(source_info: SourceInfo, place: Place, rvalue: Rvalue) -> Self {
+        Self {
+            source_info,
+            kind: StatementKind::Assign(Box::new((place, rvalue))),
+        }
+    }
+}
+
 /// The operation performed by a [`Statement`].
 #[derive(Debug, Clone, PartialEq)]
 pub enum StatementKind {
@@ -197,7 +207,7 @@ pub enum AssertKind {
     DivisionByZero,
     /// Integer remainder by zero.
     RemainderByZero,
-    /// Signed division or remainder of the minimum value by `-1`.
+    /// Signed division of the minimum value by `-1`.
     SignedDivisionOverflow,
     /// Signed remainder of the minimum value by `-1`.
     SignedRemainderOverflow,
@@ -408,6 +418,18 @@ pub enum Rvalue {
     AddressOf(IndirectionKind, Place),
 }
 
+impl Rvalue {
+    /// The rvalue `op(lhs, rhs)`.
+    pub fn binary(op: BinOp, lhs: Operand, rhs: Operand) -> Self {
+        Rvalue::BinaryOp(op, Box::new((lhs, rhs)))
+    }
+
+    /// The rvalue `Overflows<op>(lhs, rhs)`.
+    pub fn overflows(op: BinOp, lhs: Operand, rhs: Operand) -> Self {
+        Rvalue::Overflows(op, Box::new((lhs, rhs)))
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Textual forms (shared by the pretty-printer and diagnostics)
 // ---------------------------------------------------------------------------
@@ -494,19 +516,7 @@ impl fmt::Display for TerminatorKind {
                 args,
                 destination,
                 target,
-            } => {
-                write!(f, "{destination} = {func}(")?;
-                for (index, arg) in args.iter().enumerate() {
-                    if index > 0 {
-                        f.write_str(", ")?;
-                    }
-                    write!(f, "{arg}")?;
-                }
-                match target {
-                    Some(target) => write!(f, ") -> {target}"),
-                    None => f.write_str(") -> !"),
-                }
-            }
+            } => write_call(f, func, args, destination, *target),
             TerminatorKind::Assert {
                 cond,
                 expected,
@@ -524,5 +534,29 @@ impl fmt::Display for TerminatorKind {
             TerminatorKind::Unreachable => f.write_str("unreachable"),
             TerminatorKind::EndOfBody => f.write_str("end_of_body"),
         }
+    }
+}
+
+/// Writes a call terminator as `destination = callee(args) -> target`.
+///
+/// `callee` is a parameter so that dumps can print a function name where
+/// plain `Display` only knows the [`DefId`].
+pub(super) fn write_call(
+    out: &mut dyn fmt::Write,
+    callee: impl fmt::Display,
+    args: &[Operand],
+    destination: &Place,
+    target: Option<BasicBlock>,
+) -> fmt::Result {
+    write!(out, "{destination} = {callee}(")?;
+    for (index, arg) in args.iter().enumerate() {
+        if index > 0 {
+            out.write_str(", ")?;
+        }
+        write!(out, "{arg}")?;
+    }
+    match target {
+        Some(target) => write!(out, ") -> {target}"),
+        None => out.write_str(") -> !"),
     }
 }

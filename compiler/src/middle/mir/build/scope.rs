@@ -12,12 +12,8 @@
 
 use crate::middle::ids::BindingId;
 use crate::source::Span;
-use crate::types::Type;
 
-use super::super::{
-    BasicBlock, Constant, Local, OUTERMOST_SOURCE_SCOPE, Operand, Place, Rvalue, SourceInfo,
-    SourceScope,
-};
+use super::super::{BasicBlock, Local, OUTERMOST_SOURCE_SCOPE, Place, SourceInfo, SourceScope};
 use super::{Builder, Flow, LowerErrorKind, local_decl};
 
 /// The scope stacks of a function being lowered.
@@ -165,43 +161,38 @@ impl Builder<'_> {
             .ok_or(LowerErrorKind::UnbalancedLoops)
     }
 
-    /// The innermost loop; `error` is reported if there is none.
-    pub(super) fn innermost_loop(
+    /// The innermost loop, for a `break` inside it.
+    pub(super) fn innermost_loop(&self) -> Result<&LoopScope, LowerErrorKind> {
+        self.scopes
+            .loops
+            .last()
+            .ok_or(LowerErrorKind::BreakOutsideLoop)
+    }
+
+    /// The scope depth of the innermost loop and the block `jump` goes to,
+    /// created on first use.
+    pub(super) fn loop_target(
         &mut self,
-        error: LowerErrorKind,
-    ) -> Result<&mut LoopScope, LowerErrorKind> {
-        self.scopes.loops.last_mut().ok_or(error)
-    }
-
-    /// The scope depth of the innermost loop and its break target.
-    pub(super) fn break_target(&mut self) -> Result<(usize, BasicBlock), LowerErrorKind> {
-        let frame = self
-            .scopes
-            .loops
-            .last_mut()
-            .ok_or(LowerErrorKind::BreakOutsideLoop)?;
-        let block = *frame
-            .break_block
-            .get_or_insert_with(|| self.cfg.new_block());
+        jump: LoopJump,
+    ) -> Result<(usize, BasicBlock), LowerErrorKind> {
+        let frame = self.scopes.loops.last_mut().ok_or(match jump {
+            LoopJump::Break => LowerErrorKind::BreakOutsideLoop,
+            LoopJump::Continue => LowerErrorKind::ContinueOutsideLoop,
+        })?;
+        let target = match jump {
+            LoopJump::Break => &mut frame.break_block,
+            LoopJump::Continue => &mut frame.continue_block,
+        };
+        let block = *target.get_or_insert_with(|| self.cfg.new_block());
         Ok((frame.depth, block))
     }
+}
 
-    /// The scope depth of the innermost loop and its continue target.
-    pub(super) fn continue_target(&mut self) -> Result<(usize, BasicBlock), LowerErrorKind> {
-        let frame = self
-            .scopes
-            .loops
-            .last_mut()
-            .ok_or(LowerErrorKind::ContinueOutsideLoop)?;
-        let block = *frame
-            .continue_block
-            .get_or_insert_with(|| self.cfg.new_block());
-        Ok((frame.depth, block))
-    }
-
-    /// The rvalue `const 0` of type `ty`.
-    pub(super) fn zero_rvalue(&self, ty: &Type) -> Result<Rvalue, LowerErrorKind> {
-        let zero = Constant::zero(ty).ok_or_else(|| LowerErrorKind::NoZeroValue(ty.clone()))?;
-        Ok(Rvalue::Use(Operand::constant(zero)))
-    }
+/// A jump out of the current iteration of the innermost loop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum LoopJump {
+    /// `break`: leaves the loop.
+    Break,
+    /// `continue`: starts the next iteration.
+    Continue,
 }

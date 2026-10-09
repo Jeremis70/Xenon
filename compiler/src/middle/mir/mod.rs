@@ -46,5 +46,7 @@ pub use syntax::{
     ProjectionElem, Rvalue, Statement, StatementKind, SwitchTargets, Terminator, TerminatorKind,
     UnOp,
 };
-pub use verify::{VerifyError, VerifyErrorKind, VerifyErrors, verify_body, verify_program};
+pub use verify::{
+    ErrorSite, VerifyError, VerifyErrorKind, VerifyErrors, verify_body, verify_program,
+};
 pub use visit::{MutVisitor, PlaceContext, Visitor};

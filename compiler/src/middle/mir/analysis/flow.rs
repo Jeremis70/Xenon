@@ -2,37 +2,39 @@
 //!
 //! Definite initialization is a forward must-analysis. At a join, a local is
 //! initialized only when it is initialized on every reachable incoming edge.
-//! The fixed point starts at the lattice top so loops converge correctly.
+//! A block's entry state starts at the lattice top (unvisited) and only
+//! shrinks, so loops converge to the greatest fixed point.
 
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::BTreeSet;
 use std::fmt;
 
 use num_bigint::BigInt;
 use thiserror::Error;
 
-use crate::index::{Idx, IndexVec};
+use crate::index::IndexVec;
 use crate::middle::ids::DefId;
 use crate::middle::mir::body::{
-    BasicBlock, Body, Local, Location, MirPhase, RETURN_PLACE, START_BLOCK,
+    BasicBlock, Body, Local, Location, MirPhase, PhaseError, RETURN_PLACE, START_BLOCK,
 };
 use crate::middle::mir::program::MirProgram;
-use crate::middle::mir::syntax::{
-    ConstValue, Operand, Place, Rvalue, StatementKind, TerminatorKind,
-};
-use crate::middle::mir::verify::{ErrorSite, VerifyError, verify_program};
+use crate::middle::mir::syntax::{ConstValue, Operand, TerminatorKind};
+use crate::middle::mir::verify::{ErrorSite, VerifyErrors, verify_program};
+use crate::middle::mir::visit::{MutatingUseContext, PlaceContext, Visitor};
 use crate::middle::target::TargetSpec;
 use crate::source::Span;
 
+use super::edge_definition;
+
 /// A source-level flow error or an invalid-MIR precondition.
 #[derive(Debug, Clone, PartialEq, Error)]
-#[error("flow analysis of `{function}` at {location}: {kind}")]
+#[error("flow analysis of `{function}` at {site}: {kind}")]
 pub struct AnalysisError {
     /// The function containing the error.
     pub function: String,
     /// The stable function identity.
     pub def_id: DefId,
-    /// The MIR program point, when the error is tied to one.
-    pub location: String,
+    /// Where in the body the error is.
+    pub site: ErrorSite,
     /// Original source location.
     pub span: Span,
     /// The diagnosed condition.
@@ -68,6 +70,21 @@ pub enum AnalysisErrorKind {
     InvalidMir(String),
 }
 
+impl AnalysisError {
+    fn new(program: &MirProgram, def_id: DefId, site: ErrorSite, kind: AnalysisErrorKind) -> Self {
+        let span = program
+            .body(def_id)
+            .map_or(Span::ZERO, |body| site_span(body, site));
+        Self {
+            function: program.fn_name(def_id),
+            def_id,
+            site,
+            span,
+            kind,
+        }
+    }
+}
+
 /// A deterministic collection of flow-analysis errors.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AnalysisErrors(pub Vec<AnalysisError>);
@@ -94,292 +111,213 @@ pub fn analyze_program(
     program: &mut MirProgram,
     target: &TargetSpec,
 ) -> Result<(), AnalysisErrors> {
-    if let Err(errors) = verify_program(program, target) {
-        return Err(AnalysisErrors(
-            errors
-                .0
-                .into_iter()
-                .map(|error| verification_error(program, error))
-                .collect(),
-        ));
-    }
+    verify_program(program, target).map_err(|errors| invalid_mir(program, errors))?;
 
     let mut errors = Vec::new();
     for body in program.bodies() {
-        if body.phase() != MirPhase::Built {
-            errors.push(body_error(
+        if body.phase() == MirPhase::Built {
+            errors.extend(check_body(program, body));
+        } else {
+            let kind = AnalysisErrorKind::InvalidPhase(body.phase());
+            errors.push(AnalysisError::new(
                 program,
-                body,
-                body.span(),
-                AnalysisErrorKind::InvalidPhase(body.phase()),
+                body.def_id(),
+                ErrorSite::Body,
+                kind,
             ));
-            continue;
         }
-        errors.extend(analyze_body(program, body));
     }
     if !errors.is_empty() {
         return Err(AnalysisErrors(errors));
     }
 
-    let mut checked = program.clone();
-    for body in checked.bodies_mut() {
+    for body in program.bodies_mut() {
         replace_unreachable_fallthrough(body);
-        if let Err(error) = body.advance_phase(MirPhase::Checked) {
-            return Err(AnalysisErrors(vec![AnalysisError {
-                function: body.def_id().to_string(),
-                def_id: body.def_id(),
-                location: "body".to_owned(),
-                span: body.span(),
-                kind: AnalysisErrorKind::InvalidPhase(error.from),
-            }]));
-        }
     }
-    if let Err(errors) = verify_program(&checked, target) {
-        return Err(AnalysisErrors(
-            errors
-                .0
-                .into_iter()
-                .map(|error| verification_error(&checked, error))
-                .collect(),
-        ));
-    }
-    *program = checked;
-    Ok(())
+    program
+        .advance_phase(MirPhase::Checked)
+        .map_err(|error: PhaseError| {
+            let kind = AnalysisErrorKind::InvalidPhase(error.from);
+            AnalysisErrors(vec![AnalysisError::new(
+                program,
+                error.def_id,
+                ErrorSite::Body,
+                kind,
+            )])
+        })?;
+    verify_program(program, target).map_err(|errors| invalid_mir(program, errors))
 }
 
-/// Returns the set of blocks reachable from `bb0`.
+/// Returns the blocks reachable from `bb0` along executable edges: a switch
+/// or assert on a constant only follows the edge that constant selects.
+///
+/// Unlike [`traversal::reachable_set`](crate::middle::mir::traversal::reachable_set),
+/// which follows every CFG edge, this is the reachability source-level
+/// diagnostics are based on.
 pub fn reachable_blocks(body: &Body) -> BTreeSet<BasicBlock> {
+    let blocks = body.basic_blocks();
     let mut reachable = BTreeSet::new();
-    let mut pending = VecDeque::from([START_BLOCK]);
-    while let Some(block) = pending.pop_front() {
-        if !reachable.insert(block) {
-            continue;
+    let mut pending = vec![START_BLOCK];
+    while let Some(block) = pending.pop() {
+        if let Some(data) = blocks.get(block)
+            && reachable.insert(block)
+        {
+            pending.extend(executable_successors(&data.terminator.kind));
         }
-        pending.extend(executable_successors(body, block));
     }
     reachable
 }
 
-fn analyze_body(program: &MirProgram, body: &Body) -> Vec<AnalysisError> {
-    let reachable = reachable_blocks(body);
-    let states = definite_initialization(body, &reachable);
-    let mut checker = InitChecker {
-        program,
-        body,
-        reported: BTreeSet::new(),
-        errors: Vec::new(),
-    };
-
-    for block in &reachable {
-        let Some(data) = body.basic_blocks().get(*block) else {
-            continue;
-        };
-        let Some(mut initialized) = states.get(*block).cloned().flatten() else {
-            continue;
-        };
-        for (statement_index, statement) in data.statements.iter().enumerate() {
-            let location = Location {
-                block: *block,
-                statement_index,
+/// The successors control can actually reach from a terminator.
+fn executable_successors(terminator: &TerminatorKind) -> Vec<BasicBlock> {
+    match terminator {
+        TerminatorKind::SwitchInt {
+            discr: Operand::Constant(constant),
+            targets,
+        } => {
+            let value = match &constant.value {
+                ConstValue::Bool(value) => Some(BigInt::from(u8::from(*value))),
+                ConstValue::Int(value) => Some(value.clone()),
+                ConstValue::Float(_) | ConstValue::Address(_) => None,
             };
-            match &statement.kind {
-                StatementKind::Assign(assign) => {
-                    let (place, rvalue) = &**assign;
-                    checker.check_rvalue_reads(
-                        location,
-                        statement.source_info.span,
-                        rvalue,
-                        &initialized,
-                    );
-                    if !place.projection.is_empty() {
-                        checker.check_place_base(
-                            location,
-                            statement.source_info.span,
-                            place,
-                            &initialized,
-                        );
-                    }
-                    if place.projection.is_empty() {
-                        initialized[place.local.index()] = true;
-                    }
-                }
-                StatementKind::StorageLive(local) | StatementKind::StorageDead(local) => {
-                    initialized[local.index()] = false;
-                }
-                StatementKind::Nop => {}
+            match value {
+                Some(value) => vec![targets.target_for_value(&value)],
+                None => terminator.successors().collect(),
             }
-        }
-
-        let location = data.terminator_location(*block);
-        let terminator = &data.terminator;
-        let span = terminator.source_info.span;
-        match &terminator.kind {
-            TerminatorKind::SwitchInt { discr, .. }
-            | TerminatorKind::Assert { cond: discr, .. } => {
-                checker.check_operand_reads(location, span, discr, &initialized);
-            }
-            TerminatorKind::Call {
-                args, destination, ..
-            } => {
-                for arg in args {
-                    checker.check_operand_reads(location, span, arg, &initialized);
-                }
-                if !destination.projection.is_empty() {
-                    checker.check_place_base(location, span, destination, &initialized);
-                }
-            }
-            TerminatorKind::Return => {
-                if !initialized[RETURN_PLACE.index()] {
-                    checker.push_error(location, span, AnalysisErrorKind::UninitializedReturn);
-                }
-            }
-            TerminatorKind::EndOfBody => {
-                checker.push_error(location, span, AnalysisErrorKind::MissingReturn)
-            }
-            TerminatorKind::Goto { .. } | TerminatorKind::Unreachable => {}
-        }
-    }
-    checker.errors
-}
-
-fn definite_initialization(
-    body: &Body,
-    reachable: &BTreeSet<BasicBlock>,
-) -> IndexVec<BasicBlock, Option<Vec<bool>>> {
-    let block_count = body.basic_blocks().len();
-    let local_count = body.local_decls().len();
-    let mut in_states = IndexVec::from_elem_n(None, block_count);
-    let mut out_states = IndexVec::from_elem_n(None, block_count);
-    let top = vec![true; local_count];
-    for block in reachable {
-        in_states[*block] = Some(top.clone());
-        out_states[*block] = Some(top.clone());
-    }
-
-    let entry = START_BLOCK;
-    let predecessors = body.basic_blocks().predecessors();
-    loop {
-        let mut changed = false;
-        for block in reachable {
-            let mut incoming: Option<Vec<bool>> = if *block == entry {
-                let mut boundary = vec![false; local_count];
-                for arg in body.args_iter() {
-                    boundary[arg.index()] = true;
-                }
-                Some(boundary)
-            } else {
-                None
-            };
-
-            if let Some(preds) = predecessors.get(*block) {
-                for pred in preds.iter().filter(|pred| {
-                    reachable.contains(pred) && executable_successors(body, **pred).contains(block)
-                }) {
-                    let Some(state) = out_states.get(*pred).cloned().flatten() else {
-                        continue;
-                    };
-                    let state = edge_state(body, *pred, *block, state);
-                    incoming = Some(match incoming {
-                        Some(mut current) => {
-                            for (slot, value) in current.iter_mut().zip(state) {
-                                *slot &= value;
-                            }
-                            current
-                        }
-                        None => state,
-                    });
-                }
-            }
-
-            let Some(new_in) = incoming else {
-                continue;
-            };
-            let new_out = transfer_block(body, *block, new_in.clone());
-            if in_states[*block].as_ref() != Some(&new_in) {
-                in_states[*block] = Some(new_in);
-                changed = true;
-            }
-            if out_states[*block].as_ref() != Some(&new_out) {
-                out_states[*block] = Some(new_out);
-                changed = true;
-            }
-        }
-        if !changed {
-            break;
-        }
-    }
-    in_states
-}
-
-fn executable_successors(body: &Body, block: BasicBlock) -> Vec<BasicBlock> {
-    let Some(data) = body.basic_blocks().get(block) else {
-        return Vec::new();
-    };
-    match &data.terminator.kind {
-        TerminatorKind::SwitchInt { discr, targets } => {
-            let value = match discr {
-                Operand::Constant(constant) => match &constant.value {
-                    ConstValue::Bool(value) => Some(BigInt::from(u8::from(*value))),
-                    ConstValue::Int(value) => Some(value.clone()),
-                    ConstValue::Float(_) | ConstValue::Address(_) => None,
-                },
-                Operand::Copy(_) => None,
-            };
-            value.map_or_else(
-                || data.terminator.kind.successors().collect(),
-                |value| vec![targets.target_for_value(&value)],
-            )
         }
         TerminatorKind::Assert {
             cond: Operand::Constant(constant),
             expected,
-            target,
             ..
-        } => match &constant.value {
-            ConstValue::Bool(value) if *value == *expected => vec![*target],
-            ConstValue::Bool(_) => Vec::new(),
-            ConstValue::Int(_) | ConstValue::Float(_) | ConstValue::Address(_) => vec![*target],
-        },
-        _ => data.terminator.kind.successors().collect(),
+        } if constant.value == ConstValue::Bool(!*expected) => Vec::new(),
+        _ => terminator.successors().collect(),
     }
 }
 
-fn transfer_block(body: &Body, block: BasicBlock, mut state: Vec<bool>) -> Vec<bool> {
-    let Some(data) = body.basic_blocks().get(block) else {
-        return state;
-    };
-    for statement in &data.statements {
-        match &statement.kind {
-            StatementKind::Assign(assign) => {
-                let (place, _) = &**assign;
-                if place.projection.is_empty() {
-                    state[place.local.index()] = true;
-                }
-            }
-            StatementKind::StorageLive(local) | StatementKind::StorageDead(local) => {
-                state[local.index()] = false;
-            }
-            StatementKind::Nop => {}
+/// Which locals hold a value, indexed by local.
+type InitState = IndexVec<Local, bool>;
+
+/// Reports every read of a possibly uninitialized local and every
+/// reachable fallthrough in `body`.
+fn check_body(program: &MirProgram, body: &Body) -> Vec<AnalysisError> {
+    let mut findings = BTreeSet::new();
+    for (block, state) in definite_initialization(body).into_iter_enumerated() {
+        // Blocks without an entry state are unreachable.
+        let Some(state) = state else {
+            continue;
+        };
+        let data = &body.basic_blocks()[block];
+        let mut walker = InitWalker {
+            state,
+            uninitialized_reads: Some(&mut findings),
+        };
+        walker.visit_basic_block_data(block, data);
+        if matches!(data.terminator.kind, TerminatorKind::EndOfBody) {
+            findings.insert((data.terminator_location(block), None));
         }
     }
-    state
+
+    findings
+        .into_iter()
+        .map(|(location, local)| {
+            let kind = match local {
+                None => AnalysisErrorKind::MissingReturn,
+                Some(RETURN_PLACE) => AnalysisErrorKind::UninitializedReturn,
+                Some(local) => AnalysisErrorKind::UninitializedLocal {
+                    name: body.local_decls()[local]
+                        .debug_name
+                        .clone()
+                        .unwrap_or_else(|| local.to_string()),
+                    local,
+                },
+            };
+            AnalysisError::new(program, body.def_id(), ErrorSite::Location(location), kind)
+        })
+        .collect()
 }
 
-fn edge_state(body: &Body, from: BasicBlock, to: BasicBlock, mut state: Vec<bool>) -> Vec<bool> {
-    let Some(data) = body.basic_blocks().get(from) else {
-        return state;
-    };
-    if let TerminatorKind::Call {
-        destination,
-        target: Some(target),
-        ..
-    } = &data.terminator.kind
-        && *target == to
-        && destination.projection.is_empty()
-    {
-        state[destination.local.index()] = true;
+/// The initialized locals on entry to each block, `None` for blocks that no
+/// executable path reaches.
+fn definite_initialization(body: &Body) -> IndexVec<BasicBlock, Option<InitState>> {
+    let blocks = body.basic_blocks();
+    let mut entry_states = IndexVec::from_elem_n(None, blocks.len());
+    let mut arguments = IndexVec::from_elem_n(false, body.local_decls().len());
+    for arg in body.args_iter() {
+        arguments[arg] = true;
     }
-    state
+    entry_states[START_BLOCK] = Some(arguments);
+
+    let mut pending = vec![START_BLOCK];
+    while let Some(block) = pending.pop() {
+        let Some(state) = entry_states[block].clone() else {
+            continue;
+        };
+        let data = &blocks[block];
+        let mut walker = InitWalker {
+            state,
+            uninitialized_reads: None,
+        };
+        walker.visit_basic_block_data(block, data);
+
+        let terminator = &data.terminator.kind;
+        for successor in executable_successors(terminator) {
+            let mut state = walker.state.clone();
+            if let Some(local) = edge_definition(terminator, successor) {
+                state[local] = true;
+            }
+            let changed = match &mut entry_states[successor] {
+                Some(current) => meet(current, &state),
+                slot @ None => {
+                    *slot = Some(state);
+                    true
+                }
+            };
+            if changed {
+                pending.push(successor);
+            }
+        }
+    }
+    entry_states
+}
+
+/// Intersects `state` into `current`; returns whether `current` changed.
+fn meet(current: &mut InitState, state: &InitState) -> bool {
+    let mut changed = false;
+    for (slot, &initialized) in current.iter_mut().zip(state) {
+        changed |= *slot && !initialized;
+        *slot &= initialized;
+    }
+    changed
+}
+
+/// Applies a block's statements to an initialization state, optionally
+/// recording the reads of locals that are not initialized.
+struct InitWalker<'a> {
+    state: InitState,
+    /// Where `(location, Some(local))` reads of uninitialized locals are
+    /// recorded; `None` while the fixed point is being computed.
+    uninitialized_reads: Option<&'a mut BTreeSet<(Location, Option<Local>)>>,
+}
+
+impl Visitor for InitWalker<'_> {
+    fn visit_local(&mut self, local: &Local, context: PlaceContext, location: Location) {
+        match context {
+            PlaceContext::NonMutatingUse(_) => {
+                if !self.state[*local]
+                    && let Some(reads) = &mut self.uninitialized_reads
+                {
+                    reads.insert((location, Some(*local)));
+                }
+            }
+            PlaceContext::MutatingUse(MutatingUseContext::Store) => self.state[*local] = true,
+            // A fresh or dead storage slot holds no value.
+            PlaceContext::NonUse(_) => self.state[*local] = false,
+            // Call destinations are initialized on the return edge, see
+            // `edge_definition`; taking an address neither reads nor writes.
+            PlaceContext::MutatingUse(MutatingUseContext::Call | MutatingUseContext::AddressOf) => {
+            }
+        }
+    }
 }
 
 fn replace_unreachable_fallthrough(body: &mut Body) {
@@ -392,142 +330,29 @@ fn replace_unreachable_fallthrough(body: &mut Body) {
     }
 }
 
-struct InitChecker<'a> {
-    program: &'a MirProgram,
-    body: &'a Body,
-    reported: BTreeSet<(Location, Local)>,
-    errors: Vec<AnalysisError>,
+/// The source span of `site` in `body`, or the body's span if the site
+/// does not exist.
+fn site_span(body: &Body, site: ErrorSite) -> Span {
+    let span = match site {
+        ErrorSite::Body => None,
+        ErrorSite::LocalDecl(local) => body
+            .local_decls()
+            .get(local)
+            .map(|decl| decl.source_info.span),
+        ErrorSite::Location(location) => body.source_info(location).map(|info| info.span),
+    };
+    span.unwrap_or(body.span())
 }
 
-impl InitChecker<'_> {
-    fn check_rvalue_reads(
-        &mut self,
-        location: Location,
-        span: Span,
-        rvalue: &Rvalue,
-        initialized: &[bool],
-    ) {
-        match rvalue {
-            Rvalue::Use(operand) | Rvalue::UnaryOp(_, operand) | Rvalue::Cast(_, operand, _) => {
-                self.check_operand_reads(location, span, operand, initialized);
-            }
-            Rvalue::BinaryOp(_, operands) | Rvalue::Overflows(_, operands) => {
-                self.check_operand_reads(location, span, &operands.0, initialized);
-                self.check_operand_reads(location, span, &operands.1, initialized);
-            }
-            Rvalue::AddressOf(_, place) if !place.projection.is_empty() => {
-                self.check_local_read(location, span, place.local, initialized);
-            }
-            Rvalue::AddressOf(_, _) => {}
-        }
-    }
-
-    fn check_operand_reads(
-        &mut self,
-        location: Location,
-        span: Span,
-        operand: &Operand,
-        initialized: &[bool],
-    ) {
-        if let Operand::Copy(place) = operand {
-            self.check_place_base(location, span, place, initialized);
-        }
-    }
-
-    fn check_place_base(
-        &mut self,
-        location: Location,
-        span: Span,
-        place: &Place,
-        initialized: &[bool],
-    ) {
-        self.check_local_read(location, span, place.local, initialized);
-    }
-
-    fn check_local_read(
-        &mut self,
-        location: Location,
-        span: Span,
-        local: Local,
-        initialized: &[bool],
-    ) {
-        if initialized.get(local.index()).copied().unwrap_or(false)
-            || !self.reported.insert((location, local))
-        {
-            return;
-        }
-        let kind = if local == RETURN_PLACE {
-            AnalysisErrorKind::UninitializedReturn
-        } else {
-            let name = self
-                .body
-                .local_decls()
-                .get(local)
-                .and_then(|decl| decl.debug_name.clone())
-                .unwrap_or_else(|| local.to_string());
-            AnalysisErrorKind::UninitializedLocal { name, local }
-        };
-        self.push_error(location, span, kind);
-    }
-
-    fn push_error(&mut self, location: Location, span: Span, kind: AnalysisErrorKind) {
-        let function = self
-            .program
-            .decl(self.body.def_id())
-            .map_or_else(|| self.body.def_id().to_string(), |decl| decl.name.clone());
-        self.errors.push(AnalysisError {
-            function,
-            def_id: self.body.def_id(),
-            location: location.to_string(),
-            span,
-            kind,
-        });
-    }
-}
-
-fn body_error(
-    program: &MirProgram,
-    body: &Body,
-    span: Span,
-    kind: AnalysisErrorKind,
-) -> AnalysisError {
-    AnalysisError {
-        function: program
-            .decl(body.def_id())
-            .map_or_else(|| body.def_id().to_string(), |decl| decl.name.clone()),
-        def_id: body.def_id(),
-        location: "body".to_owned(),
-        span,
-        kind,
-    }
-}
-
-fn verification_error(program: &MirProgram, error: VerifyError) -> AnalysisError {
-    let span = program
-        .body(error.def_id)
-        .map_or(Span::ZERO, |body| match error.site {
-            ErrorSite::Body => body.span(),
-            ErrorSite::LocalDecl(local) => body
-                .local_decls()
-                .get(local)
-                .map_or(body.span(), |decl| decl.source_info.span),
-            ErrorSite::Location(location) => {
-                body.basic_blocks()
-                    .get(location.block)
-                    .map_or(body.span(), |block| {
-                        if location.statement_index < block.statements.len() {
-                            block.statements[location.statement_index].source_info.span
-                        } else {
-                            block.terminator.source_info.span
-                        }
-                    })
-            }
-        });
-    AnalysisError {
-        function: error.function,
-        def_id: error.def_id,
-        location: error.site.to_string(),
-        span,
-        kind: AnalysisErrorKind::InvalidMir(error.kind.to_string()),
-    }
+fn invalid_mir(program: &MirProgram, errors: VerifyErrors) -> AnalysisErrors {
+    AnalysisErrors(
+        errors
+            .0
+            .into_iter()
+            .map(|error| {
+                let kind = AnalysisErrorKind::InvalidMir(error.kind.to_string());
+                AnalysisError::new(program, error.def_id, error.site, kind)
+            })
+            .collect(),
+    )
 }
