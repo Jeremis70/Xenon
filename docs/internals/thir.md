@@ -56,10 +56,11 @@ AST ──typecheck::check_program──▶ THIR ──mir::build_mir──▶ M
 - **Scopes.** A declaration is visible from the next statement until the
   end of its block.
 
-## Differences from the legacy validator
+## Migration from the AST validator
 
-`middle/validate.rs` still decides whether a program compiles, until the
-driver switches to MIR. THIR is deliberately stricter in these cases:
+The driver uses THIR for semantic validation; the separate AST validator and
+backend type-inference helper have been removed. The typed checker deliberately
+differs from the former validator in these cases:
 
 - A declaration no longer leaks out of the block it is in.
 - An `i64` value is no longer treated as an untyped literal. For example,

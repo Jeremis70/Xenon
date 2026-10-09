@@ -35,62 +35,6 @@ pub enum TypeError {
     InvalidBitWidth { raw: String, reason: &'static str },
 }
 #[derive(Debug, thiserror::Error)]
-pub enum CodegenError {
-    #[error("unsupported type: `{ty}` at {span:?}")]
-    UnsupportedType { ty: String, span: Span },
-    #[error("unsupported operator: `{op}` at {span:?}")]
-    UnsupportedOperator { op: String, span: Span },
-    #[error("undefined variable: `{name}` at {span:?}")]
-    UndefinedVariable { name: String, span: Span },
-    #[error("undefined function: `{name}` at {span:?}")]
-    UndefinedFunction { name: String, span: Span },
-    #[error("function `{name}` expects {expected} argument(s), got {got} at {span:?}")]
-    ArgumentCountMismatch {
-        name: String,
-        expected: usize,
-        got: usize,
-        span: Span,
-    },
-    /// An inkwell builder call returned an error.
-    #[error("LLVM builder error in `{operation}`: {message}")]
-    LlvmBuilder {
-        operation: &'static str,
-        message: String,
-    },
-    /// The IR is in an unexpected state (e.g. missing insert block).
-    #[error("invalid IR state: {0}")]
-    InvalidIrState(&'static str),
-    #[error("target initialization failed: {0}")]
-    TargetInit(String),
-    #[error("target error: {0}")]
-    TargetError(String),
-    #[error("target machine creation failed")]
-    TargetMachineCreation,
-    #[error("output file error: {0}")]
-    OutputFile(String),
-    #[error("function `{name}` is missing a return statement at {span:?}")]
-    MissingReturn { name: String, span: Span },
-    #[error("division by zero at {span:?}")]
-    DivisionByZero { span: Span },
-    #[error("shift amount exceeds bit width at {span:?}")]
-    ShiftOverflow { span: Span },
-    #[error("integer overflow at {span:?}")]
-    IntegerOverflow { span: Span },
-    #[error("address literal {value} does not fit in a {width}-bit pointer at {span:?}")]
-    AddressLiteralOutOfRange {
-        value: num_bigint::BigInt,
-        width: u32,
-        span: Span,
-    },
-    #[error("invalid assignment target at {span:?}: expected an addressable location")]
-    NotAPlaceExpression { span: Span },
-    #[error("{0}")]
-    Other(String),
-}
-
-pub type CodegenResult<T> = Result<T, CodegenError>;
-
-#[derive(Debug, thiserror::Error)]
 pub enum SemanticError {
     #[error("constant {value} is out of range for type `{ty}` in binding `{name}` (span {}..{})", span.start, span.end)]
     ConstantOutOfRange {

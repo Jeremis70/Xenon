@@ -16,6 +16,74 @@ fn check_succeeds_on_tests_main_xe() {
 }
 
 #[test]
+fn check_emits_runtime_mir_without_codegen() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("mir.xe");
+    std::fs::write(
+        &path,
+        "#[entry]\nfn main() -> i32 { let i32 value = 40 + 2; return value; }\n",
+    )
+    .expect("write");
+
+    let output = Command::cargo_bin("xenonc")
+        .expect("cargo_bin xenonc")
+        .args(["check", path.to_str().expect("utf8 path"), "--emit", "mir"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let mir = String::from_utf8(output).expect("MIR output is UTF-8");
+    assert!(mir.contains("phase: runtime"), "{mir}");
+    assert!(mir.contains("fn main() -> i32"), "{mir}");
+}
+
+#[test]
+fn compile_emits_mir_without_native_codegen() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let source = dir.path().join("mir.xe");
+    let out_dir = dir.path().join("build");
+    std::fs::create_dir_all(&out_dir).expect("create out dir");
+    std::fs::write(&source, "#[entry]\nfn main() -> i32 { return 7; }\n").expect("write");
+
+    Command::cargo_bin("xenonc")
+        .expect("cargo_bin xenonc")
+        .args([
+            "compile",
+            source.to_str().expect("utf8 path"),
+            "--emit",
+            "mir",
+            "--out-dir",
+            out_dir.to_str().expect("utf8 path"),
+        ])
+        .assert()
+        .success();
+
+    let mir = std::fs::read_to_string(out_dir.join("out.mir")).expect("read MIR output");
+    assert!(mir.contains("phase: runtime"), "{mir}");
+    assert!(!out_dir.join("out.o").exists());
+}
+
+#[cfg(not(feature = "llvm-backend"))]
+#[test]
+fn native_codegen_requires_the_llvm_feature() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let source = dir.path().join("program.xe");
+    std::fs::write(&source, "#[entry]\nfn main() -> i32 { return 0; }\n").expect("write");
+
+    let output = Command::cargo_bin("xenonc")
+        .expect("cargo_bin xenonc")
+        .args(["compile", source.to_str().expect("utf8 path")])
+        .assert()
+        .failure()
+        .get_output()
+        .stderr
+        .clone();
+    let stderr = String::from_utf8(output).expect("stderr is UTF-8");
+    assert!(stderr.contains("llvm-backend"), "{stderr}");
+}
+
+#[test]
 fn check_fails_on_semantic_error() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("bad.xe");
@@ -56,6 +124,7 @@ fn check_json_error_format_is_valid_json_line() {
 /// End-to-end compile of a program exercising pointers, references, double
 /// indirection, and reference parameters.
 #[test]
+#[cfg(feature = "llvm-backend")]
 fn compile_succeeds_on_pointers_and_references() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("ptr.xe");
@@ -121,6 +190,7 @@ fn compile_fails_on_oversized_address_literal() {
 }
 
 /// Compiles `src` and runs the resulting binary, returning its exit code.
+#[cfg(feature = "llvm-backend")]
 fn compile_and_run(src: &str) -> i32 {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("prog.xe");
@@ -148,6 +218,7 @@ fn compile_and_run(src: &str) -> i32 {
 /// Builds a program whose target and right-hand side each append a digit to a
 /// log, so the exit code spells out the order they were evaluated in. `1` is
 /// the assignment target, `2` is the right-hand side.
+#[cfg(feature = "llvm-backend")]
 fn evaluation_order_program(assignment: &str) -> String {
     format!(
         concat!(
@@ -175,6 +246,7 @@ fn evaluation_order_program(assignment: &str) -> String {
 /// exactly like the plain assignment below. Lowering the right-hand side first
 /// would yield `21`.
 #[test]
+#[cfg(feature = "llvm-backend")]
 fn compound_assignment_evaluates_target_before_value() {
     let code = compile_and_run(&evaluation_order_program(
         "*target(@log, @cell) += bump(@log);",
@@ -183,9 +255,53 @@ fn compound_assignment_evaluates_target_before_value() {
 }
 
 #[test]
+#[cfg(feature = "llvm-backend")]
 fn plain_assignment_evaluates_target_before_value() {
     let code = compile_and_run(&evaluation_order_program(
         "*target(@log, @cell) = bump(@log);",
     ));
     assert_eq!(code, 12, "expected target-then-value evaluation order");
+}
+
+#[cfg(feature = "llvm-backend")]
+#[test]
+fn backend_runs_wide_integer_shift_float_and_branch_operations() {
+    let code = compile_and_run(concat!(
+        "#[entry]\n",
+        "fn main() -> i32 {\n",
+        "    let i128 wide = 18446744073709551616;\n",
+        "    let i32 shifted = 1;\n",
+        "    shifted = shifted << 2;\n",
+        "    let f64 fraction = 1.5;\n",
+        "    if fraction > 1.0 && wide > 0 { return shifted + 1; }\n",
+        "    return 0;\n",
+        "}\n",
+    ));
+    assert_eq!(code, 5);
+}
+
+#[cfg(feature = "llvm-backend")]
+#[test]
+fn backend_runs_custom_entry_with_user_main_collision() {
+    let code = compile_and_run(concat!(
+        "#[entry]\n",
+        "fn start() -> i32 { return 9; }\n",
+        "fn main() -> i32 { return 0; }\n",
+    ));
+    assert_eq!(code, 9);
+}
+
+#[cfg(feature = "llvm-backend")]
+#[test]
+fn backend_compares_pointer_values() {
+    let code = compile_and_run(concat!(
+        "#[entry]\n",
+        "fn main() -> i32 {\n",
+        "    let i32 value = 1;\n",
+        "    let *i32 pointer = @value;\n",
+        "    if pointer == @value { return 3; }\n",
+        "    return 0;\n",
+        "}\n",
+    ));
+    assert_eq!(code, 3);
 }
