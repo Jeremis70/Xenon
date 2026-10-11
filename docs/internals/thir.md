@@ -50,6 +50,12 @@ AST ──typecheck::check_program──▶ THIR ──mir::build_mir──▶ M
   evaluate both sides. MIR lowers them to `BitAnd`, `BitOr`, and `BitXor`.
 - **Places** are bindings and dereferences. A binding of type `&T` is
   dereferenced automatically wherever it is used.
+- **Address expressions.** Address literals require a pointer/reference type
+  from context. `@place` produces a reference when a reference is expected,
+  and a raw pointer otherwise. In operand or conditional-branch pairs, a
+  context-dependent address expression uses the other side's type when that
+  side is not context-dependent; this works in either order. When both sides
+  are context-dependent, they use the enclosing expected type instead.
 - **Loops.** The first `break` fixes a loop's type. A loop with no `break`
   takes the type its context expects, or `i64` if there is none. Every
   `break` in the same loop must agree.
