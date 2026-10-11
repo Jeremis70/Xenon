@@ -8,8 +8,9 @@ use xenonc::middle::constant_fold::fold_constants;
 use xenonc::middle::ids::DefId;
 use xenonc::middle::target::TargetSpec;
 use xenonc::middle::thir::pretty::thir_program_to_string;
-use xenonc::middle::thir::{BindingKind, ThirProgram};
+use xenonc::middle::thir::{BindingKind, ExprKind, StmtKind, ThirProgram};
 use xenonc::middle::typecheck::check_program;
+use xenonc::types::Type;
 
 const TARGET: TargetSpec = TargetSpec::new(64);
 
@@ -259,6 +260,101 @@ fn address_of_records_the_pointer_flavor() {
 fn pointers_require_explicit_dereference() {
     let dump = thir("fn f(*i32 p)->i32 { *p += 2; return *p; }");
     assert!(dump.contains("(*p@b0) Add= 2_i32;"), "{dump}");
+}
+
+#[test]
+fn address_literal_comparisons_take_the_pointer_type_in_either_order() {
+    for comparison in ["p == @0x0", "@0x0 == p", "p != @0x0", "@0x0 != p"] {
+        let source = format!("fn f(*i32 p)->bool {{ return {comparison}; }}");
+        let program = check(&source).expect("address literal should adopt pointer type");
+        let StmtKind::Return(expr) = &program.functions[DefId::new(0)].body.stmts[0].kind else {
+            panic!("expected return");
+        };
+        let ExprKind::Binary { lhs, rhs, .. } = &expr.kind else {
+            panic!("expected comparison");
+        };
+        let pointer_ty = Type::Pointer(Box::new(Type::Int(32)));
+        assert_eq!(lhs.ty, pointer_ty, "{source}");
+        assert_eq!(rhs.ty, pointer_ty, "{source}");
+    }
+}
+
+#[test]
+fn address_of_comparisons_take_the_returned_reference_type_in_either_order() {
+    for comparison in ["reference(@x) == @x", "@x == reference(@x)"] {
+        let source = format!(
+            "fn reference(&i32 value)->&i32 {{ return @value; }} \
+             fn f(i32 x)->bool {{ return {comparison}; }}"
+        );
+        let program = check(&source).expect("address-of should adopt reference flavor");
+        let StmtKind::Return(expr) = &program.functions[DefId::new(1)].body.stmts[0].kind else {
+            panic!("expected return");
+        };
+        let ExprKind::Binary { lhs, rhs, .. } = &expr.kind else {
+            panic!("expected comparison");
+        };
+        let reference_ty = Type::Reference(Box::new(Type::Int(32)));
+        assert_eq!(lhs.ty, reference_ty, "{source}");
+        assert_eq!(rhs.ty, reference_ty, "{source}");
+    }
+}
+
+#[test]
+fn conditional_address_branches_take_the_other_branch_type() {
+    for branches in [
+        "p if c else @0x0",
+        "@0x0 if c else p",
+        "p if c else @x",
+        "@x if c else p",
+    ] {
+        check(&format!(
+            "fn f(bool c, *i32 p, i32 x)->bool {{ \
+             return ({branches}) == p; }}"
+        ))
+        .expect("conditional branch should adopt pointer type without an enclosing expectation");
+    }
+    for branches in ["reference(@x) if c else @x", "@x if c else reference(@x)"] {
+        check(&format!(
+            "fn reference(&i32 value)->&i32 {{ return @value; }} \
+             fn f(bool c, i32 x)->bool {{ \
+             return ({branches}) == reference(@x); }}"
+        ))
+        .expect(
+            "conditional branch should adopt reference flavor without an enclosing expectation",
+        );
+    }
+}
+
+#[test]
+fn contextual_address_pairs_still_reject_mismatched_pointees() {
+    for comparison in ["p == @x", "@x == p"] {
+        let err = error(&format!(
+            "fn f(*i32 p, u32 x)->bool {{ return {comparison}; }}"
+        ));
+        assert!(
+            matches!(err, SemanticError::InvalidOperands { .. }),
+            "{err}"
+        );
+    }
+    for branches in ["p if c else @x", "@x if c else p"] {
+        let err = error(&format!(
+            "fn f(bool c, *i32 p, u32 x)->bool {{ return ({branches}) == p; }}"
+        ));
+        assert!(matches!(err, SemanticError::TypeMismatch { .. }), "{err}");
+    }
+}
+
+#[test]
+fn contextual_address_pairs_still_reject_pointer_ordering() {
+    for comparison in ["p < @0x0", "@0x0 > p", "p <= @x", "@x >= p"] {
+        let err = error(&format!(
+            "fn f(*i32 p, i32 x)->bool {{ return {comparison}; }}"
+        ));
+        assert!(
+            matches!(err, SemanticError::InvalidOperands { .. }),
+            "{err}"
+        );
+    }
 }
 
 // ── Loops ─────────────────────────────────────────────────────────────────────

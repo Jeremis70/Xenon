@@ -115,16 +115,21 @@ impl FnCtxt<'_, '_> {
     /// Checks two expressions that must end up with the same type, such as
     /// the operands of `+` or the branches of an `if`.
     ///
-    /// If exactly one side is an untyped literal expression, it adopts the
-    /// type of the other side. Otherwise both sides are checked against
-    /// `expected`. The caller decides whether the resulting types agree.
+    /// If exactly one side is context-dependent (a numeric literal expression,
+    /// address literal, or address-of expression), it uses the type of the
+    /// other side. Otherwise both sides are checked against `expected`.
+    /// The caller decides whether the resulting types agree.
     pub(super) fn check_pair(
         &mut self,
         lhs: &ast::Expr,
         rhs: &ast::Expr,
         expected: Option<&Type>,
     ) -> SemanticResult<(Expr, Expr)> {
-        match (literal_class(lhs).is_some(), literal_class(rhs).is_some()) {
+        let needs_context = |expr: &ast::Expr| {
+            literal_class(expr).is_some()
+                || matches!(&expr.kind, Ast::Address(_) | Ast::AddressOf(_))
+        };
+        match (needs_context(lhs), needs_context(rhs)) {
             (false, true) => {
                 let lhs = self.check_expr(lhs, expected)?;
                 let rhs = self.check_expr(rhs, Some(&lhs.ty))?;
