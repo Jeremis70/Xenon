@@ -139,6 +139,23 @@ fn float_and_pointer_comparisons_lower_to_compares() {
 }
 
 #[test]
+fn float_not_equal_is_true_for_nan() {
+    let ir = ir_for("fn f(f64 a, f64 b)->bool { return a != b; }");
+    assert!(ir.contains("fcmp une double"), "{ir}");
+}
+
+#[test]
+fn shift_amount_extends_by_its_own_signedness() {
+    let ir = ir_for(
+        "fn f(u16 x, u4 n)->u16 { return x << n; }\n\
+         fn g(u16 x, i4 n)->u16 { return x << n; }\n",
+    );
+    assert!(ir.contains("zext i4 %"), "{ir}");
+    assert!(ir.contains("to i16"), "{ir}");
+    assert!(ir.contains("sext i4 %"), "{ir}");
+}
+
+#[test]
 fn pointer_sized_integers_use_the_target_width() {
     let ir = ir_for("fn f(usize a, isize b)->usize { return a; }");
     let width = TargetSpec::host().pointer_width();

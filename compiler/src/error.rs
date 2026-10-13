@@ -122,6 +122,8 @@ pub enum SemanticError {
         ty: Type,
         span: Span,
     },
+    #[error("named return value cannot have reference type `{ty}`: it has no initial value")]
+    ReferenceNamedReturn { ty: Type, span: Span },
     #[error("function `{name}` is defined more than once")]
     DuplicateFunction {
         name: String,
@@ -156,6 +158,7 @@ impl SemanticError {
             | SemanticError::CannotDereference { span, .. }
             | SemanticError::AddressLiteralWithoutPointerType { span }
             | SemanticError::LiteralOutOfRange { span, .. }
+            | SemanticError::ReferenceNamedReturn { span, .. }
             | SemanticError::DuplicateFunction { span, .. } => Some(*span),
             SemanticError::NoEntryPoint => None,
         }

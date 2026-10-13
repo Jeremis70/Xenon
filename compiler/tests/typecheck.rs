@@ -211,11 +211,34 @@ fn mixed_integer_comparison_widens_explicitly() {
 }
 
 #[test]
-fn mixed_sign_comparison_of_equal_width_widens_to_unsigned() {
+fn mixed_sign_comparison_widens_to_a_wider_signed_type() {
     let dump = thir("fn f(i32 a, u32 b)->bool { return a == b; }");
     assert!(
-        dump.contains("return Eq((a@b0 as u32 [IntToInt]), b@b1);"),
+        dump.contains("return Eq((a@b0 as i33 [IntToInt]), (b@b1 as i33 [IntToInt]));"),
         "{dump}"
+    );
+    let dump = thir("fn f(i32 a, u64 b)->bool { return a < b; }");
+    assert!(
+        dump.contains("return Lt((a@b0 as i65 [IntToInt]), (b@b1 as i65 [IntToInt]));"),
+        "{dump}"
+    );
+}
+
+#[test]
+fn mixed_sign_comparison_with_wider_signed_operand_uses_it() {
+    let dump = thir("fn f(i64 a, u32 b)->bool { return a < b; }");
+    assert!(
+        dump.contains("return Lt(a@b0, (b@b1 as i64 [IntToInt]));"),
+        "{dump}"
+    );
+}
+
+#[test]
+fn reference_named_return_is_error() {
+    let err = error("fn f()->&i32 r { return @r; }");
+    assert!(
+        matches!(err, SemanticError::ReferenceNamedReturn { .. }),
+        "unexpected error: {err}"
     );
 }
 

@@ -136,8 +136,9 @@ impl FnCtxt<'_, '_> {
 
     /// Checks a comparison, making any operand conversion explicit.
     ///
-    /// Integers of different types compare after widening the narrower
-    /// operand to the wider type; on equal widths the unsigned type wins.
+    /// Integers of different types compare after widening both operands
+    /// to a type that holds every value of each (see
+    /// [`Self::common_int_type`]).
     /// Floats of different widths compare at the wider width. Pointers only
     /// support `==` and `!=` between identical types.
     fn comparison(
@@ -180,14 +181,26 @@ impl FnCtxt<'_, '_> {
         Ok(binary(bin_op, Type::Bool, lhs, rhs, span))
     }
 
-    /// The type two different integer types are compared at.
+    /// The type two different integer types are compared at: the wider one
+    /// if both have the same signedness, otherwise a signed type one bit
+    /// wider than the unsigned operand (or as wide as the signed one, if
+    /// wider), so negative values never compare as large unsigned ones.
     fn common_int_type(&self, lhs: &Type, rhs: &Type) -> Type {
         let target = self.target();
         let (lw, rw) = (target.int_width(lhs), target.int_width(rhs));
-        if rw > lw || (rw == lw && rhs.is_unsigned_integer() && !lhs.is_unsigned_integer()) {
-            rhs.clone()
+        if lhs.is_signed_integer() == rhs.is_signed_integer() {
+            return if rw > lw { rhs.clone() } else { lhs.clone() };
+        }
+        let (signed, unsigned) = if lhs.is_signed_integer() {
+            (lhs, rhs)
         } else {
-            lhs.clone()
+            (rhs, lhs)
+        };
+        let (sw, uw) = (target.int_width(signed), target.int_width(unsigned));
+        match (sw, uw) {
+            (Some(sw), Some(uw)) if sw > uw => signed.clone(),
+            (_, Some(uw)) => Type::Int(uw.saturating_add(1)),
+            _ => signed.clone(),
         }
     }
 }

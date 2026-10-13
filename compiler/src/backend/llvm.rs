@@ -366,7 +366,14 @@ impl<'ctx, 'a> MirCodegen<'ctx, 'a> {
             Rvalue::BinaryOp(op, operands) => {
                 let (lhs, rhs) = &**operands;
                 let ty = operand_type(lhs, body)?;
-                self.binary(*op, self.operand(lhs, body)?, self.operand(rhs, body)?, ty)
+                let rhs_ty = operand_type(rhs, body)?;
+                self.binary(
+                    *op,
+                    self.operand(lhs, body)?,
+                    self.operand(rhs, body)?,
+                    ty,
+                    rhs_ty,
+                )
             }
             Rvalue::Overflows(op, operands) => {
                 let (lhs, rhs) = &**operands;
@@ -410,13 +417,15 @@ impl<'ctx, 'a> MirCodegen<'ctx, 'a> {
         value.map_err(llvm_error("unary operation"))
     }
 
-    /// Lowers a binary operation whose operands have MIR type `ty`.
+    /// Lowers a binary operation whose left operand has MIR type `ty` and
+    /// right operand `rhs_ty`; they differ only for shifts.
     fn binary(
         &self,
         op: BinOp,
         lhs: BasicValueEnum<'ctx>,
         rhs: BasicValueEnum<'ctx>,
         ty: &Type,
+        rhs_ty: &Type,
     ) -> Result<BasicValueEnum<'ctx>, BackendError> {
         let unsupported_op = || unsupported(format!("operator {op:?} on `{ty}`"));
         let builder = &self.builder;
@@ -454,10 +463,16 @@ impl<'ctx, 'a> MirCodegen<'ctx, 'a> {
             }
             (BasicValueEnum::IntValue(lhs), BasicValueEnum::IntValue(rhs)) => {
                 let signed = ty.is_signed_integer();
-                // MIR allows a shift amount of any integer type.
+                // MIR allows a shift amount of any integer type, extended by
+                // its own signedness.
                 let rhs = if op.is_shift() && lhs.get_type() != rhs.get_type() {
                     builder
-                        .build_int_cast(rhs, lhs.get_type(), "shift.amount")
+                        .build_int_cast_sign_flag(
+                            rhs,
+                            lhs.get_type(),
+                            rhs_ty.is_signed_integer(),
+                            "shift.amount",
+                        )
                         .map_err(llvm_error("shift amount conversion"))?
                 } else {
                     rhs
@@ -705,12 +720,12 @@ fn int_predicate(op: BinOp, signed: bool) -> Option<IntPredicate> {
     })
 }
 
-/// The ordered float comparison `op` performs, `None` if it is no
-/// comparison.
+/// The float comparison `op` performs, `None` if it is no comparison.
+/// All are ordered (false on NaN) except `!=`, which is true on NaN.
 fn float_predicate(op: BinOp) -> Option<FloatPredicate> {
     Some(match op {
         BinOp::Eq => FloatPredicate::OEQ,
-        BinOp::Ne => FloatPredicate::ONE,
+        BinOp::Ne => FloatPredicate::UNE,
         BinOp::Lt => FloatPredicate::OLT,
         BinOp::Le => FloatPredicate::OLE,
         BinOp::Gt => FloatPredicate::OGT,

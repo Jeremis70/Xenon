@@ -198,11 +198,18 @@ impl<'g, 'a> FnCtxt<'g, 'a> {
             .iter()
             .map(|param| self.declare(param, BindingKind::Param))
             .collect();
-        let named_return = function
-            .return_type
-            .name
-            .is_some()
-            .then(|| self.declare(&function.return_type, BindingKind::NamedReturn));
+        let named_return = match &function.return_type {
+            ret if ret.name.is_none() => None,
+            // A named return starts out zeroed, and a reference has no
+            // zero value: it would be a null reference.
+            ret if matches!(ret.ty, Type::Reference(_)) => {
+                return Err(SemanticError::ReferenceNamedReturn {
+                    ty: ret.ty.clone(),
+                    span: ret.span,
+                });
+            }
+            ret => Some(self.declare(ret, BindingKind::NamedReturn)),
+        };
         let body = self.check_block(&function.body, function.span)?;
         self.scopes.pop();
 
