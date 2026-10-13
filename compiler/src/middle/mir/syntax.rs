@@ -349,10 +349,10 @@ impl Constant {
         }
     }
 
-    /// The zero value of `ty`: `false`, `0`, `0.0`, or the null address.
+    /// The zero value of `ty`: `false`, `0`, `0.0`, or the null pointer.
     ///
-    /// Returns `None` for types without a zero value; every type of the
-    /// language has one today, but `void` or `never` would not.
+    /// Returns `None` for types without a zero value, such as references,
+    /// which must never be null.
     pub fn zero(ty: &Type) -> Option<Self> {
         let value = if ty.is_bool() {
             ConstValue::Bool(false)
@@ -360,7 +360,7 @@ impl Constant {
             ConstValue::Int(BigInt::ZERO)
         } else if ty.is_float() {
             ConstValue::Float(0.0)
-        } else if ty.is_indirect() {
+        } else if matches!(ty, Type::Pointer(_)) {
             ConstValue::Address(BigInt::ZERO)
         } else {
             return None;
