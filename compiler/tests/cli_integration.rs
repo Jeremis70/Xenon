@@ -99,6 +99,60 @@ fn check_fails_on_semantic_error() {
 }
 
 #[test]
+fn semantic_errors_precede_entry_point_errors() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("bad.xe");
+    for source in [
+        "fn f()->i32 { return missing; }",
+        "#[entry] fn f()->u32 { return missing; }",
+        "#[entry] fn f(i32 value)->i32 { return missing; }",
+        "#[unknown] fn f()->i32 { return missing; }",
+        "#[entry] fn f()->i32 { return missing; } #[entry] fn g()->i32 { return 0; }",
+    ] {
+        std::fs::write(&path, source).expect("write");
+        for command in ["check", "compile"] {
+            let output = Command::cargo_bin("xenonc")
+                .expect("cargo_bin xenonc")
+                .args([
+                    command,
+                    path.to_str().expect("utf8 path"),
+                    "--emit",
+                    "mir",
+                    "--error-format",
+                    "json",
+                ])
+                .assert()
+                .failure();
+            let stderr = String::from_utf8_lossy(&output.get_output().stderr);
+            let diagnostic: serde_json::Value = serde_json::from_str(stderr.trim()).expect("JSON");
+            assert_eq!(diagnostic["code"], "semantic", "{stderr}");
+            assert_eq!(
+                diagnostic["message"], "undefined variable `missing`",
+                "{source}"
+            );
+        }
+    }
+}
+
+#[test]
+fn entry_point_is_still_validated_after_successful_typecheck() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("no_entry.xe");
+    std::fs::write(&path, "fn f()->i32 { return 0; }").expect("write");
+    Command::cargo_bin("xenonc")
+        .expect("cargo_bin xenonc")
+        .args([
+            "check",
+            path.to_str().expect("utf8 path"),
+            "--error-format",
+            "json",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("no `#[entry]` function found"));
+}
+
+#[test]
 fn check_json_error_format_is_valid_json_line() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("bad.xe");

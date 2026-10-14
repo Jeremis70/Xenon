@@ -219,6 +219,9 @@ impl FnCtxt<'_, '_> {
         let ty = frame
             .and_then(|frame| frame.break_ty.or(frame.contextual))
             .unwrap_or(Type::Int(64));
+        if matches!(ty, Type::Reference(_)) {
+            return Err(SemanticError::ReferenceLoop { ty, span });
+        }
         Ok(Expr {
             kind: ExprKind::Loop { condition, body },
             ty,

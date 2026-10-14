@@ -66,6 +66,40 @@ fn llvm_backend_emits_runtime_mir() {
 }
 
 #[test]
+fn llvm_optimization_promotes_stack_slots_and_folds_constants() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("optimized.ll");
+    let mir = build_mir_for_source(
+        "#[entry] fn main()->i32 { let i32 value = 40; value = value + 2; return value; }",
+    );
+    let unoptimized = emit_ir(&mir, &path);
+    assert!(unoptimized.contains("alloca"), "{unoptimized}");
+
+    for optimization in [1, 2, 3, u8::MAX] {
+        LlvmBackend
+            .emit(
+                &mir,
+                &TargetSpec::host(),
+                CodegenOptions { optimization },
+                &[OutputRequest {
+                    kind: ArtifactKind::LlvmIr,
+                    path: path.clone(),
+                }],
+            )
+            .expect("optimization should succeed, including levels capped at O3");
+        let optimized = std::fs::read_to_string(&path).expect("read optimized IR");
+        assert!(
+            optimized.contains("ret i32 42"),
+            "O{optimization}: {optimized}"
+        );
+        assert!(
+            !optimized.contains("alloca"),
+            "O{optimization}: {optimized}"
+        );
+    }
+}
+
+#[test]
 fn llvm_backend_rejects_built_mir() {
     let source = "#[entry]\nfn main() -> i32 { return 0; }\n";
     let tokens = lex(source).expect("source should lex");

@@ -1,5 +1,32 @@
 use num_bigint::BigInt;
-use xenonc::types::Type;
+use xenonc::error::TypeError;
+use xenonc::types::{MAX_INT_WIDTH, Type};
+
+#[test]
+fn integer_widths_are_limited_to_the_supported_range() {
+    for prefix in ["i", "u"] {
+        for width in [1, MAX_INT_WIDTH] {
+            let ty = format!("{prefix}{width}")
+                .parse::<Type>()
+                .expect("valid width");
+            assert_eq!(
+                ty,
+                if prefix == "i" {
+                    Type::Int(width)
+                } else {
+                    Type::UInt(width)
+                }
+            );
+        }
+        for width in [0, MAX_INT_WIDTH + 1, u32::MAX] {
+            let raw = format!("{prefix}{width}");
+            assert!(matches!(
+                raw.parse::<Type>(),
+                Err(TypeError::InvalidBitWidth { raw: found, .. }) if found == raw
+            ));
+        }
+    }
+}
 
 #[test]
 fn integer_bounds_match_twos_complement() {

@@ -5,7 +5,7 @@ use crate::frontend::ast::{self, BinOp as AstOp};
 use crate::middle::ops::{BinOp, CastKind};
 use crate::middle::thir::{Expr, ExprKind, LogicalOp};
 use crate::source::Span;
-use crate::types::Type;
+use crate::types::{MAX_INT_WIDTH, Type};
 
 use super::FnCtxt;
 use super::literal::literal_class;
@@ -168,7 +168,11 @@ impl FnCtxt<'_, '_> {
         let common = if l == r && (l.is_integer() || l.is_float() || l.is_bool()) {
             l.clone()
         } else if l.is_integer() && r.is_integer() {
-            self.common_int_type(l, r)
+            self.common_int_type(l, r).ok_or_else(|| {
+                invalid(format!(
+                    "comparison of `{l}` and `{r}` requires an integer wider than {MAX_INT_WIDTH} bits"
+                ))
+            })?
         } else if l.is_float() && r.is_float() {
             common_float_type(l, r)
                 .ok_or_else(|| invalid(format!("incompatible types `{l}` and `{r}`")))?
@@ -185,11 +189,12 @@ impl FnCtxt<'_, '_> {
     /// if both have the same signedness, otherwise a signed type one bit
     /// wider than the unsigned operand (or as wide as the signed one, if
     /// wider), so negative values never compare as large unsigned ones.
-    fn common_int_type(&self, lhs: &Type, rhs: &Type) -> Type {
+    /// Returns `None` if widening would exceed the supported integer width.
+    fn common_int_type(&self, lhs: &Type, rhs: &Type) -> Option<Type> {
         let target = self.target();
         let (lw, rw) = (target.int_width(lhs), target.int_width(rhs));
         if lhs.is_signed_integer() == rhs.is_signed_integer() {
-            return if rw > lw { rhs.clone() } else { lhs.clone() };
+            return Some(if rw > lw { rhs.clone() } else { lhs.clone() });
         }
         let (signed, unsigned) = if lhs.is_signed_integer() {
             (lhs, rhs)
@@ -198,9 +203,12 @@ impl FnCtxt<'_, '_> {
         };
         let (sw, uw) = (target.int_width(signed), target.int_width(unsigned));
         match (sw, uw) {
-            (Some(sw), Some(uw)) if sw > uw => signed.clone(),
-            (_, Some(uw)) => Type::Int(uw.saturating_add(1)),
-            _ => signed.clone(),
+            (Some(sw), Some(uw)) if sw > uw => Some(signed.clone()),
+            (_, Some(uw)) => uw
+                .checked_add(1)
+                .filter(|width| *width <= MAX_INT_WIDTH)
+                .map(Type::Int),
+            _ => Some(signed.clone()),
         }
     }
 }

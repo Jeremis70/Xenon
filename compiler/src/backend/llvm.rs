@@ -7,6 +7,7 @@ use inkwell::basic_block::BasicBlock as LlvmBlock;
 use inkwell::builder::{Builder, BuilderError};
 use inkwell::context::Context;
 use inkwell::module::Module;
+use inkwell::passes::PassBuilderOptions;
 use inkwell::targets::{
     CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine,
 };
@@ -98,6 +99,12 @@ impl Backend for LlvmBackend {
         module
             .verify()
             .map_err(|error| BackendError::InvalidMir(error.to_string()))?;
+        if options.optimization > 0 {
+            let pipeline = format!("default<O{}>", options.optimization.min(3));
+            module
+                .run_passes(&pipeline, &machine, PassBuilderOptions::create())
+                .map_err(|error| invalid_mir(format!("LLVM optimization failed: {error}")))?;
+        }
 
         outputs
             .iter()

@@ -42,8 +42,11 @@ AST ──typecheck::check_program──▶ THIR ──mir::build_mir──▶ M
   initializes a variable, the error names the variable.
 - **Arithmetic and bitwise operators** require both operands to have the
   same type. A shift amount may be any integer type.
-- **Comparisons** of two different integer types widen both operands to
-  the wider type. On equal widths, the unsigned type wins. Two floats of
+- **Comparisons** of integer types with the same signedness widen to the
+  wider type. Mixed-sign operands widen to a signed type whose width is the
+  maximum of the signed width and the unsigned width plus one; for example,
+  `i32 == u32` compares at `i33`. Comparisons requiring a width above the
+  supported maximum of 8,388,608 bits are rejected. Two floats of
   different types widen to the wider one. Pointers compare only with `==`
   and `!=`, and only to the same pointer type.
 - **Logical operators** `&&`, `||`, and `^^` take `bool` operands and
@@ -58,7 +61,7 @@ AST ──typecheck::check_program──▶ THIR ──mir::build_mir──▶ M
   are context-dependent, they use the enclosing expected type instead.
 - **Loops.** The first `break` fixes a loop's type. A loop with no `break`
   takes the type its context expects, or `i64` if there is none. Every
-  `break` in the same loop must agree.
+  `break` in the same loop must agree. Reference-valued loops are rejected.
 - **Scopes.** A declaration is visible from the next statement until the
   end of its block.
 
