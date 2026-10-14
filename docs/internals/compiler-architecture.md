@@ -31,7 +31,8 @@ definitions for compatibility.
 ## Driver pipeline
 
 ```text
-lex → parse → constant-fold → entry validation → typecheck → THIR → MIR
+lex → parse → constant-fold → typecheck (semantic validation) → THIR
+    → entry validation → MIR
     → flow analysis → runtime-check normalization → LLVM backend → link
 ```
 

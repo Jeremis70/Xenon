@@ -214,8 +214,7 @@ struct ParsedSource {
     first_path: String,
 }
 
-/// Lexes, parses, and folds source-level constants, and validates the entry
-/// point.
+/// Lexes, parses, and folds source-level constants.
 fn parse_source(session: &Session) -> Result<ParsedSource, Failure> {
     let mut tokens = Vec::new();
     let mut combined_source = String::new();
@@ -245,10 +244,6 @@ fn parse_source(session: &Session) -> Result<ParsedSource, Failure> {
         emitter.fold_error(&error);
         Failure::Reported
     })?;
-    validate_entry_point(&program).map_err(|error| {
-        emitter.semantic_error(&error);
-        Failure::Reported
-    })?;
 
     Ok(ParsedSource {
         program,
@@ -264,6 +259,10 @@ fn lower_to_runtime_mir(session: &Session, target: &TargetSpec) -> Result<MirPro
     let emitter = Emitter::new(session, &parsed.first_path, &parsed.combined_source);
 
     let thir = check_program(&parsed.program, target).map_err(|error| {
+        emitter.semantic_error(&error);
+        Failure::Reported
+    })?;
+    validate_entry_point(&parsed.program).map_err(|error| {
         emitter.semantic_error(&error);
         Failure::Reported
     })?;

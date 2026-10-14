@@ -10,7 +10,7 @@ use xenonc::middle::target::TargetSpec;
 use xenonc::middle::thir::pretty::thir_program_to_string;
 use xenonc::middle::thir::{BindingKind, ExprKind, StmtKind, ThirProgram};
 use xenonc::middle::typecheck::check_program;
-use xenonc::types::Type;
+use xenonc::types::{MAX_INT_WIDTH, Type};
 
 const TARGET: TargetSpec = TargetSpec::new(64);
 
@@ -234,6 +234,43 @@ fn mixed_sign_comparison_with_wider_signed_operand_uses_it() {
 }
 
 #[test]
+fn mixed_sign_comparison_rejects_widening_beyond_the_supported_limit() {
+    for (lhs, rhs) in [
+        (format!("i{MAX_INT_WIDTH}"), format!("u{MAX_INT_WIDTH}")),
+        (format!("u{MAX_INT_WIDTH}"), "isize".to_owned()),
+    ] {
+        for (lhs, rhs) in [(&lhs, &rhs), (&rhs, &lhs)] {
+            let err = error(&format!("fn f({lhs} a, {rhs} b)->bool {{ return a < b; }}"));
+            assert!(
+                matches!(err, SemanticError::InvalidOperands { .. }),
+                "{err}"
+            );
+            assert!(
+                err.to_string().contains("requires an integer wider"),
+                "{err}"
+            );
+        }
+    }
+}
+
+#[test]
+fn integer_comparison_can_widen_to_the_supported_limit() {
+    let unsigned_width = MAX_INT_WIDTH - 1;
+    let dump = thir(&format!(
+        "fn f(i32 a, u{unsigned_width} b)->bool {{ return a == b; }}"
+    ));
+    assert!(
+        dump.contains(&format!("as i{MAX_INT_WIDTH} [IntToInt]")),
+        "{dump}"
+    );
+    check(&format!(
+        "fn f(i{MAX_INT_WIDTH} a, u{unsigned_width} b)->bool {{ return a < b; }} \
+         fn g(u32 a, u{MAX_INT_WIDTH} b)->bool {{ return a < b; }}"
+    ))
+    .expect("comparisons at the maximum width should type-check");
+}
+
+#[test]
 fn reference_named_return_is_error() {
     let err = error("fn f()->&i32 r { return @r; }");
     assert!(
@@ -387,6 +424,37 @@ fn loop_type_comes_from_break_value() {
     let dump = thir("fn f()->i32 { let i32 x = loop { break 3; }; return x; }");
     assert!(dump.contains("(loop: i32) loop {"), "{dump}");
     assert!(dump.contains("break 3_i32;"), "{dump}");
+}
+
+#[test]
+fn reference_loop_type_from_context_is_error() {
+    for expr in ["loop { }", "loop { break; }", "loop { break @value; }"] {
+        let err = error(&format!("fn f(&i32 value)->&i32 {{ return {expr}; }}"));
+        assert!(
+            matches!(err, SemanticError::ReferenceLoop { ref ty, .. }
+                if *ty == Type::Reference(Box::new(Type::Int(32)))),
+            "unexpected error: {err}"
+        );
+        assert!(err.span().is_some(), "loop diagnostic must have a span");
+    }
+}
+
+#[test]
+fn reference_loop_type_from_break_value_is_error() {
+    let err = error(
+        "fn reference(&i32 value)->&i32 { return @value; } \
+         fn f(i32 value)->i32 { loop { break reference(@value); } return 0; }",
+    );
+    assert!(matches!(err, SemanticError::ReferenceLoop { .. }), "{err}");
+}
+
+#[test]
+fn non_reference_loop_types_are_preserved() {
+    check(
+        "fn f(*i32 p)->*i32 { return loop { break p; }; } \
+           fn g()->bool { return loop { break true; }; }",
+    )
+    .expect("pointer and boolean loop results should remain supported");
 }
 
 #[test]

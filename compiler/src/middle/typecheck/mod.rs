@@ -12,9 +12,10 @@
 //!   return type, ... Without context they default to `i64` / `f64`. Every
 //!   typed integer literal is range-checked against its type.
 //! - Arithmetic and bitwise operators require operands of one type.
-//! - Comparisons accept integers of different types: the narrower operand
-//!   is widened to the wider type (the unsigned one on a tie) by an explicit
-//!   cast. Floats compare likewise.
+//! - Comparisons widen integers of the same signedness to the wider type.
+//!   Mixed-sign operands widen to a signed type that holds both ranges:
+//!   at least one bit wider than the unsigned operand. Casts are explicit.
+//!   Floats compare at the wider width.
 //! - A variable of type `&T` denotes the `T` it refers to, both when read
 //!   and when assigned to.
 //! - `@place` builds a `&T` where a reference is expected, a `*T` otherwise.

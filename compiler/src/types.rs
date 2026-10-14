@@ -9,12 +9,15 @@ use crate::error::TypeError;
 use num_bigint::BigInt;
 use std::str::FromStr;
 
+/// Largest supported integer width, matching LLVM's `IntegerType::MAX_INT_BITS`.
+pub const MAX_INT_WIDTH: u32 = 1 << 23;
+
 /// A fully resolved Xenon type.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Type {
-    /// Signed integer of any non-zero bit width.
+    /// Signed integer with a bit width from 1 through [`MAX_INT_WIDTH`].
     Int(u32),
-    /// Unsigned integer of any non-zero bit width.
+    /// Unsigned integer with a bit width from 1 through [`MAX_INT_WIDTH`].
     UInt(u32),
 
     /// Pointer-sized unsigned integer; its width depends on the target.
@@ -163,6 +166,12 @@ impl FromStr for Type {
             return Err(TypeError::InvalidBitWidth {
                 raw: s.to_owned(),
                 reason: "bit width must be non-zero",
+            });
+        }
+        if width > MAX_INT_WIDTH {
+            return Err(TypeError::InvalidBitWidth {
+                raw: s.to_owned(),
+                reason: "bit width exceeds the supported maximum of 8388608",
             });
         }
 
