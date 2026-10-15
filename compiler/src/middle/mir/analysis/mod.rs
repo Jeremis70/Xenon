@@ -2,7 +2,8 @@
 //!
 //! The analysis boundary is deliberately independent of any backend:
 //! [`analyze_program`] checks reachable paths and advances Built MIR to the
-//! Checked phase; [`normalize_runtime_checks`] turns trapping arithmetic
+//! Checked phase; [`check_known_panics`] then reports operations of Checked
+//! MIR that always trap; [`normalize_runtime_checks`] turns trapping arithmetic
 //! contracts into explicit MIR assertions and advances Checked MIR to
 //! Runtime. Optional optimizations run only after these correctness stages.
 //!
@@ -13,6 +14,7 @@
 //! # Module map
 //!
 //! - `flow`: reachability and definite initialization.
+//! - `known_panics`: operations that trap whenever they execute.
 //! - `liveness`: backward local liveness.
 //! - `runtime`: explicit arithmetic and shift checks.
 //! - `zero_sized`: erasure of computation on zero-sized integers.
@@ -20,6 +22,7 @@
 //! [`Visitor::visit_local`]: super::Visitor::visit_local
 
 mod flow;
+mod known_panics;
 mod liveness;
 mod runtime;
 mod zero_sized;
@@ -27,6 +30,7 @@ mod zero_sized;
 pub use flow::{
     AnalysisError, AnalysisErrorKind, AnalysisErrors, analyze_program, reachable_blocks,
 };
+pub use known_panics::{KnownPanic, KnownPanicsError, check_known_panics};
 pub use liveness::{Liveness, analyze_liveness};
 pub use runtime::{OverflowMode, RuntimeCheckError, RuntimeCheckPolicy, normalize_runtime_checks};
 

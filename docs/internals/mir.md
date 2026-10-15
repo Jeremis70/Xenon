@@ -93,11 +93,12 @@ A verification error is a compiler bug, never a user error.
 | File | Role |
 | --- | --- |
 | `body.rs` | `Body`, `Local`, `BasicBlock`, scopes, `MirPhase`, cached predecessors. |
-| `analysis/` | Reachability, flow checks, local liveness, and runtime-check normalization. |
+| `analysis/` | Reachability, flow checks, local liveness, known-panic detection, and runtime-check normalization. |
 | `build/` | Construction of built MIR from THIR (`build_mir`); see below. |
 | `syntax.rs` | Statements, terminators, places, operands, rvalues, and their `Display`. |
 | `program.rs` | `MirProgram`: function declarations (`FnDecl`) and bodies, in `DefId` order. |
 | `typing.rs` | `place_ty`, `operand_ty`, `rvalue_ty`: the only typing rules. |
+| `interpret.rs` | `eval_rvalue`: the only evaluation rules for operations on constants. |
 | `builder.rs` | `BodyBuilder`, the only way to create a `Body`. |
 | `visit.rs` | `Visitor` and `MutVisitor`, generated from a single macro, with `PlaceContext`. |
 | `traversal.rs` | `preorder`, `postorder`, `reverse_postorder`, `reachable_set`. |
@@ -154,6 +155,24 @@ require explicit dereference. A loop expression yields its `break` value,
 uses zero for a conditional exit or a value-less break, and diverges when it
 has no exit. `usize`, `isize`, and address checks use the selected target's
 pointer width.
+
+## Compile-time traps
+
+`analysis::check_known_panics` reads Checked MIR and reports every reachable
+operation that traps whenever it executes: division or remainder by zero,
+signed `MIN / -1`, integer overflow, and out-of-range shifts. These are
+errors, whatever the overflow mode, so diagnostics do not depend on the
+optimization level. Constants propagate through locals defined exactly once
+and never address-taken, and zero-sized integers are always `0`. Branches on
+known values only follow the edge they select, so `if false { 1 / 0 }` is
+accepted.
+
+Operations are evaluated by `interpret::eval_rvalue`, the single definition of
+what an operation computes on constants. Integer results follow the operand's
+target bit width, and traps are reported as the `AssertKind` the runtime guard
+would fail with. Zero-sized erasure uses the same evaluator.
+
+## Runtime checks
 
 Before a backend consumes MIR, `analysis::normalize_runtime_checks` advances
 Checked MIR to `Runtime`, splitting blocks and inserting explicit `Assert`

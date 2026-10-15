@@ -31,9 +31,10 @@ definitions for compatibility.
 ## Driver pipeline
 
 ```text
-lex → parse → constant-fold → typecheck (semantic validation) → THIR
+lex → parse → typecheck (item collection, semantic validation) → THIR
     → entry validation → MIR
-    → flow analysis → runtime-check normalization → LLVM backend → link
+    → flow analysis → known-panic check → runtime-check normalization
+    → LLVM backend → link
 ```
 
 `check` follows the same frontend and MIR correctness pipeline but does not
@@ -61,9 +62,13 @@ or MIR passes.
 LLVM is enabled by the default Cargo feature `llvm-backend`; without it,
 checking and MIR emission remain available while native output is rejected.
 
-The type-checking boundary also validates source-oriented entry/attribute
-constraints. Semantic expression and binding validation is owned by THIR
-construction, while control-flow correctness is owned by MIR analysis.
+No pass evaluates the AST: operations are only evaluated once their operand
+types, and hence bit widths, are known. Item collection in the type checker
+rejects unknown attributes and duplicate `#[entry]` functions; the entry
+signature is then validated on THIR, separately, since only executables need
+an entry point. Semantic expression and binding validation is owned by THIR
+construction, while control-flow correctness and compile-time detection of
+operations that always trap are owned by MIR analysis.
 See [THIR and Type Checking](thir.md) and [MIR](mir.md).
 
 ### Which checks go where
@@ -72,6 +77,7 @@ See [THIR and Type Checking](thir.md) and [MIR](mir.md).
   checking, literal range checks, `break`/`continue` placement, and
   user-facing diagnostics.
 - **MIR** (needs control flow): missing `return`, use of uninitialized
-  locals, unreachable code, insertion of runtime overflow, division, and
-  shift checks, and every optimization. The MIR verifier only reports
+  locals, unreachable code, operations known to trap (`1 / 0`, constant
+  overflow, out-of-range shifts), insertion of runtime overflow, division,
+  and shift checks, and every optimization. The MIR verifier only reports
   compiler bugs, never user errors.

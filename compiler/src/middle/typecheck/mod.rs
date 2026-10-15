@@ -21,13 +21,16 @@
 //! - `@place` builds a `&T` where a reference is expected, a `*T` otherwise.
 //!
 //! Module map:
-//! - this module: the driver and the per-function context;
+//! - this module: the driver, item collection (signatures, attributes, the
+//!   entry point), and the per-function context;
+//! - `entry`: validation of the executable entry point on THIR;
 //! - `scope`: lexical scopes and name resolution;
 //! - `literal`: classification of untyped literal expressions;
 //! - `expr`: expressions and places;
 //! - `operator`: unary, binary, and compound-assignment operators;
 //! - `stmt`: statements, blocks, and loops.
 
+mod entry;
 mod expr;
 mod literal;
 mod operator;
@@ -46,6 +49,7 @@ use crate::middle::thir::{self, BindingKind, ThirProgram};
 use crate::source::Span;
 use crate::types::Type;
 
+pub use entry::validate_entry_point;
 use scope::Scopes;
 
 /// Type-checks `program` for `target` and returns its THIR.
@@ -58,53 +62,14 @@ pub fn check_program(program: &ast::Program, target: &TargetSpec) -> SemanticRes
     for function in &program.functions {
         functions.push(FnCtxt::new(&globals, function).check_function(function)?);
     }
-    let entry = program.functions.iter().position(is_entry).map(DefId::new);
-    Ok(ThirProgram { functions, entry })
+    Ok(ThirProgram {
+        functions,
+        entry: globals.entry,
+    })
 }
 
 /// The attribute marking the program entry point.
 const ENTRY_ATTRIBUTE: &str = "entry";
-
-fn is_entry(function: &ast::Function) -> bool {
-    function
-        .attributes
-        .iter()
-        .any(|attribute| attribute.name == ENTRY_ATTRIBUTE)
-}
-
-/// Validates the executable entry-point contract without performing any
-/// backend work.
-pub fn validate_entry_point(program: &ast::Program) -> SemanticResult<()> {
-    for function in &program.functions {
-        for attribute in &function.attributes {
-            if attribute.name != ENTRY_ATTRIBUTE {
-                return Err(SemanticError::UnknownAttribute {
-                    name: attribute.name.clone(),
-                    span: attribute.span,
-                });
-            }
-        }
-    }
-
-    let entries: Vec<_> = program.functions.iter().filter(|f| is_entry(f)).collect();
-    let entry = match entries.as_slice() {
-        [] => return Err(SemanticError::NoEntryPoint),
-        [entry] => *entry,
-        [first, duplicate, ..] => {
-            return Err(SemanticError::MultipleEntryPoints {
-                first_span: first.span,
-                span: duplicate.span,
-            });
-        }
-    };
-    if !entry.params.is_empty() {
-        return Err(SemanticError::EntryWithParams { span: entry.span });
-    }
-    if entry.return_type.ty != Type::Int(32) {
-        return Err(SemanticError::EntryWrongReturn { span: entry.span });
-    }
-    Ok(())
-}
 
 /// The signature of a function, as seen by callers.
 #[derive(Debug)]
@@ -119,14 +84,18 @@ struct GlobalCtxt<'a> {
     target: &'a TargetSpec,
     signatures: IndexVec<DefId, Signature>,
     by_name: HashMap<&'a str, DefId>,
+    /// The function marked `#[entry]`, if any.
+    entry: Option<DefId>,
 }
 
 impl<'a> GlobalCtxt<'a> {
-    /// Assigns a [`DefId`] to every function, in source order.
+    /// Assigns a [`DefId`] to every function, in source order, and checks
+    /// its attributes.
     fn collect(program: &'a ast::Program, target: &'a TargetSpec) -> SemanticResult<Self> {
         let mut signatures: IndexVec<DefId, Signature> =
             IndexVec::with_capacity(program.functions.len());
         let mut by_name = HashMap::with_capacity(program.functions.len());
+        let mut entry: Option<DefId> = None;
         for function in &program.functions {
             let def_id = signatures.push(Signature {
                 params: function
@@ -149,11 +118,29 @@ impl<'a> GlobalCtxt<'a> {
                     });
                 }
             }
+            for attribute in &function.attributes {
+                if attribute.name != ENTRY_ATTRIBUTE {
+                    return Err(SemanticError::UnknownAttribute {
+                        name: attribute.name.clone(),
+                        span: attribute.span,
+                    });
+                }
+                if let Some(first) = entry
+                    && first != def_id
+                {
+                    return Err(SemanticError::MultipleEntryPoints {
+                        first_span: program.functions[first.index()].span,
+                        span: function.span,
+                    });
+                }
+                entry = Some(def_id);
+            }
         }
         Ok(Self {
             target,
             signatures,
             by_name,
+            entry,
         })
     }
 }

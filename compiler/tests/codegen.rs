@@ -7,7 +7,6 @@ use xenonc::backend::contract::{ArtifactKind, Backend, CodegenOptions, OutputReq
 use xenonc::backend::llvm::LlvmBackend;
 use xenonc::frontend::lexer::lex;
 use xenonc::frontend::parser::Parser;
-use xenonc::middle::constant_fold::fold_constants;
 use xenonc::middle::mir::MirProgram;
 use xenonc::middle::mir::analysis::{
     OverflowMode, RuntimeCheckPolicy, analyze_program, normalize_runtime_checks,
@@ -20,7 +19,6 @@ fn build_mir_for_source(source: &str) -> MirProgram {
     let tokens = lex(source).expect("source should lex");
     let mut parser = Parser::new(&tokens);
     let ast = parser.parse_program().expect("source should parse");
-    let ast = fold_constants(ast).expect("constants should fold");
     let target = TargetSpec::host();
     let thir = check_program(&ast, &target).expect("source should type-check");
     let mut mir = build_mir(&thir).expect("THIR should lower");

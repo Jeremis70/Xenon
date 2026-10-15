@@ -98,38 +98,89 @@ fn check_fails_on_semantic_error() {
         .failure();
 }
 
-#[test]
-fn semantic_errors_precede_entry_point_errors() {
+/// Runs `command` on `source`, expecting it to fail with exactly one JSON
+/// diagnostic, and returns that diagnostic.
+fn single_json_diagnostic(command: &str, source: &str) -> serde_json::Value {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("bad.xe");
+    std::fs::write(&path, source).expect("write");
+    let output = Command::cargo_bin("xenonc")
+        .expect("cargo_bin xenonc")
+        .args([
+            command,
+            path.to_str().expect("utf8 path"),
+            "--emit",
+            "mir",
+            "--error-format",
+            "json",
+        ])
+        .assert()
+        .failure();
+    let stderr = String::from_utf8_lossy(&output.get_output().stderr);
+    serde_json::from_str(stderr.trim()).unwrap_or_else(|_| panic!("JSON: {stderr}"))
+}
+
+#[test]
+fn semantic_errors_precede_entry_point_errors() {
     for source in [
         "fn f()->i32 { return missing; }",
         "#[entry] fn f()->u32 { return missing; }",
         "#[entry] fn f(i32 value)->i32 { return missing; }",
-        "#[unknown] fn f()->i32 { return missing; }",
-        "#[entry] fn f()->i32 { return missing; } #[entry] fn g()->i32 { return 0; }",
     ] {
-        std::fs::write(&path, source).expect("write");
         for command in ["check", "compile"] {
-            let output = Command::cargo_bin("xenonc")
-                .expect("cargo_bin xenonc")
-                .args([
-                    command,
-                    path.to_str().expect("utf8 path"),
-                    "--emit",
-                    "mir",
-                    "--error-format",
-                    "json",
-                ])
-                .assert()
-                .failure();
-            let stderr = String::from_utf8_lossy(&output.get_output().stderr);
-            let diagnostic: serde_json::Value = serde_json::from_str(stderr.trim()).expect("JSON");
-            assert_eq!(diagnostic["code"], "semantic", "{stderr}");
+            let diagnostic = single_json_diagnostic(command, source);
+            assert_eq!(diagnostic["code"], "semantic", "{source}");
             assert_eq!(
                 diagnostic["message"], "undefined variable `missing`",
                 "{source}"
             );
+        }
+    }
+}
+
+/// Attributes are checked while collecting items, before any body.
+#[test]
+fn attribute_errors_precede_body_errors() {
+    for (source, message) in [
+        (
+            "#[unknown] fn f()->i32 { return missing; }",
+            "unknown attribute `unknown`",
+        ),
+        (
+            "#[entry] fn f()->i32 { return missing; } #[entry] fn g()->i32 { return 0; }",
+            "multiple `#[entry]` functions",
+        ),
+    ] {
+        for command in ["check", "compile"] {
+            let diagnostic = single_json_diagnostic(command, source);
+            assert_eq!(diagnostic["code"], "semantic", "{source}");
+            let found = diagnostic["message"].as_str().expect("message");
+            assert!(found.starts_with(message), "{source}: {found}");
+        }
+    }
+}
+
+#[test]
+fn known_panics_are_compile_errors() {
+    for (source, message) in [
+        (
+            "#[entry] fn main() -> i32 { return 1 / 0; }",
+            "attempt to divide by zero",
+        ),
+        (
+            "#[entry] fn main() -> i32 { let u8 x = 200 + 100; return 0; }",
+            "attempt to add with overflow",
+        ),
+        (
+            "#[entry] fn main() -> i32 { let i32 z = 0; return 7 % z; }",
+            "attempt to calculate the remainder with a divisor of zero",
+        ),
+    ] {
+        for command in ["check", "compile"] {
+            let diagnostic = single_json_diagnostic(command, source);
+            assert_eq!(diagnostic["code"], "known-panic", "{source}");
+            let found = diagnostic["message"].as_str().expect("message");
+            assert!(found.ends_with(message), "{source}: {found}");
         }
     }
 }
@@ -420,33 +471,36 @@ fn backend_runs_zero_sized_integers() {
     assert_eq!(code, 63);
 }
 
-#[cfg(all(feature = "llvm-backend", unix))]
+/// A zero-sized divisor always holds `0`, so the division always traps.
 #[test]
-fn backend_traps_on_zero_sized_division() {
-    use std::os::unix::process::ExitStatusExt;
-
-    let status = run_status(
+fn zero_sized_division_is_a_known_panic() {
+    let diagnostic = single_json_diagnostic(
+        "check",
         "fn div(u0 a, u0 b) -> u0 { return a / b; }\n\
          #[entry]\n\
          fn main() -> i32 { let u0 z = div(0, 0); return 0; }\n",
     );
-    assert!(status.signal().is_some(), "expected a trap, got {status}");
+    assert_eq!(diagnostic["code"], "known-panic");
 }
 
-#[cfg(all(feature = "llvm-backend", unix))]
+/// No shift amount is below the bit width `0`.
 #[test]
-fn backend_traps_on_literal_zero_sized_shifts() {
-    use std::os::unix::process::ExitStatusExt;
-
+fn zero_sized_shifts_are_known_panics() {
     for (ty, op) in [("u0", "<<"), ("u0", ">>"), ("i0", "<<"), ("i0", ">>")] {
-        let status = run_status(&format!(
-            "fn f() -> {ty} {{ return 0 {op} 0; }}\n\
-             #[entry]\n\
-             fn main() -> i32 {{ let {ty} z = f(); return 0; }}\n",
-        ));
+        let diagnostic = single_json_diagnostic(
+            "check",
+            &format!(
+                "fn f() -> {ty} {{ return 0 {op} 0; }}\n\
+                 #[entry]\n\
+                 fn main() -> i32 {{ let {ty} z = f(); return 0; }}\n",
+            ),
+        );
+        assert_eq!(diagnostic["code"], "known-panic", "`0 {op} 0` as `{ty}`");
         assert!(
-            status.signal().is_some(),
-            "`0 {op} 0` as `{ty}` should trap, got {status}"
+            diagnostic["message"]
+                .as_str()
+                .is_some_and(|message| message.ends_with("attempt to shift out of range")),
+            "{diagnostic}"
         );
     }
 }

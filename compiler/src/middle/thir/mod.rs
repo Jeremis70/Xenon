@@ -36,7 +36,8 @@ use crate::types::Type;
 pub struct ThirProgram {
     /// Every function, indexed by [`DefId`] in source order.
     pub functions: IndexVec<DefId, Function>,
-    /// The first function marked `#[entry]`, if any.
+    /// The function marked `#[entry]`, if any. Item collection rejects
+    /// programs with more than one.
     pub entry: Option<DefId>,
 }
 

@@ -3,7 +3,6 @@
 use std::collections::BTreeSet;
 
 use xenonc::index::Idx;
-use xenonc::middle::constant_fold::fold_constants;
 use xenonc::middle::ids::DefId;
 use xenonc::middle::mir::analysis::{
     AnalysisErrorKind, OverflowMode, RuntimeCheckPolicy, analyze_liveness, analyze_program,
@@ -29,7 +28,6 @@ fn built(src: &str) -> MirProgram {
     let ast = Parser::new(&tokens)
         .parse_program()
         .expect("parsing should succeed");
-    let ast = fold_constants(ast).expect("constant folding should succeed");
     let thir = check_program(&ast, &TARGET).expect("type checking should succeed");
     build_mir(&thir).expect("MIR construction should succeed")
 }

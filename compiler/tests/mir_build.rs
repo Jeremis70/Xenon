@@ -3,7 +3,6 @@
 use xenonc::frontend::lexer::lex;
 use xenonc::frontend::parser::Parser;
 use xenonc::index::Idx;
-use xenonc::middle::constant_fold::fold_constants;
 use xenonc::middle::ids::DefId;
 use xenonc::middle::mir::pretty::mir_program_to_string;
 use xenonc::middle::mir::{MirPhase, MirProgram, TerminatorKind, build_mir, verify_program};
@@ -19,7 +18,6 @@ fn build(src: &str) -> MirProgram {
     let program = Parser::new(&tokens)
         .parse_program()
         .expect("parsing should succeed");
-    let program = fold_constants(program).expect("folding should succeed");
     let thir = check_program(&program, &TARGET).expect("type checking should succeed");
     let mir = build_mir(&thir).expect("MIR construction should succeed");
     if let Err(errors) = verify_program(&mir, &TARGET) {

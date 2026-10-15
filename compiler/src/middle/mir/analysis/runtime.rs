@@ -98,7 +98,7 @@ pub fn normalize_runtime_checks(
     let mut normalized = program.clone();
     for body in normalized.bodies_mut() {
         normalize_body(body, target, policy)?;
-        erase_zero_sized_computation(body)?;
+        erase_zero_sized_computation(body, target)?;
     }
     normalized
         .advance_phase(MirPhase::Runtime)

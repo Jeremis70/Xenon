@@ -13,6 +13,7 @@
 //! - [`syntax`]: statements, terminators, places, operands, and rvalues.
 //! - [`program`]: [`MirProgram`], function declarations and bodies.
 //! - [`typing`]: the single source of truth for MIR typing rules.
+//! - [`interpret`]: evaluation of operations on compile-time constants.
 //! - [`builder`]: [`BodyBuilder`], the only way to create a body.
 //! - [`visit`]: [`Visitor`] and [`MutVisitor`] traversals.
 //! - [`traversal`]: CFG orders (preorder, postorder, reverse postorder).
@@ -25,6 +26,7 @@ pub mod analysis;
 pub mod body;
 pub mod build;
 pub mod builder;
+pub mod interpret;
 pub mod pretty;
 pub mod program;
 pub mod syntax;
@@ -40,6 +42,7 @@ pub use body::{
 };
 pub use build::{LowerError, LowerErrorKind, build_body, build_mir};
 pub use builder::{BodyBuilder, BuildError};
+pub use interpret::{EvalResult, eval_rvalue, known_operand};
 pub use program::{FnDecl, FnSig, MirProgram, ProgramError};
 pub use syntax::{
     AssertKind, BinOp, CastKind, ConstValue, Constant, IndirectionKind, Operand, Place,
