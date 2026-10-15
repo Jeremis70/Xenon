@@ -4,7 +4,6 @@ use xenonc::error::SemanticError;
 use xenonc::frontend::lexer::lex;
 use xenonc::frontend::parser::Parser;
 use xenonc::index::Idx;
-use xenonc::middle::constant_fold::fold_constants;
 use xenonc::middle::ids::DefId;
 use xenonc::middle::target::TargetSpec;
 use xenonc::middle::thir::pretty::thir_program_to_string;
@@ -20,7 +19,6 @@ fn check(src: &str) -> Result<ThirProgram, SemanticError> {
     let program = Parser::new(&tokens)
         .parse_program()
         .expect("parsing should succeed");
-    let program = fold_constants(program).expect("folding should succeed");
     check_program(&program, &TARGET)
 }
 

@@ -8,10 +8,9 @@ use crate::driver::session::Session;
 use crate::frontend::ast::Program;
 use crate::frontend::lexer::lex;
 use crate::frontend::parser::Parser;
-use crate::middle::constant_fold::fold_constants;
 use crate::middle::mir::MirProgram;
 use crate::middle::mir::analysis::{
-    OverflowMode, RuntimeCheckPolicy, analyze_program, normalize_runtime_checks,
+    OverflowMode, RuntimeCheckPolicy, analyze_program, check_known_panics, normalize_runtime_checks,
 };
 use crate::middle::mir::build::build_mir;
 use crate::middle::mir::pretty::mir_program_to_string;
@@ -214,7 +213,7 @@ struct ParsedSource {
     first_path: String,
 }
 
-/// Lexes, parses, and folds source-level constants.
+/// Lexes and parses every source file.
 fn parse_source(session: &Session) -> Result<ParsedSource, Failure> {
     let mut tokens = Vec::new();
     let mut combined_source = String::new();
@@ -240,10 +239,6 @@ fn parse_source(session: &Session) -> Result<ParsedSource, Failure> {
         emitter.parse_error(&error);
         Failure::Reported
     })?;
-    let program = fold_constants(program).map_err(|error| {
-        emitter.fold_error(&error);
-        Failure::Reported
-    })?;
 
     Ok(ParsedSource {
         program,
@@ -262,7 +257,7 @@ fn lower_to_runtime_mir(session: &Session, target: &TargetSpec) -> Result<MirPro
         emitter.semantic_error(&error);
         Failure::Reported
     })?;
-    validate_entry_point(&parsed.program).map_err(|error| {
+    validate_entry_point(&thir).map_err(|error| {
         emitter.semantic_error(&error);
         Failure::Reported
     })?;
@@ -272,6 +267,12 @@ fn lower_to_runtime_mir(session: &Session, target: &TargetSpec) -> Result<MirPro
         emitter.analysis_errors(&errors);
         Failure::Reported
     })?;
+    let panics = check_known_panics(&mir, target)
+        .map_err(|error| internal("compiler", format!("known-panic check failed: {error}")))?;
+    if !panics.is_empty() {
+        emitter.known_panics(&panics);
+        return Err(Failure::Reported);
+    }
 
     let overflow = match session.opt_level {
         None | Some(OptLevel::O0) => OverflowMode::Checked,

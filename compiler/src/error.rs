@@ -167,11 +167,3 @@ impl SemanticError {
         }
     }
 }
-
-#[derive(Debug, thiserror::Error)]
-pub enum FoldError {
-    #[error("division by zero in constant expression at {span:?}")]
-    DivisionByZero { span: Span },
-}
-
-pub type FoldResult<T> = Result<T, FoldError>;

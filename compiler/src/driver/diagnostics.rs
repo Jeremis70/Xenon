@@ -2,8 +2,8 @@ use ariadne::{Color, Label, Report, ReportKind, Source};
 
 use crate::driver::config::{ColorChoice, ErrorFormat};
 use crate::driver::session::Session;
-use crate::error::{FoldError, LexError, ParseError, SemanticError};
-use crate::middle::mir::analysis::AnalysisErrors;
+use crate::error::{LexError, ParseError, SemanticError};
+use crate::middle::mir::analysis::{AnalysisErrors, KnownPanic};
 use crate::source::Span;
 
 /// A single error to report.
@@ -64,19 +64,6 @@ impl<'a> Emitter<'a> {
         });
     }
 
-    pub fn fold_error(&self, err: &FoldError) {
-        let span = match err {
-            FoldError::DivisionByZero { span } => *span,
-        };
-        self.emit(Diagnostic {
-            code: "fold",
-            kind: "constant folding error",
-            message: err.to_string(),
-            span: Some(span),
-            color: Color::Red,
-        });
-    }
-
     pub fn semantic_error(&self, err: &SemanticError) {
         self.emit(Diagnostic {
             code: "semantic",
@@ -95,6 +82,20 @@ impl<'a> Emitter<'a> {
                 kind: "flow error",
                 message: format!("in `{}`: {}", error.function, error.kind),
                 span: Some(error.span),
+                color: Color::Red,
+            });
+        }
+    }
+
+    /// Reports every operation known to trap at runtime, each at its own
+    /// source location.
+    pub fn known_panics(&self, panics: &[KnownPanic]) {
+        for panic in panics {
+            self.emit(Diagnostic {
+                code: "known-panic",
+                kind: "known panic",
+                message: format!("in `{}`: {panic}", panic.function),
+                span: Some(panic.span),
                 color: Color::Red,
             });
         }

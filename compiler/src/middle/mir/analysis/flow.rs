@@ -170,26 +170,32 @@ pub fn reachable_blocks(body: &Body) -> BTreeSet<BasicBlock> {
 
 /// The successors control can actually reach from a terminator.
 fn executable_successors(terminator: &TerminatorKind) -> Vec<BasicBlock> {
+    executable_successors_with(terminator, |operand| match operand {
+        Operand::Constant(constant) => Some(constant.value.clone()),
+        Operand::Copy(_) => None,
+    })
+}
+
+/// The successors control can actually reach from a terminator, given the
+/// operand values `value_of` knows at compile time: a switch or assert on a
+/// known value only follows the edge that value selects.
+pub(super) fn executable_successors_with(
+    terminator: &TerminatorKind,
+    value_of: impl Fn(&Operand) -> Option<ConstValue>,
+) -> Vec<BasicBlock> {
     match terminator {
-        TerminatorKind::SwitchInt {
-            discr: Operand::Constant(constant),
-            targets,
-        } => {
-            let value = match &constant.value {
-                ConstValue::Bool(value) => Some(BigInt::from(u8::from(*value))),
-                ConstValue::Int(value) => Some(value.clone()),
-                ConstValue::Float(_) | ConstValue::Address(_) => None,
-            };
-            match value {
-                Some(value) => vec![targets.target_for_value(&value)],
-                None => terminator.successors().collect(),
+        TerminatorKind::SwitchInt { discr, targets } => match value_of(discr) {
+            Some(ConstValue::Bool(value)) => {
+                vec![targets.target_for_value(&BigInt::from(u8::from(value)))]
             }
+            Some(ConstValue::Int(value)) => vec![targets.target_for_value(&value)],
+            _ => terminator.successors().collect(),
+        },
+        TerminatorKind::Assert { cond, expected, .. }
+            if value_of(cond) == Some(ConstValue::Bool(!*expected)) =>
+        {
+            Vec::new()
         }
-        TerminatorKind::Assert {
-            cond: Operand::Constant(constant),
-            expected,
-            ..
-        } if constant.value == ConstValue::Bool(!*expected) => Vec::new(),
         _ => terminator.successors().collect(),
     }
 }

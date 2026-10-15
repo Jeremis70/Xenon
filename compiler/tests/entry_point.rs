@@ -1,15 +1,15 @@
 use xenonc::error::SemanticError;
 use xenonc::frontend::lexer::lex;
 use xenonc::frontend::parser::Parser;
-use xenonc::middle::constant_fold::fold_constants;
-use xenonc::middle::typecheck::validate_entry_point;
+use xenonc::middle::target::TargetSpec;
+use xenonc::middle::typecheck::{check_program, validate_entry_point};
 
 fn validate_entry(source: &str) -> Result<(), SemanticError> {
     let tokens = lex(source).expect("source should lex");
     let mut parser = Parser::new(&tokens);
     let program = parser.parse_program().expect("source should parse");
-    let program = fold_constants(program).expect("constants should fold");
-    validate_entry_point(&program)
+    let thir = check_program(&program, &TargetSpec::host())?;
+    validate_entry_point(&thir).map(|_| ())
 }
 
 #[test]

@@ -26,7 +26,8 @@ AST ──typecheck::check_program──▶ THIR ──mir::build_mir──▶ M
 | `middle/thir/mod.rs` | The THIR data types. |
 | `middle/thir/visit.rs` | A read-only `Visitor` that walks nodes in evaluation order. |
 | `middle/thir/pretty.rs` | Deterministic dumps (`x@b0`, `5_i32`, `(a as i64 [IntToInt])`). |
-| `middle/typecheck/mod.rs` | `check_program`, plus the global and per-function contexts. |
+| `middle/typecheck/mod.rs` | `check_program`, item collection (signatures, attributes, the entry point), and the per-function context. |
+| `middle/typecheck/entry.rs` | `validate_entry_point`: the executable entry contract, checked on THIR. |
 | `middle/typecheck/scope.rs` | Lexical scopes that map names to bindings. |
 | `middle/typecheck/literal.rs` | Classifies untyped literal expressions. |
 | `middle/typecheck/expr.rs` | Expressions, places, literals, and calls. |
@@ -64,6 +65,14 @@ AST ──typecheck::check_program──▶ THIR ──mir::build_mir──▶ M
   `break` in the same loop must agree. Reference-valued loops are rejected.
 - **Scopes.** A declaration is visible from the next statement until the
   end of its block.
+- **Constant expressions are not folded.** `200 + 100` is an addition of two
+  literals, typed like any other operation. A literal operand must fit its
+  type on its own, and whether the operation traps is decided on MIR (see
+  [MIR](mir.md#compile-time-traps)).
+- **Attributes and entry point.** Item collection rejects unknown attributes
+  and a second `#[entry]` function before any body is checked.
+  `validate_entry_point` then requires an entry taking no parameters and
+  returning `i32`.
 
 ## Migration from the AST validator
 
