@@ -3,7 +3,7 @@ use crate::frontend::ast::{
     Attribute, BinOp, Binding, Expr, ExprKind, Function, IncDecOp, Program, Stmt, StmtKind, Type,
     UnaryOp,
 };
-use crate::frontend::precedence::{UNARY_BP, infix_info};
+use crate::frontend::precedence::{OpInfo, UNARY_BP, infix_info};
 use crate::frontend::tokens::{Span, Token, TokenKind};
 
 pub struct Parser<'a> {
@@ -39,6 +39,20 @@ impl<'a> Parser<'a> {
 
     fn peek(&self) -> Option<&'a Token> {
         self.tokens.get(self.position)
+    }
+
+    /// Whether the next token is `kind`.
+    fn at(&self, kind: TokenKind) -> bool {
+        self.peek().is_some_and(|t| t.kind == kind)
+    }
+
+    /// Consumes the next token if it is `kind`.
+    fn eat(&mut self, kind: TokenKind) -> bool {
+        let found = self.at(kind);
+        if found {
+            self.position += 1;
+        }
+        found
     }
 
     fn advance(&mut self) -> Option<&'a Token> {
@@ -92,7 +106,7 @@ impl<'a> Parser<'a> {
         let mut functions = Vec::new();
         while self.peek().is_some() {
             let attributes = self.parse_attributes()?;
-            if !attributes.is_empty() && !self.peek().is_some_and(|t| t.kind == TokenKind::Fn) {
+            if !attributes.is_empty() && !self.at(TokenKind::Fn) {
                 let span = attributes.last().unwrap().span;
                 return Err(ParseError::new(
                     "attributes must be followed by a function definition",
@@ -106,7 +120,7 @@ impl<'a> Parser<'a> {
 
     fn parse_attributes(&mut self) -> ParseResult<Vec<Attribute>> {
         let mut attrs = Vec::new();
-        while self.peek().is_some_and(|t| t.kind == TokenKind::Hash) {
+        while self.at(TokenKind::Hash) {
             let hash_token = self.expect(TokenKind::Hash)?;
             let start = hash_token.span.start;
             self.expect(TokenKind::LBracket)?;
@@ -133,9 +147,7 @@ impl<'a> Parser<'a> {
         self.expect(TokenKind::Arrow)?;
         let return_type = self.parse_return_type()?;
 
-        self.expect(TokenKind::LBrace)?;
-        let body = self.parse_body()?;
-        self.expect(TokenKind::RBrace)?;
+        let body = self.parse_block()?;
 
         Ok(Function {
             name,
@@ -184,42 +196,13 @@ impl<'a> Parser<'a> {
             .ok_or_else(|| self.error("expected statement"))?;
         let start = first.span.start;
         match first.kind {
-            TokenKind::Return => {
-                self.advance();
-                let expr = self.parse_expression()?;
-                self.expect(TokenKind::Semicolon)?;
-                Ok(Stmt {
-                    kind: StmtKind::Return(Box::new(expr)),
-                    span: self.span_since(start),
-                })
-            }
             TokenKind::Let => {
                 self.advance();
                 self.parse_var_decl(start)
             }
-            TokenKind::Ident | TokenKind::Star => {
-                let expr = self.parse_expression()?;
-                if self.peek().is_some_and(|t| t.kind.is_assign_op()) {
-                    if !expr.is_place() {
-                        return Err(ParseError::new(
-                            "invalid assignment target: expected a variable or a dereference",
-                            expr.span,
-                        ));
-                    }
-                    let assign_token = self.advance().expect("peeked assign-op token must exist");
-                    self.parse_var_assign(expr, &assign_token.kind)
-                } else {
-                    // Expression statement (e.g. a function call).
-                    self.expect(TokenKind::Semicolon)?;
-                    Ok(Stmt {
-                        kind: StmtKind::Expr(Box::new(expr)),
-                        span: self.span_since(start),
-                    })
-                }
-            }
-            TokenKind::If => {
+            TokenKind::If | TokenKind::Unless => {
                 self.advance();
-                self.parse_if(start)
+                self.parse_if(first.kind == TokenKind::Unless, start)
             }
             TokenKind::Loop => {
                 self.advance();
@@ -237,29 +220,86 @@ impl<'a> Parser<'a> {
                     kind: StmtKind::Expr(Box::new(loop_expr)),
                 })
             }
-            TokenKind::Break => {
-                self.advance();
-                let value = if self.peek().is_some_and(|t| t.kind != TokenKind::Semicolon) {
-                    Some(Box::new(self.parse_expression()?))
-                } else {
-                    None
-                };
-                self.expect(TokenKind::Semicolon)?;
-                Ok(Stmt {
-                    kind: StmtKind::Break(value),
-                    span: self.span_since(start),
-                })
-            }
-            TokenKind::Continue => {
-                self.advance();
-                self.expect(TokenKind::Semicolon)?;
-                Ok(Stmt {
-                    kind: StmtKind::Continue,
-                    span: self.span_since(start),
-                })
-            }
+            TokenKind::Return
+            | TokenKind::Break
+            | TokenKind::Continue
+            | TokenKind::Ident
+            | TokenKind::Star => self.parse_simple_statement(start),
             _ => Err(self.error("expected statement")),
         }
+    }
+
+    /// Parses a `;`-terminated statement that may carry a trailing
+    /// condition: `return x if c;` is `if c { return x; }` and
+    /// `x++ unless done;` is `unless done { x++; }`.
+    fn parse_simple_statement(&mut self, start: usize) -> ParseResult<Stmt> {
+        let kind = self.parse_simple_statement_kind()?;
+        let mut stmt = Stmt {
+            kind,
+            span: self.span_since(start),
+        };
+        if let Some(t) = self.peek()
+            && matches!(t.kind, TokenKind::If | TokenKind::Unless)
+        {
+            self.advance();
+            let condition = Box::new(self.parse_expression()?);
+            stmt = Stmt {
+                span: stmt.span,
+                kind: StmtKind::If {
+                    inverted: t.kind == TokenKind::Unless,
+                    condition,
+                    then_branch: vec![stmt],
+                    else_branch: None,
+                },
+            };
+        }
+        self.expect(TokenKind::Semicolon)?;
+        stmt.span = self.span_since(start);
+        Ok(stmt)
+    }
+
+    fn parse_simple_statement_kind(&mut self) -> ParseResult<StmtKind> {
+        if self.eat(TokenKind::Return) {
+            return Ok(StmtKind::Return(Box::new(self.parse_expression()?)));
+        }
+        if self.eat(TokenKind::Break) {
+            let value = if self.at_statement_end() {
+                None
+            } else {
+                Some(Box::new(self.parse_expression()?))
+            };
+            return Ok(StmtKind::Break(value));
+        }
+        if self.eat(TokenKind::Continue) {
+            return Ok(StmtKind::Continue);
+        }
+
+        let expr = self.parse_expression()?;
+        match self.peek() {
+            Some(t) if t.kind.is_assign_op() => {
+                if !expr.is_place() {
+                    return Err(ParseError::new(
+                        "invalid assignment target: expected a variable or a dereference",
+                        expr.span,
+                    ));
+                }
+                self.advance();
+                self.parse_var_assign(expr, &t.kind)
+            }
+            // Expression statement (e.g. a function call).
+            _ => Ok(StmtKind::Expr(Box::new(expr))),
+        }
+    }
+
+    /// Whether the simple statement being parsed has no more operands:
+    /// next is its `;` or a trailing condition.
+    fn at_statement_end(&self) -> bool {
+        self.peek().is_none_or(|t| {
+            matches!(
+                t.kind,
+                TokenKind::Semicolon | TokenKind::If | TokenKind::Unless
+            )
+        })
     }
 
     fn parse_typed_binding(&mut self) -> ParseResult<Binding> {
@@ -279,9 +319,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_loop(&mut self, start: usize) -> ParseResult<Expr> {
-        self.expect(TokenKind::LBrace)?;
-        let body = self.parse_body()?;
-        self.expect(TokenKind::RBrace)?;
+        let body = self.parse_block()?;
         Ok(Expr {
             kind: ExprKind::Loop { body },
             span: self.span_since(start),
@@ -293,9 +331,7 @@ impl<'a> Parser<'a> {
             TokenKind::While | TokenKind::Until => {
                 let inverted = token.kind == TokenKind::Until;
                 let condition = Box::new(self.parse_expression()?);
-                self.expect(TokenKind::LBrace)?;
-                let body = self.parse_body()?;
-                self.expect(TokenKind::RBrace)?;
+                let body = self.parse_block()?;
                 Ok(Expr {
                     kind: ExprKind::CondLoop {
                         post: false,
@@ -307,9 +343,7 @@ impl<'a> Parser<'a> {
                 })
             }
             TokenKind::Do => {
-                self.expect(TokenKind::LBrace)?;
-                let body = self.parse_body()?;
-                self.expect(TokenKind::RBrace)?;
+                let body = self.parse_block()?;
                 let inverted =
                     self.expect([TokenKind::While, TokenKind::Until])?.kind == TokenKind::Until;
                 let condition = Box::new(self.parse_expression()?);
@@ -327,34 +361,45 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_if(&mut self, start: usize) -> ParseResult<Stmt> {
+    /// Parses the rest of `if c { .. }` with an optional `else` / `else if`
+    /// chain, or of `unless c { .. }` (`inverted`), which takes no `else`.
+    fn parse_if(&mut self, inverted: bool, start: usize) -> ParseResult<Stmt> {
         let condition = Box::new(self.parse_expression()?);
-        self.expect(TokenKind::LBrace)?;
-        let then_branch = self.parse_body()?;
-        self.expect(TokenKind::RBrace)?;
-        let else_branch = if self.peek().is_some_and(|t| t.kind == TokenKind::Else) {
-            self.expect(TokenKind::Else)?;
-            if self.peek().is_some_and(|t| t.kind == TokenKind::If) {
-                let if_token = self.expect(TokenKind::If)?;
-                Some(vec![self.parse_if(if_token.span.start)?])
-            } else {
-                self.expect(TokenKind::LBrace)?;
-                let stmts = self.parse_body()?;
-                self.expect(TokenKind::RBrace)?;
-                Some(stmts)
+        let then_branch = self.parse_block()?;
+        let else_branch = match self.peek() {
+            Some(t) if t.kind == TokenKind::Else => {
+                if inverted {
+                    return Err(ParseError::new(
+                        "`unless` cannot have an `else` branch",
+                        t.span,
+                    ));
+                }
+                self.advance();
+                Some(self.parse_else()?)
             }
-        } else {
-            None
+            _ => None,
         };
 
         Ok(Stmt {
             kind: StmtKind::If {
+                inverted,
                 condition,
                 then_branch,
                 else_branch,
             },
             span: self.span_since(start),
         })
+    }
+
+    /// Parses what follows `else`: a block or a chained `if`.
+    fn parse_else(&mut self) -> ParseResult<Vec<Stmt>> {
+        match self.peek() {
+            Some(t) if t.kind == TokenKind::If => {
+                self.advance();
+                Ok(vec![self.parse_if(false, t.span.start)?])
+            }
+            _ => self.parse_block(),
+        }
     }
 
     fn parse_var_decl(&mut self, start: usize) -> ParseResult<Stmt> {
@@ -415,10 +460,9 @@ impl<'a> Parser<'a> {
     ///
     /// No desugaring happens here: `x += e` and `x++` keep their own AST
     /// nodes so the tree mirrors the source.
-    fn parse_var_assign(&mut self, target: Expr, kind: &TokenKind) -> ParseResult<Stmt> {
-        let target_span = target.span;
+    fn parse_var_assign(&mut self, target: Expr, kind: &TokenKind) -> ParseResult<StmtKind> {
         let target = Box::new(target);
-        let kind = if let Some(op) = IncDecOp::from_token(kind) {
+        Ok(if let Some(op) = IncDecOp::from_token(kind) {
             StmtKind::IncDec { target, op }
         } else if let Some(op) = BinOp::from_compound_assign_token(kind) {
             StmtKind::CompoundAssign {
@@ -431,14 +475,6 @@ impl<'a> Parser<'a> {
                 target,
                 value: Box::new(self.parse_expression()?),
             }
-        };
-        self.expect(TokenKind::Semicolon)?;
-        Ok(Stmt {
-            kind,
-            span: Span {
-                start: target_span.start,
-                end: self.prev_span().end,
-            },
         })
     }
 
@@ -449,27 +485,55 @@ impl<'a> Parser<'a> {
         let mut left = self.nud(token)?;
 
         while let Some(t) = self.peek() {
-            let l_bp =
-                infix_info(&t.kind)
-                    .map(|info| info.left_bp)
-                    .or(if t.kind == TokenKind::If {
-                        Some(0)
-                    } else {
-                        None
-                    });
-            let Some(l_bp) = l_bp else { break };
-            if l_bp < min_bp {
-                break;
+            // The ternary binds loosest, so only a full expression takes it.
+            if t.kind == TokenKind::If {
+                if min_bp > 0 {
+                    break;
+                }
+                let Some((condition, else_branch)) = self.parse_ternary_tail()? else {
+                    break;
+                };
+                left = Expr {
+                    span: Span {
+                        start: left.span.start,
+                        end: else_branch.span.end,
+                    },
+                    kind: ExprKind::IfElse {
+                        condition: Box::new(condition),
+                        then_branch: Box::new(left),
+                        else_branch: Box::new(else_branch),
+                    },
+                };
+                continue;
             }
 
-            let op_token = match self.advance() {
-                Some(t) => t,
-                None => break,
+            let Some(info) = infix_info(&t.kind) else {
+                break;
             };
-            left = self.led(left, op_token)?;
+            if info.left_bp < min_bp {
+                break;
+            }
+            self.advance();
+            left = self.led(left, info)?;
         }
 
         Ok(left)
+    }
+
+    /// Parses `if c else alt` following a ternary's then-expression and
+    /// returns `(c, alt)`.
+    ///
+    /// Without `else`, the `if` is a statement's trailing condition
+    /// (`return x if c;`): nothing is consumed and `None` is returned.
+    fn parse_ternary_tail(&mut self) -> ParseResult<Option<(Expr, Expr)>> {
+        let checkpoint = self.position;
+        self.expect(TokenKind::If)?;
+        let condition = self.parse_expression()?;
+        if !self.eat(TokenKind::Else) {
+            self.position = checkpoint;
+            return Ok(None);
+        }
+        Ok(Some((condition, self.parse_expression()?)))
     }
 
     /// Null-denotation: handles tokens that start an expression
@@ -554,7 +618,7 @@ impl<'a> Parser<'a> {
             }),
             TokenKind::Ident => {
                 let name = token.ident_value()?.to_string();
-                if self.peek().is_some_and(|t| t.kind == TokenKind::LParen) {
+                if self.at(TokenKind::LParen) {
                     self.parse_call(name, start)
                 } else {
                     Ok(Expr {
@@ -579,52 +643,27 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Left-denotation: handles tokens that continue an expression
-    /// (binary infix operators and the `x if c else y` ternary).
-    fn led(&mut self, left: Expr, token: &'a Token) -> ParseResult<Expr> {
-        let start = left.span.start;
-        match token.kind {
-            TokenKind::If => {
-                let condition = self.parse_expression()?;
-                self.expect(TokenKind::Else)?;
-                let else_branch = self.parse_expression()?;
-                Ok(Expr {
-                    span: Span {
-                        start,
-                        end: else_branch.span.end,
-                    },
-                    kind: ExprKind::IfElse {
-                        condition: Box::new(condition),
-                        then_branch: Box::new(left),
-                        else_branch: Box::new(else_branch),
-                    },
-                })
-            }
-            _ => {
-                let info = infix_info(&token.kind).ok_or_else(|| {
-                    self.error(format!("not an infix operator: {:?}", token.kind))
-                })?;
-                let right = self.parse_expr(info.right_bp)?;
-                Ok(Expr {
-                    span: Span {
-                        start,
-                        end: right.span.end,
-                    },
-                    kind: ExprKind::BinOp {
-                        lhs: Box::new(left),
-                        op: info.op,
-                        rhs: Box::new(right),
-                    },
-                })
-            }
-        }
+    /// Left-denotation: continues `left` with a binary infix operator.
+    fn led(&mut self, left: Expr, info: OpInfo) -> ParseResult<Expr> {
+        let right = self.parse_expr(info.right_bp)?;
+        Ok(Expr {
+            span: Span {
+                start: left.span.start,
+                end: right.span.end,
+            },
+            kind: ExprKind::BinOp {
+                lhs: Box::new(left),
+                op: info.op,
+                rhs: Box::new(right),
+            },
+        })
     }
 
     fn parse_call(&mut self, name: String, start: usize) -> ParseResult<Expr> {
         self.expect(TokenKind::LParen)?;
         let mut args = Vec::new();
         loop {
-            if self.peek().is_some_and(|t| t.kind == TokenKind::RParen) {
+            if self.at(TokenKind::RParen) {
                 break;
             }
             if !args.is_empty() {
@@ -637,6 +676,14 @@ impl<'a> Parser<'a> {
             kind: ExprKind::Call { name, args },
             span: self.span_since(start),
         })
+    }
+
+    /// Parses `{ stmts }`.
+    fn parse_block(&mut self) -> ParseResult<Vec<Stmt>> {
+        self.expect(TokenKind::LBrace)?;
+        let body = self.parse_body()?;
+        self.expect(TokenKind::RBrace)?;
+        Ok(body)
     }
 
     fn parse_body(&mut self) -> ParseResult<Vec<Stmt>> {

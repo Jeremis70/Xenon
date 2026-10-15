@@ -44,7 +44,7 @@
 
     "keywords_control": {
       "name": "keyword.control.xenon",
-      "match": "\\b(if|else|while|until|for|loop|do|break|continue|return)\\b"
+      "match": "\\b(if|unless|else|while|until|for|loop|do|break|continue|return)\\b"
     },
 
     "keywords_logical": {

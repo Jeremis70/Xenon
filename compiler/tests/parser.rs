@@ -814,3 +814,134 @@ fn parse_assignment_to_address_of_is_error() {
         .parse_program()
         .expect_err("`@x` is not an assignable place");
 }
+
+// Conditionals
+
+fn parse_body(src: &str) -> Vec<Stmt> {
+    let tokens = lex(src).expect("lexing should succeed");
+    let mut program = Parser::new(&tokens)
+        .parse_program()
+        .expect("parsing should succeed");
+    program.functions.remove(0).body
+}
+
+fn parse_error(src: &str) -> (String, Span) {
+    let tokens = lex(src).expect("lexing should succeed");
+    let err = Parser::new(&tokens)
+        .parse_program()
+        .expect_err("parsing should fail");
+    (err.message, err.span)
+}
+
+#[test]
+fn parse_if_else_if_else_chain() {
+    let body = parse_body("fn f(bool a, bool b)->i32{ if a { } else if b { } else { return 1; } }");
+    let StmtKind::If {
+        inverted: false,
+        else_branch: Some(else_branch),
+        ..
+    } = &body[0].kind
+    else {
+        panic!("expected if/else, got {:?}", body[0].kind);
+    };
+    assert!(matches!(
+        &else_branch[0].kind,
+        StmtKind::If {
+            inverted: false,
+            else_branch: Some(last),
+            ..
+        } if matches!(last[0].kind, StmtKind::Return(_))
+    ));
+}
+
+#[test]
+fn parse_unless_is_an_inverted_if_without_else() {
+    let body = parse_body("fn f(bool a)->i32{ unless a { return 1; } }");
+    assert!(matches!(
+        &body[0].kind,
+        StmtKind::If {
+            inverted: true,
+            then_branch,
+            else_branch: None,
+            ..
+        } if matches!(then_branch[0].kind, StmtKind::Return(_))
+    ));
+}
+
+#[test]
+fn parse_unless_rejects_else() {
+    let src = "fn f(bool a)->i32{ unless a { } else { } }";
+    let (message, span) = parse_error(src);
+    assert_eq!(message, "`unless` cannot have an `else` branch");
+    assert_eq!(&src[span.start..span.end], "else");
+}
+
+#[test]
+fn parse_else_unless_is_rejected() {
+    let (message, _) = parse_error("fn f(bool a)->i32{ if a { } else unless a { } }");
+    assert_eq!(message, "Expected LBrace, found Unless");
+}
+
+#[test]
+fn parse_trailing_if_wraps_the_statement() {
+    let src = "fn f(bool c)->i32{ return 1 if c; }";
+    let body = parse_body(src);
+    let StmtKind::If {
+        inverted: false,
+        condition,
+        then_branch,
+        else_branch: None,
+    } = &body[0].kind
+    else {
+        panic!("expected if, got {:?}", body[0].kind);
+    };
+    assert!(matches!(&condition.kind, ExprKind::Ident(name) if name == "c"));
+    assert_eq!(
+        &src[then_branch[0].span.start..then_branch[0].span.end],
+        "return 1"
+    );
+    assert_eq!(&src[body[0].span.start..body[0].span.end], "return 1 if c;");
+}
+
+#[test]
+fn parse_trailing_unless_on_assignment() {
+    let body = parse_body("fn f(bool c)->i32{ let i32 x = 0; x++ unless c; return x; }");
+    assert!(matches!(
+        &body[1].kind,
+        StmtKind::If {
+            inverted: true,
+            then_branch,
+            ..
+        } if matches!(then_branch[0].kind, StmtKind::IncDec { .. })
+    ));
+}
+
+#[test]
+fn parse_trailing_if_on_valueless_break() {
+    let body = parse_body("fn f(bool c)->i32{ loop { break if c; } return 0; }");
+    let StmtKind::Expr(loop_expr) = &body[0].kind else {
+        panic!("expected loop, got {:?}", body[0].kind);
+    };
+    let ExprKind::Loop { body } = &loop_expr.kind else {
+        panic!("expected loop, got {:?}", loop_expr.kind);
+    };
+    assert!(matches!(
+        &body[0].kind,
+        StmtKind::If { then_branch, .. } if matches!(then_branch[0].kind, StmtKind::Break(None))
+    ));
+}
+
+#[test]
+fn parse_ternary_is_not_a_trailing_condition() {
+    let body = parse_body("fn f(bool c)->i32{ return 1 if c else 2; }");
+    assert!(matches!(
+        &body[0].kind,
+        StmtKind::Return(value) if matches!(value.kind, ExprKind::IfElse { .. })
+    ));
+}
+
+#[test]
+fn parse_ternary_without_else_is_rejected_in_expressions() {
+    let (message, _) = parse_error("fn f(bool c)->i32{ let i32 x = 1 if c; return x; }");
+    assert_eq!(message, "Expected Semicolon, found If");
+}

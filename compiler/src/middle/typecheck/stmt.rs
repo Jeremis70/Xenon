@@ -81,17 +81,26 @@ impl FnCtxt<'_, '_> {
                 StmtKind::Return(self.check_expr_has_type(value, &return_ty)?)
             }
             AstStmt::If {
+                inverted,
                 condition,
                 then_branch,
                 else_branch,
-            } => StmtKind::If {
-                condition: self.check_condition(condition)?,
-                then_block: self.check_block(then_branch, span)?,
-                else_block: match else_branch {
-                    Some(else_branch) => Some(self.check_block(else_branch, span)?),
-                    None => None,
-                },
-            },
+            } => {
+                // An inverted `if` runs its body on the false edge, so the
+                // body becomes the else block of an empty then block.
+                let (then_branch, else_branch) = if *inverted {
+                    (&[][..], Some(then_branch))
+                } else {
+                    (then_branch.as_slice(), else_branch.as_ref())
+                };
+                StmtKind::If {
+                    condition: self.check_condition(condition)?,
+                    then_block: self.check_block(then_branch, span)?,
+                    else_block: else_branch
+                        .map(|branch| self.check_block(branch, span))
+                        .transpose()?,
+                }
+            }
             AstStmt::Break(value) => StmtKind::Break(self.check_break(value.as_deref(), span)?),
             AstStmt::Continue => {
                 if self.loops.is_empty() {

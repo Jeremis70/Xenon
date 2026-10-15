@@ -47,7 +47,12 @@ pub enum StmtKind {
         target: Box<Expr>,
         op: IncDecOp,
     },
+    /// `if c { .. } else { .. }`, or `unless c { .. }` when `inverted`.
+    ///
+    /// An inverted `if` runs `then_branch` when the condition is false and
+    /// never has an `else_branch`.
     If {
+        inverted: bool,
         condition: Box<Expr>,
         then_branch: Vec<Stmt>,
         else_branch: Option<Vec<Stmt>>,
