@@ -170,6 +170,13 @@ impl SwitchTargets {
         self.values.iter().zip(self.targets.iter().copied())
     }
 
+    /// The target taken when the discriminant is `value`.
+    pub fn target_for(&self, value: &BigInt) -> BasicBlock {
+        self.iter()
+            .find_map(|(candidate, target)| (candidate == value).then_some(target))
+            .unwrap_or_else(|| self.otherwise())
+    }
+
     /// The target taken when no explicit value matches.
     pub fn otherwise(&self) -> BasicBlock {
         // The constructors always push the fallback last, so this never

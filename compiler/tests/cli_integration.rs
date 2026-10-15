@@ -246,6 +246,12 @@ fn compile_fails_on_oversized_address_literal() {
 /// Compiles `src` and runs the resulting binary, returning its exit code.
 #[cfg(feature = "llvm-backend")]
 fn compile_and_run(src: &str) -> i32 {
+    run_status(src).code().expect("process exited with a code")
+}
+
+/// Compiles `src` and runs the resulting binary, returning how it ended.
+#[cfg(feature = "llvm-backend")]
+fn run_status(src: &str) -> std::process::ExitStatus {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("prog.xe");
     let out_dir = dir.path().join("build");
@@ -263,10 +269,9 @@ fn compile_and_run(src: &str) -> i32 {
         .assert()
         .success();
 
-    let status = std::process::Command::new(out_dir.join("out"))
+    std::process::Command::new(out_dir.join("out"))
         .status()
-        .expect("run compiled binary");
-    status.code().expect("process exited with a code")
+        .expect("run compiled binary")
 }
 
 /// Builds a program whose target and right-hand side each append a digit to a
@@ -382,4 +387,48 @@ fn backend_runs_conditional_forms() {
         "}\n",
     ));
     assert_eq!(code, 47);
+}
+
+#[cfg(feature = "llvm-backend")]
+#[test]
+fn backend_runs_zero_sized_integers() {
+    // Each check adds a distinct bit when it holds.
+    let code = compile_and_run(concat!(
+        "fn id(u0 x) -> u0 { return x; }\n",
+        "fn mix(i0 x) -> i0 { return -x + x * x - ~x; }\n",
+        "#[entry]\n",
+        "fn main() -> i32 {\n",
+        "    let u0 a = 0;\n",
+        "    let i0 b = 0;\n",
+        "    let u0 c = id(a);\n",
+        "    let i0 d = mix(b);\n",
+        "    let *u0 p = @c;\n",
+        "    *p = a;\n",
+        "    let i32 five = 5;\n",
+        "    let i8 minus_three = -3;\n",
+        "    let i32 x = 3;\n",
+        "    let i32 total = 0;\n",
+        "    total += 1 if c == a;\n",
+        "    total += 2 if d >= b;\n",
+        "    total += 4 unless d != b;\n",
+        "    total += 8 if a < five;\n",
+        "    total += 16 if b > minus_three;\n",
+        "    total += 32 if x << a == 3;\n",
+        "    return total;\n",
+        "}\n",
+    ));
+    assert_eq!(code, 63);
+}
+
+#[cfg(all(feature = "llvm-backend", unix))]
+#[test]
+fn backend_traps_on_zero_sized_division() {
+    use std::os::unix::process::ExitStatusExt;
+
+    let status = run_status(
+        "fn div(u0 a, u0 b) -> u0 { return a / b; }\n\
+         #[entry]\n\
+         fn main() -> i32 { let u0 z = div(0, 0); return 0; }\n",
+    );
+    assert!(status.signal().is_some(), "expected a trap, got {status}");
 }

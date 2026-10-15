@@ -15,12 +15,14 @@
 //! - `flow`: reachability and definite initialization.
 //! - `liveness`: backward local liveness.
 //! - `runtime`: explicit arithmetic and shift checks.
+//! - `zero_sized`: erasure of computation on zero-sized integers.
 //!
 //! [`Visitor::visit_local`]: super::Visitor::visit_local
 
 mod flow;
 mod liveness;
 mod runtime;
+mod zero_sized;
 
 pub use flow::{
     AnalysisError, AnalysisErrorKind, AnalysisErrors, analyze_program, reachable_blocks,

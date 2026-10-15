@@ -64,7 +64,7 @@ fn add_one(i32 _1) -> i32 {
 | --- | --- |
 | `Built` | Freshly lowered. `EndOfBody` marks paths that fall off the end. |
 | `Checked` | Flow checks have passed. No `EndOfBody`. |
-| `Runtime` | Runtime checks are explicit. Ready for optimizations and backends. |
+| `Runtime` | Runtime checks are explicit, and no rvalue or switch computes on a zero-sized integer. Ready for optimizations and backends. |
 
 ## Invariants
 
@@ -170,6 +170,12 @@ terminators:
   optimization level.
 - Floating-point division follows IEEE behavior and is not guarded as integer
   division.
+
+Zero-sized integers (`i0`, `u0`) only hold `0`. Once the checks are inserted,
+`analysis::zero_sized` replaces every operation reading or producing one by
+its known result, the inserted guards included: a zero-sized divisor always
+traps, and so does any shift of a zero-sized value. Backends therefore only
+store, copy, pass, and return such values (LLVM uses the empty struct `{}`).
 
 Operands are snapshotted before inserted checks, ensuring the check and the
 operation use the same values. No backend should invent or omit these semantic

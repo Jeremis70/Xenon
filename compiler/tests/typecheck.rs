@@ -532,3 +532,15 @@ fn unless_requires_bool_condition() {
         "{err:?}"
     );
 }
+
+#[test]
+fn zero_sized_integers_only_hold_zero() {
+    thir("fn f()->i0 { let u0 a = 0; let i0 b = -0; return b; }");
+    for src in ["fn f()->u0 { return 1; }", "fn f()->i0 { return -1; }"] {
+        let err = error(src);
+        assert!(
+            matches!(err, SemanticError::LiteralOutOfRange { .. }),
+            "{src}: {err:?}"
+        );
+    }
+}

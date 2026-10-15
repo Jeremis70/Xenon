@@ -140,6 +140,9 @@ pub enum VerifyErrorKind {
     #[error("constant {value} does not fit type `{ty}`")]
     ConstantOutOfRange { value: BigInt, ty: Type },
 
+    #[error("computation on a zero-sized integer is not allowed in phase `runtime`")]
+    ZeroSizedComputation,
+
     #[error("`{terminator}` is not allowed in phase `{phase}`")]
     InvalidInPhase {
         terminator: &'static str,
@@ -475,6 +478,12 @@ impl Visitor for Checker<'_> {
                 rvalue: rvalue_ty,
             });
         }
+        // Silent: a malformed rvalue is reported above.
+        if self.body.phase() == MirPhase::Runtime
+            && typing::computes_on_zero_sized(rvalue, self.body) == Ok(true)
+        {
+            self.report(VerifyErrorKind::ZeroSizedComputation);
+        }
         self.super_assign(place, rvalue, location);
     }
 
@@ -486,6 +495,11 @@ impl Visitor for Checker<'_> {
         match &terminator.kind {
             TerminatorKind::SwitchInt { discr, targets } => {
                 self.check_switch(discr, targets.iter().map(|(value, _)| value.clone()));
+                if self.body.phase() == MirPhase::Runtime
+                    && self.operand_ty(discr).is_some_and(|ty| ty.is_zero_sized())
+                {
+                    self.report(VerifyErrorKind::ZeroSizedComputation);
+                }
             }
             TerminatorKind::Call {
                 func,

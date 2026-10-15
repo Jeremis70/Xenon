@@ -13,7 +13,7 @@ use xenonc::middle::mir::pretty::mir_program_to_string;
 use xenonc::middle::mir::{
     AssertKind, BasicBlock, BodyBuilder, Constant, FnDecl, FnSig, IndirectionKind, Local,
     LocalDecl, MirPhase, MirProgram, Operand, Rvalue, SourceInfo, SwitchTargets, TerminatorKind,
-    build_mir,
+    VerifyErrorKind, build_mir, verify_program,
 };
 use xenonc::middle::target::TargetSpec;
 use xenonc::middle::typecheck::check_program;
@@ -435,4 +435,46 @@ fn live_sets_are_deterministic() {
     let liveness = analyze_liveness(program.body(DefId::new(0)).expect("body"));
     let expected: BTreeSet<_> = [Local::new(1)].into_iter().collect();
     assert_eq!(liveness.live_in[BasicBlock::new(0)], expected);
+}
+
+#[test]
+fn zero_sized_division_always_traps() {
+    let mut program = checked("fn f(i0 a, i0 b)->i0 { return a / b; }");
+    normalize_runtime_checks(&mut program, &TARGET, wrapping())
+        .expect("runtime normalization should work");
+    let dump = mir_program_to_string(&program);
+    assert!(dump.contains("= const true;"), "{dump}");
+    assert!(dump.contains("attempt to divide by zero"), "{dump}");
+    assert!(!dump.contains("attempt to divide with overflow"), "{dump}");
+    assert!(!dump.contains("Div("), "{dump}");
+}
+
+#[test]
+fn zero_sized_computation_is_replaced_by_its_result() {
+    let mut program = checked(
+        "fn f(u0 a, u0 b, i32 c)->bool { let u0 s = a + b; let i32 t = c << a; return a <= b; }",
+    );
+    normalize_runtime_checks(&mut program, &TARGET, checked_overflow())
+        .expect("runtime normalization should work");
+    let dump = mir_program_to_string(&program);
+    for operation in ["Add(", "Overflows", "Shl(", "Le(", " as "] {
+        assert!(!dump.contains(operation), "{operation} remains in:\n{dump}");
+    }
+    assert!(dump.contains("_0 = const true;"), "{dump}");
+}
+
+#[test]
+fn runtime_mir_rejects_zero_sized_computation() {
+    let mut program = checked("fn f(u0 a, u0 b)->u0 { return a + b; }");
+    program
+        .advance_phase(MirPhase::Runtime)
+        .expect("phase should advance");
+    let errors = verify_program(&program, &TARGET).expect_err("verification should fail");
+    assert!(
+        errors
+            .0
+            .iter()
+            .any(|error| error.kind == VerifyErrorKind::ZeroSizedComputation),
+        "{errors}"
+    );
 }
