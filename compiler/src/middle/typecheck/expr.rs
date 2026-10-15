@@ -263,7 +263,7 @@ impl FnCtxt<'_, '_> {
                 "numeric type",
                 ty.is_integer() || ty.is_float(),
             ),
-            ast::UnaryOp::Not => (UnOp::Not, "!", "`bool`", ty.is_bool()),
+            ast::UnaryOp::Not => (UnOp::Not, "not", "`bool`", ty.is_bool()),
             ast::UnaryOp::BitwiseNot => (UnOp::Not, "~", "integer type", ty.is_integer()),
         };
         if !valid {

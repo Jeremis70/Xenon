@@ -14,9 +14,9 @@ impl TokenKind {
                 | TokenKind::StarEq
                 | TokenKind::SlashEq
                 | TokenKind::PercentEq
-                | TokenKind::AndEq
-                | TokenKind::OrEq
-                | TokenKind::XorEq
+                | TokenKind::AmpersandEq
+                | TokenKind::PipeEq
+                | TokenKind::CaretEq
                 | TokenKind::LShiftEq
                 | TokenKind::RShiftEq
                 | TokenKind::PlusPlus
@@ -49,6 +49,10 @@ pub enum TokenKind {
     Continue,
     Do,
     Let,
+    And,
+    Or,
+    Xor,
+    Not,
     True,
     False,
     // Delimiters
@@ -68,9 +72,9 @@ pub enum TokenKind {
     MinusEq,
     StarEq,
     SlashEq,
-    AndEq,
-    OrEq,
-    XorEq,
+    AmpersandEq,
+    PipeEq,
+    CaretEq,
     LShiftEq,
     RShiftEq,
     PercentEq,
@@ -82,9 +86,6 @@ pub enum TokenKind {
     NotEq,
     LtEq,
     GtEq,
-    AndAnd,
-    OrOr,
-    XorXor,
     LShift,
     RShift,
     // Single-char operators
@@ -95,11 +96,10 @@ pub enum TokenKind {
     Minus,
     Star,
     Slash,
-    Bang,
     Tilde,
-    And,
-    Or,
-    Xor,
+    Ampersand,
+    Pipe,
+    Caret,
     At,
     Percent,
     // Value-bearing
@@ -192,6 +192,14 @@ enum RawKind {
     Do,
     #[token("let")]
     Let,
+    #[token("and")]
+    And,
+    #[token("or")]
+    Or,
+    #[token("xor")]
+    Xor,
+    #[token("not")]
+    Not,
 
     // ---------- Float literals (before plain integer regex) ----------
     #[regex(r"(?:[0-9]+\.[0-9]*|[0-9]*\.[0-9]+)(?:[eE][+-]?[0-9]+)?", parse_float)]
@@ -240,11 +248,11 @@ enum RawKind {
     #[token("/=")]
     SlashEq,
     #[token("&=")]
-    AndEq,
+    AmpersandEq,
     #[token("|=")]
-    OrEq,
+    PipeEq,
     #[token("^=")]
-    XorEq,
+    CaretEq,
     #[token("%=")]
     PercentEq,
 
@@ -260,12 +268,6 @@ enum RawKind {
     #[token(">=")]
     GtEq,
 
-    #[token("&&")]
-    AndAnd,
-    #[token("||")]
-    OrOr,
-    #[token("^^")]
-    XorXor,
     #[token("<<")]
     LShift,
     #[token(">>")]
@@ -288,16 +290,14 @@ enum RawKind {
     Slash,
     #[token("%")]
     Percent,
-    #[token("!")]
-    Bang,
     #[token("~")]
     Tilde,
     #[token("&")]
-    And,
+    Ampersand,
     #[token("|")]
-    Or,
+    Pipe,
     #[token("^")]
-    Xor,
+    Caret,
     #[token("@")]
     At,
     // ---------- Literals ----------
@@ -364,6 +364,10 @@ fn into_token_parts(raw: RawKind) -> (TokenKind, Option<TokenValue>) {
         RawKind::Continue => (TokenKind::Continue, None),
         RawKind::Do => (TokenKind::Do, None),
         RawKind::Let => (TokenKind::Let, None),
+        RawKind::And => (TokenKind::And, None),
+        RawKind::Or => (TokenKind::Or, None),
+        RawKind::Xor => (TokenKind::Xor, None),
+        RawKind::Not => (TokenKind::Not, None),
         RawKind::True => (TokenKind::True, None),
         RawKind::False => (TokenKind::False, None),
         RawKind::FloatLit(f) => (TokenKind::Float, Some(TokenValue::Float(f))),
@@ -382,9 +386,9 @@ fn into_token_parts(raw: RawKind) -> (TokenKind, Option<TokenValue>) {
         RawKind::MinusEq => (TokenKind::MinusEq, None),
         RawKind::StarEq => (TokenKind::StarEq, None),
         RawKind::SlashEq => (TokenKind::SlashEq, None),
-        RawKind::AndEq => (TokenKind::AndEq, None),
-        RawKind::OrEq => (TokenKind::OrEq, None),
-        RawKind::XorEq => (TokenKind::XorEq, None),
+        RawKind::AmpersandEq => (TokenKind::AmpersandEq, None),
+        RawKind::PipeEq => (TokenKind::PipeEq, None),
+        RawKind::CaretEq => (TokenKind::CaretEq, None),
         RawKind::LShiftEq => (TokenKind::LShiftEq, None),
         RawKind::RShiftEq => (TokenKind::RShiftEq, None),
         RawKind::PercentEq => (TokenKind::PercentEq, None),
@@ -396,9 +400,6 @@ fn into_token_parts(raw: RawKind) -> (TokenKind, Option<TokenValue>) {
         RawKind::NotEq => (TokenKind::NotEq, None),
         RawKind::LtEq => (TokenKind::LtEq, None),
         RawKind::GtEq => (TokenKind::GtEq, None),
-        RawKind::AndAnd => (TokenKind::AndAnd, None),
-        RawKind::OrOr => (TokenKind::OrOr, None),
-        RawKind::XorXor => (TokenKind::XorXor, None),
         RawKind::LShift => (TokenKind::LShift, None),
         RawKind::RShift => (TokenKind::RShift, None),
         RawKind::Eq => (TokenKind::Eq, None),
@@ -408,11 +409,10 @@ fn into_token_parts(raw: RawKind) -> (TokenKind, Option<TokenValue>) {
         RawKind::Minus => (TokenKind::Minus, None),
         RawKind::Star => (TokenKind::Star, None),
         RawKind::Slash => (TokenKind::Slash, None),
-        RawKind::Bang => (TokenKind::Bang, None),
         RawKind::Tilde => (TokenKind::Tilde, None),
-        RawKind::And => (TokenKind::And, None),
-        RawKind::Or => (TokenKind::Or, None),
-        RawKind::Xor => (TokenKind::Xor, None),
+        RawKind::Ampersand => (TokenKind::Ampersand, None),
+        RawKind::Pipe => (TokenKind::Pipe, None),
+        RawKind::Caret => (TokenKind::Caret, None),
         RawKind::Percent => (TokenKind::Percent, None),
         RawKind::At => (TokenKind::At, None),
         RawKind::Ident(s) => (TokenKind::Ident, Some(TokenValue::Ident(s))),

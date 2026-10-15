@@ -241,7 +241,7 @@ fn shift_binds_tighter_than_lt() {
 #[test]
 fn equality_binds_tighter_than_logical_and() {
     assert_eq!(
-        parse_expr("1 == 2 && 3 == 4"),
+        parse_expr("1 == 2 and 3 == 4"),
         binop(
             binop(int(1), BinOp::Eq, int(2)),
             BinOp::LogicalAnd,
@@ -253,7 +253,7 @@ fn equality_binds_tighter_than_logical_and() {
 #[test]
 fn logical_and_binds_tighter_than_or_rhs() {
     assert_eq!(
-        parse_expr("1 || 2 && 3"),
+        parse_expr("1 or 2 and 3"),
         binop(
             int(1),
             BinOp::LogicalOr,
@@ -265,7 +265,7 @@ fn logical_and_binds_tighter_than_or_rhs() {
 #[test]
 fn logical_and_binds_tighter_than_or_lhs() {
     assert_eq!(
-        parse_expr("1 && 2 || 3"),
+        parse_expr("1 and 2 or 3"),
         binop(
             binop(int(1), BinOp::LogicalAnd, int(2)),
             BinOp::LogicalOr,
@@ -277,7 +277,7 @@ fn logical_and_binds_tighter_than_or_lhs() {
 #[test]
 fn logical_and_binds_tighter_than_xor() {
     assert_eq!(
-        parse_expr("1 ^^ 2 && 3"),
+        parse_expr("1 xor 2 and 3"),
         binop(
             int(1),
             BinOp::LogicalXor,
@@ -289,7 +289,7 @@ fn logical_and_binds_tighter_than_xor() {
 #[test]
 fn logical_xor_binds_tighter_than_or() {
     assert_eq!(
-        parse_expr("1 || 2 ^^ 3"),
+        parse_expr("1 or 2 xor 3"),
         binop(
             int(1),
             BinOp::LogicalOr,
@@ -301,7 +301,7 @@ fn logical_xor_binds_tighter_than_or() {
 #[test]
 fn bitwise_or_binds_tighter_than_logical_or() {
     assert_eq!(
-        parse_expr("1 | 2 || 3"),
+        parse_expr("1 | 2 or 3"),
         binop(
             binop(int(1), BinOp::BitwiseOr, int(2)),
             BinOp::LogicalOr,
@@ -313,7 +313,7 @@ fn bitwise_or_binds_tighter_than_logical_or() {
 #[test]
 fn bitwise_and_binds_tighter_than_logical_and() {
     assert_eq!(
-        parse_expr("1 & 2 && 3"),
+        parse_expr("1 & 2 and 3"),
         binop(
             binop(int(1), BinOp::BitwiseAnd, int(2)),
             BinOp::LogicalAnd,
@@ -389,7 +389,7 @@ fn bitwise_or_is_left_associative() {
 #[test]
 fn logical_and_is_left_associative() {
     assert_eq!(
-        parse_expr("1 && 2 && 3"),
+        parse_expr("1 and 2 and 3"),
         binop(
             binop(int(1), BinOp::LogicalAnd, int(2)),
             BinOp::LogicalAnd,
@@ -401,7 +401,7 @@ fn logical_and_is_left_associative() {
 #[test]
 fn logical_or_is_left_associative() {
     assert_eq!(
-        parse_expr("1 || 2 || 3"),
+        parse_expr("1 or 2 or 3"),
         binop(
             binop(int(1), BinOp::LogicalOr, int(2)),
             BinOp::LogicalOr,
@@ -449,7 +449,7 @@ fn unary_neg_binds_tighter_than_add() {
 #[test]
 fn unary_not_binds_tighter_than_add() {
     assert_eq!(
-        parse_expr("!1 + 2"),
+        parse_expr("not 1 + 2"),
         binop(unary(UnaryOp::Not, int(1)), BinOp::Add, int(2))
     );
 }

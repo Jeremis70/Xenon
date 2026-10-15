@@ -1,7 +1,7 @@
 use crate::frontend::ast::BinOp;
 use crate::frontend::tokens::TokenKind;
 
-/// Binding power of prefix operators (`-`, `!`, `~`, `*`, `@`).
+/// Binding power of prefix operators (`-`, `not`, `~`, `*`, `@`).
 ///
 /// Higher than every infix binding power, so `*p + 1` parses as `(*p) + 1`
 /// and `@x & mask` parses as `(@x) & mask`.
@@ -18,17 +18,17 @@ pub(crate) struct OpInfo {
 /// Ternary `if` is handled separately in `led`.
 pub(crate) fn infix_info(kind: &TokenKind) -> Option<OpInfo> {
     match kind {
-        TokenKind::OrOr => Some(OpInfo {
+        TokenKind::Or => Some(OpInfo {
             left_bp: 1,
             right_bp: 2,
             op: BinOp::LogicalOr,
         }),
-        TokenKind::XorXor => Some(OpInfo {
+        TokenKind::Xor => Some(OpInfo {
             left_bp: 3,
             right_bp: 4,
             op: BinOp::LogicalXor,
         }),
-        TokenKind::AndAnd => Some(OpInfo {
+        TokenKind::And => Some(OpInfo {
             left_bp: 5,
             right_bp: 6,
             op: BinOp::LogicalAnd,
@@ -43,17 +43,17 @@ pub(crate) fn infix_info(kind: &TokenKind) -> Option<OpInfo> {
             right_bp: 8,
             op: BinOp::NotEq,
         }),
-        TokenKind::Or => Some(OpInfo {
+        TokenKind::Pipe => Some(OpInfo {
             left_bp: 9,
             right_bp: 10,
             op: BinOp::BitwiseOr,
         }),
-        TokenKind::Xor => Some(OpInfo {
+        TokenKind::Caret => Some(OpInfo {
             left_bp: 11,
             right_bp: 12,
             op: BinOp::BitwiseXor,
         }),
-        TokenKind::And => Some(OpInfo {
+        TokenKind::Ampersand => Some(OpInfo {
             left_bp: 13,
             right_bp: 14,
             op: BinOp::BitwiseAnd,

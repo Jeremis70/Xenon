@@ -85,10 +85,10 @@ rules, but Xenon's lifetime and aliasing rules are not finalized.
 
 | Operator | Description |
 | --- | --- |
-| `&&` | Logical AND |
-| `||` | Logical OR |
-| `^^` | Logical XOR |
-| `!` | Logical NOT |
+| `and` | Logical AND |
+| `or` | Logical OR |
+| `xor` | Logical XOR |
+| `not` | Logical NOT |
 | `==`, `!=` | Equality and inequality |
 | `<`, `>`, `<=`, `>=` | Comparison |
 

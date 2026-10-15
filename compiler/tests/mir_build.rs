@@ -76,7 +76,7 @@ fn every_construct_builds_verified_mir() {
     for src in [
         "fn f(i32 a)->i32 { return -a; }",
         "fn f(u8 a)->u8 { return ~a >> 1 << 2; }",
-        "fn f(bool a, bool b)->bool { return !(a ^^ b) || a && b; }",
+        "fn f(bool a, bool b)->bool { return not (a xor b) or a and b; }",
         "fn f(f64 a)->f64 { let f64 b = a / 2.0; b -= 1.0; return b * a; }",
         "fn f(i32 a, i64 b)->bool { return a < b; }",
         "fn f(i32 a, u32 b)->bool { return a != b; }",
@@ -143,7 +143,7 @@ fn main() -> i32 {
 
 #[test]
 fn logical_operators_lower_to_eager_bitwise_operators() {
-    let dump = mir("fn f(bool a, bool b)->bool { return a && b || a ^^ b; }");
+    let dump = mir("fn f(bool a, bool b)->bool { return a and b or a xor b; }");
     assert!(dump.contains("BitAnd(copy _1, copy _2)"), "{dump}");
     assert!(dump.contains("BitXor(copy _1, copy _2)"), "{dump}");
     assert!(dump.contains("_0 = BitOr("), "{dump}");

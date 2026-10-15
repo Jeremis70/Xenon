@@ -327,7 +327,7 @@ fn backend_runs_wide_integer_shift_float_and_branch_operations() {
         "    let i32 shifted = 1;\n",
         "    shifted = shifted << 2;\n",
         "    let f64 fraction = 1.5;\n",
-        "    if fraction > 1.0 && wide > 0 { return shifted + 1; }\n",
+        "    if fraction > 1.0 and wide > 0 { return shifted + 1; }\n",
         "    return 0;\n",
         "}\n",
     ));
