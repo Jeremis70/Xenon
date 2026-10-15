@@ -164,6 +164,10 @@ fn propagatable_locals(body: &Body) -> IndexVec<Local, bool> {
         defs: IndexVec::from_elem_n(0, body.local_decls().len()),
         address_taken: IndexVec::from_elem_n(false, body.local_decls().len()),
     };
+    // An argument is defined on entry by its caller.
+    for arg in body.args_iter() {
+        counter.defs[arg] += 1;
+    }
     counter.visit_body(body);
     counter
         .defs
