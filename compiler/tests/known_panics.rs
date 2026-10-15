@@ -276,6 +276,7 @@ fn reports_operations_that_always_trap() {
 fn accepts_operations_that_may_succeed() {
     for src in [
         "fn f(i32 a)->i32 { return 1 / a; }",
+        "fn f(bool set, i32 a)->i32 { if set { a = 0; } return 1 / a; }",
         "fn f(i32 a)->i32 { let i32 z = 0; z = a; return 1 / z; }",
         "fn f()->i32 { let i32 z = 0; let *i32 p = @z; *p = 1; return 1 / z; }",
         "fn f(i8 a, u8 b)->bool { return a < b; }",
