@@ -57,10 +57,24 @@ else if (condition) { ... }
 else { ... }
 ```
 
+`unless` runs its block when the condition is false. It takes no `else`:
+
+```xe
+unless (condition) { ... }
+```
+
 `if` can also be used as an expression:
 
 ```xe
 u8 y = 5 if (condition) else 10;
+```
+
+A simple statement (`return`, `break`, `continue`, an assignment, or an
+expression statement) can end with a trailing `if` or `unless` condition:
+
+```xe
+return x if (done);
+count++ unless (skip);
 ```
 
 ## Statement punctuation

@@ -514,3 +514,21 @@ fn thir_dump_snapshot() {
 ";
     assert_eq!(dump, expected);
 }
+
+#[test]
+fn unless_runs_its_body_on_the_false_edge() {
+    let dump = thir("fn f(bool c)->i32 { unless c { return 1; } return 0; }");
+    assert!(
+        dump.contains("    if c@b0 {\n    } else {\n        return 1_i32;\n    }"),
+        "{dump}"
+    );
+}
+
+#[test]
+fn unless_requires_bool_condition() {
+    let err = error("fn f()->i32 { unless 1 { return 1; } return 0; }");
+    assert!(
+        matches!(err, SemanticError::ConditionNotBool { .. }),
+        "{err:?}"
+    );
+}

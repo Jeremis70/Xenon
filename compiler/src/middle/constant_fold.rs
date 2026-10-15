@@ -57,10 +57,12 @@ fn fold_stmt(stmt: Stmt) -> FoldResult<Stmt> {
             op,
         },
         StmtKind::If {
+            inverted,
             condition,
             then_branch,
             else_branch,
         } => StmtKind::If {
+            inverted,
             condition: Box::new(fold_expr(*condition)?),
             then_branch: then_branch
                 .into_iter()

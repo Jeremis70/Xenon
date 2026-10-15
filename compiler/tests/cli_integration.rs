@@ -359,3 +359,27 @@ fn backend_compares_pointer_values() {
     ));
     assert_eq!(code, 3);
 }
+
+#[cfg(feature = "llvm-backend")]
+#[test]
+fn backend_runs_conditional_forms() {
+    // Each form adds a distinct digit when it takes the expected path.
+    let code = compile_and_run(concat!(
+        "#[entry]\n",
+        "fn main() -> i32 {\n",
+        "    let bool yes = true;\n",
+        "    let bool no = false;\n",
+        "    let i32 total = 0;\n",
+        "    if no { total += 100; } else if yes { total += 1; } else { total += 100; }\n",
+        "    unless no { total += 2; }\n",
+        "    unless yes { total += 100; }\n",
+        "    total += 4 if yes;\n",
+        "    total += 100 if no;\n",
+        "    total += 8 unless no;\n",
+        "    total += 100 unless yes;\n",
+        "    total += 16 if no else 32;\n",
+        "    return total;\n",
+        "}\n",
+    ));
+    assert_eq!(code, 47);
+}
