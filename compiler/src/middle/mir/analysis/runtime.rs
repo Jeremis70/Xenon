@@ -8,6 +8,7 @@
 use num_bigint::BigInt;
 use thiserror::Error;
 
+use crate::middle::mir::analysis::zero_sized::erase_zero_sized_computation;
 use crate::middle::mir::body::{BasicBlock, BasicBlockData, Body, MirPhase, SourceInfo};
 use crate::middle::mir::program::MirProgram;
 use crate::middle::mir::syntax::{
@@ -73,6 +74,7 @@ pub enum RuntimeCheckError {
 /// Signed minimum divided or remaindered by `-1` also traps, rather than
 /// relying on backend-specific poison or undefined behavior. Checked
 /// overflow guards are added only when `policy.overflow` is `Checked`.
+/// Computation on zero-sized integers is then replaced by its result.
 pub fn normalize_runtime_checks(
     program: &mut MirProgram,
     target: &TargetSpec,
@@ -96,6 +98,7 @@ pub fn normalize_runtime_checks(
     let mut normalized = program.clone();
     for body in normalized.bodies_mut() {
         normalize_body(body, target, policy)?;
+        erase_zero_sized_computation(body)?;
     }
     normalized
         .advance_phase(MirPhase::Runtime)
@@ -227,7 +230,8 @@ impl Guards<'_> {
             };
             self.trap_if(is_zero, kind);
 
-            if lhs_ty.is_signed_integer() {
+            // `i0` cannot hold `-1`, and its divisor always traps above.
+            if lhs_ty.is_signed_integer() && !lhs_ty.is_zero_sized() {
                 let (min, _) = self
                     .target
                     .int_bounds(&lhs_ty)

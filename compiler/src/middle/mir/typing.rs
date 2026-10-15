@@ -129,6 +129,31 @@ pub fn rvalue_ty(rvalue: &Rvalue, decls: &impl HasLocalDecls) -> Result<Type, Ty
     }
 }
 
+/// Whether `rvalue` computes on a zero-sized integer: it is an operation,
+/// rather than a plain use or an address, and an operand or its result is
+/// zero-sized.
+///
+/// Zero-sized integers have no bits to compute on, so Runtime MIR contains
+/// no such rvalue: runtime normalization replaces each by its result.
+pub fn computes_on_zero_sized(
+    rvalue: &Rvalue,
+    decls: &impl HasLocalDecls,
+) -> Result<bool, TypingError> {
+    let (first, second) = match rvalue {
+        Rvalue::Use(_) | Rvalue::AddressOf(..) => return Ok(false),
+        Rvalue::UnaryOp(_, operand) | Rvalue::Cast(_, operand, _) => (operand, None),
+        Rvalue::BinaryOp(_, operands) | Rvalue::Overflows(_, operands) => {
+            (&operands.0, Some(&operands.1))
+        }
+    };
+    for operand in std::iter::once(first).chain(second) {
+        if operand_ty(operand, decls)?.is_zero_sized() {
+            return Ok(true);
+        }
+    }
+    Ok(rvalue_ty(rvalue, decls)?.is_zero_sized())
+}
+
 /// The result type of `op` applied to an operand of type `ty`.
 pub fn unary_op_ty(op: UnOp, ty: &Type) -> Result<Type, TypingError> {
     let valid = match op {

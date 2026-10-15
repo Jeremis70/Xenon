@@ -15,9 +15,9 @@ pub const MAX_INT_WIDTH: u32 = 1 << 23;
 /// A fully resolved Xenon type.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Type {
-    /// Signed integer with a bit width from 1 through [`MAX_INT_WIDTH`].
+    /// Signed integer with a bit width from 0 through [`MAX_INT_WIDTH`].
     Int(u32),
-    /// Unsigned integer with a bit width from 1 through [`MAX_INT_WIDTH`].
+    /// Unsigned integer with a bit width from 0 through [`MAX_INT_WIDTH`].
     UInt(u32),
 
     /// Pointer-sized unsigned integer; its width depends on the target.
@@ -73,6 +73,12 @@ impl Type {
         )
     }
 
+    /// Returns `true` for types with a single value and no bits: `i0` and
+    /// `u0`, which only hold `0`.
+    pub fn is_zero_sized(&self) -> bool {
+        matches!(self, Type::Int(0) | Type::UInt(0))
+    }
+
     /// Returns `true` for signed integer types (`iN`, `isize`).
     pub fn is_signed_integer(&self) -> bool {
         matches!(self, Type::Int(_) | Type::ISize)
@@ -116,10 +122,12 @@ pub(crate) fn unsigned_bounds(width: u32) -> (BigInt, BigInt) {
 }
 
 /// Inclusive value range of a two's-complement integer of `width` bits.
-///
-/// `width` must be non-zero; the type parser rejects zero-width integers.
+/// A zero-width integer has no sign bit and holds only `0`.
 pub(crate) fn signed_bounds(width: u32) -> (BigInt, BigInt) {
-    let half = BigInt::from(1) << width.saturating_sub(1);
+    let Some(magnitude_width) = width.checked_sub(1) else {
+        return (BigInt::ZERO, BigInt::ZERO);
+    };
+    let half = BigInt::from(1) << magnitude_width;
     (-half.clone(), half - 1)
 }
 
@@ -159,15 +167,9 @@ impl FromStr for Type {
             .parse::<u32>()
             .map_err(|_| TypeError::InvalidBitWidth {
                 raw: s.to_owned(),
-                reason: "bit width must be a positive integer",
+                reason: "bit width must be a non-negative integer",
             })?;
 
-        if width == 0 {
-            return Err(TypeError::InvalidBitWidth {
-                raw: s.to_owned(),
-                reason: "bit width must be non-zero",
-            });
-        }
         if width > MAX_INT_WIDTH {
             return Err(TypeError::InvalidBitWidth {
                 raw: s.to_owned(),

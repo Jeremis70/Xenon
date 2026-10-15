@@ -642,6 +642,7 @@ impl<'ctx, 'a> MirCodegen<'ctx, 'a> {
                 .into_int_type()
                 .const_int(u64::from(*value), false)
                 .into(),
+            ConstValue::Int(_) if constant.ty.is_zero_sized() => ty.const_zero(),
             ConstValue::Int(value) => bigint_constant(ty.into_int_type(), value).into(),
             ConstValue::Float(value) => ty.into_float_type().const_float(*value).into(),
             ConstValue::Address(value) => {
@@ -696,6 +697,9 @@ impl<'ctx, 'a> MirCodegen<'ctx, 'a> {
     fn llvm_type(&self, ty: &Type) -> Result<BasicTypeEnum<'ctx>, BackendError> {
         Ok(match ty {
             Type::Bool => self.context.bool_type().into(),
+            // Runtime MIR never computes on a zero-sized integer, so it only
+            // needs a size-zero value to store, pass, and return.
+            ty if ty.is_zero_sized() => self.context.struct_type(&[], false).into(),
             Type::Int(width) | Type::UInt(width) => self.int_type(*width)?.into(),
             Type::USize | Type::ISize => self.int_type(self.target.pointer_width())?.into(),
             Type::Float16 => self.context.f16_type().into(),

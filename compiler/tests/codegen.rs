@@ -198,3 +198,14 @@ fn pointer_sized_integers_use_the_target_width() {
         "{ir}"
     );
 }
+
+#[test]
+fn zero_sized_integers_are_empty_structs() {
+    let ir = ir_for(
+        "fn id(u0 a)->u0 { return a; }\n\
+         fn add(i0 a, i0 b)->i0 { return a + b; }\n",
+    );
+    assert!(ir.contains("define {} @id({} %0)"), "{ir}");
+    assert!(ir.contains("define {} @add({} %0, {} %1)"), "{ir}");
+    assert!(!ir.contains("i0"), "{ir}");
+}

@@ -10,7 +10,9 @@ This page documents currently listed primitive and numeric type ideas.
 ### Special integer notes (draft)
 
 - `u1` and `i1` are described as equivalent one-bit integer forms.
-- `u0` and `i0` are suggested as possible aliases to a unit type.
+- `u0` and `i0` are zero-sized integers: they have no bits and only hold `0`.
+  Arithmetic on them always yields `0`, dividing by one always traps, and so
+  does shifting one. They are distinct from the planned unit type `()`.
 - Integer polymorphism/object model is discussed but explicitly not finalized.
 
 ## Floating-point types
