@@ -4,7 +4,7 @@ use crate::frontend::ast::{
 };
 use crate::source::Span;
 use num_bigint::BigInt;
-use num_traits::{ToPrimitive, Zero};
+use num_traits::Zero;
 
 pub fn fold_constants(program: Program) -> FoldResult<Program> {
     Ok(Program {
@@ -119,12 +119,7 @@ fn fold_expr(expr: Expr) -> FoldResult<Expr> {
                         span,
                     });
                 }
-                (UnaryOp::BitwiseNot, ExprKind::Int(n)) => {
-                    return Ok(Expr {
-                        kind: ExprKind::Int(!n),
-                        span,
-                    });
-                }
+                // `~n` depends on the operand's bit width, so it is left to MIR.
                 _ => {}
             }
 
@@ -199,12 +194,14 @@ fn eval_binop(op: &BinOp, a: &BigInt, b: &BigInt, span: Span) -> FoldResult<Opti
                 Ok(Some(a % b))
             }
         }
-        BinOp::LShift => Ok(b.to_u64().map(|s| a << s)),
-        BinOp::RShift => Ok(b.to_u64().map(|s| a >> s)),
         BinOp::BitwiseAnd => Ok(Some(a & b)),
         BinOp::BitwiseOr => Ok(Some(a | b)),
         BinOp::BitwiseXor => Ok(Some(a ^ b)),
-        BinOp::Eq
+        // Shifts trap or not depending on the operand's bit width, which is
+        // only known after type checking, so they are left to MIR.
+        BinOp::LShift
+        | BinOp::RShift
+        | BinOp::Eq
         | BinOp::NotEq
         | BinOp::Lt
         | BinOp::Gt

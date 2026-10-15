@@ -127,16 +127,6 @@ fn fold_mod_by_zero_is_error() {
 }
 
 #[test]
-fn fold_lshift() {
-    assert_eq!(fold(binop(int(1), BinOp::LShift, int(4))), int(16));
-}
-
-#[test]
-fn fold_rshift() {
-    assert_eq!(fold(binop(int(64), BinOp::RShift, int(3))), int(8));
-}
-
-#[test]
 fn fold_bitwise_and() {
     assert_eq!(
         fold(binop(int(0b1100), BinOp::BitwiseAnd, int(0b1010))),
@@ -174,11 +164,6 @@ fn fold_neg() {
 }
 
 #[test]
-fn fold_bitwise_not() {
-    assert_eq!(fold(unary(UnaryOp::BitwiseNot, int(0))), int(-1));
-}
-
-#[test]
 fn fold_preserves_ident() {
     let e = binop(ident("x"), BinOp::Add, int(1));
     let result = fold(e);
@@ -190,14 +175,15 @@ fn fold_preserves_ident() {
 }
 
 #[test]
-fn fold_out_of_range_shift_is_not_folded() {
-    let e = binop(int(1), BinOp::LShift, int(u64::MAX as i64));
-    let result = fold(e);
-    assert!(
-        matches!(&result.kind, ExprKind::BinOp { .. }),
-        "out-of-range shift should remain as BinOp, got {:?}",
-        result
-    );
+fn fold_leaves_width_dependent_operations() {
+    for e in [
+        binop(int(1), BinOp::LShift, int(4)),
+        binop(int(64), BinOp::RShift, int(3)),
+        unary(UnaryOp::BitwiseNot, int(0)),
+    ] {
+        let result = fold(e.clone());
+        assert_eq!(result, e, "width-dependent operation was folded");
+    }
 }
 
 // ── Pointers and references ───────────────────────────────────────────────────

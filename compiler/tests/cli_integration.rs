@@ -432,3 +432,34 @@ fn backend_traps_on_zero_sized_division() {
     );
     assert!(status.signal().is_some(), "expected a trap, got {status}");
 }
+
+#[cfg(all(feature = "llvm-backend", unix))]
+#[test]
+fn backend_traps_on_literal_zero_sized_shifts() {
+    use std::os::unix::process::ExitStatusExt;
+
+    for (ty, op) in [("u0", "<<"), ("u0", ">>"), ("i0", "<<"), ("i0", ">>")] {
+        let status = run_status(&format!(
+            "fn f() -> {ty} {{ return 0 {op} 0; }}\n\
+             #[entry]\n\
+             fn main() -> i32 {{ let {ty} z = f(); return 0; }}\n",
+        ));
+        assert!(
+            status.signal().is_some(),
+            "`0 {op} 0` as `{ty}` should trap, got {status}"
+        );
+    }
+}
+
+#[cfg(feature = "llvm-backend")]
+#[test]
+fn backend_complements_literal_zero_sized_integers() {
+    for ty in ["u0", "i0"] {
+        let code = compile_and_run(&format!(
+            "fn f() -> {ty} {{ return ~0; }}\n\
+             #[entry]\n\
+             fn main() -> i32 {{ let {ty} z = f(); return 7; }}\n",
+        ));
+        assert_eq!(code, 7, "`~0` as `{ty}`");
+    }
+}
