@@ -11,8 +11,9 @@ This page documents currently listed primitive and numeric type ideas.
 
 - `u1` and `i1` are described as equivalent one-bit integer forms.
 - `u0` and `i0` are zero-sized integers: they have no bits and only hold `0`.
-  Arithmetic on them always yields `0`, dividing by one always traps, and so
-  does shifting one. They are distinct from the planned unit type `()`.
+  Non-trapping arithmetic on them yields `0`. Division or remainder by a
+  zero-sized value always traps, and so does shifting one. They are distinct
+  from the planned unit type `()`.
 - Integer polymorphism/object model is discussed but explicitly not finalized.
 
 ## Floating-point types
