@@ -6,6 +6,14 @@ use crate::frontend::ast::{
 use crate::frontend::precedence::{OpInfo, UNARY_BP, infix_info};
 use crate::frontend::tokens::{Span, Token, TokenKind};
 
+/// A simple statement's trailing `if c` or `unless c`.
+struct TrailingCondition {
+    inverted: bool,
+    condition: Expr,
+    /// End of the statement the condition guards.
+    guarded_end: usize,
+}
+
 pub struct Parser<'a> {
     tokens: &'a [Token],
     position: usize,
@@ -187,7 +195,59 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_expression(&mut self) -> ParseResult<Expr> {
-        self.parse_expr(0)
+        match self.parse_guarded_expression()? {
+            (expr, None) => Ok(expr),
+            (_, Some(_)) => Err(self.error("expected `else` to complete the `if` expression")),
+        }
+    }
+
+    /// Parses an expression that may end with a simple statement's trailing
+    /// `if c` (an `if` without `else`), returned alongside it.
+    ///
+    /// An `if c` is first read as a trailing condition and becomes a ternary
+    /// once `else` follows, so every condition is parsed exactly once.
+    fn parse_guarded_expression(&mut self) -> ParseResult<(Expr, Option<TrailingCondition>)> {
+        let then_branch = self.parse_expr(0)?;
+        if !self.at(TokenKind::If) {
+            return Ok((then_branch, None));
+        }
+        let trailing = self
+            .parse_trailing_condition()?
+            .expect("an `if` starts a trailing condition");
+        if !self.eat(TokenKind::Else) {
+            return Ok((then_branch, Some(trailing)));
+        }
+        // Right-associative: `a if b else c if d else e` nests in the else
+        // branch, which also carries a trailing condition up to the statement.
+        let (else_branch, trailing_after) = self.parse_guarded_expression()?;
+        let ternary = Expr {
+            span: Span {
+                start: then_branch.span.start,
+                end: else_branch.span.end,
+            },
+            kind: ExprKind::IfElse {
+                condition: Box::new(trailing.condition),
+                then_branch: Box::new(then_branch),
+                else_branch: Box::new(else_branch),
+            },
+        };
+        Ok((ternary, trailing_after))
+    }
+
+    /// Parses `if c` or `unless c` when next.
+    fn parse_trailing_condition(&mut self) -> ParseResult<Option<TrailingCondition>> {
+        let inverted = match self.peek() {
+            Some(t) if t.kind == TokenKind::If => false,
+            Some(t) if t.kind == TokenKind::Unless => true,
+            _ => return Ok(None),
+        };
+        let guarded_end = self.prev_span().end;
+        self.advance();
+        Ok(Some(TrailingCondition {
+            inverted,
+            condition: self.parse_expression()?,
+            guarded_end,
+        }))
     }
 
     fn parse_statement(&mut self) -> ParseResult<Stmt> {
@@ -233,50 +293,55 @@ impl<'a> Parser<'a> {
     /// condition: `return x if c;` is `if c { return x; }` and
     /// `x++ unless done;` is `unless done { x++; }`.
     fn parse_simple_statement(&mut self, start: usize) -> ParseResult<Stmt> {
-        let kind = self.parse_simple_statement_kind()?;
-        let mut stmt = Stmt {
-            kind,
-            span: self.span_since(start),
+        let (mut kind, trailing) = self.parse_simple_statement_kind()?;
+        let trailing = match trailing {
+            Some(trailing) => Some(trailing),
+            None => self.parse_trailing_condition()?,
         };
-        if let Some(t) = self.peek()
-            && matches!(t.kind, TokenKind::If | TokenKind::Unless)
-        {
-            self.advance();
-            let condition = Box::new(self.parse_expression()?);
-            stmt = Stmt {
-                span: stmt.span,
-                kind: StmtKind::If {
-                    inverted: t.kind == TokenKind::Unless,
-                    condition,
-                    then_branch: vec![stmt],
-                    else_branch: None,
-                },
+        if let Some(trailing) = trailing {
+            kind = StmtKind::If {
+                inverted: trailing.inverted,
+                condition: Box::new(trailing.condition),
+                then_branch: vec![Stmt {
+                    kind,
+                    span: Span {
+                        start,
+                        end: trailing.guarded_end,
+                    },
+                }],
+                else_branch: None,
             };
         }
         self.expect(TokenKind::Semicolon)?;
-        stmt.span = self.span_since(start);
-        Ok(stmt)
+        Ok(Stmt {
+            kind,
+            span: self.span_since(start),
+        })
     }
 
-    fn parse_simple_statement_kind(&mut self) -> ParseResult<StmtKind> {
+    /// Parses a simple statement up to its `;`, along with a trailing `if c`
+    /// that ended one of its expressions.
+    fn parse_simple_statement_kind(
+        &mut self,
+    ) -> ParseResult<(StmtKind, Option<TrailingCondition>)> {
         if self.eat(TokenKind::Return) {
-            return Ok(StmtKind::Return(Box::new(self.parse_expression()?)));
+            let (value, trailing) = self.parse_guarded_expression()?;
+            return Ok((StmtKind::Return(Box::new(value)), trailing));
         }
         if self.eat(TokenKind::Break) {
-            let value = if self.at_statement_end() {
-                None
-            } else {
-                Some(Box::new(self.parse_expression()?))
-            };
-            return Ok(StmtKind::Break(value));
+            if self.at_statement_end() {
+                return Ok((StmtKind::Break(None), None));
+            }
+            let (value, trailing) = self.parse_guarded_expression()?;
+            return Ok((StmtKind::Break(Some(Box::new(value))), trailing));
         }
         if self.eat(TokenKind::Continue) {
-            return Ok(StmtKind::Continue);
+            return Ok((StmtKind::Continue, None));
         }
 
-        let expr = self.parse_expression()?;
+        let (expr, trailing) = self.parse_guarded_expression()?;
         match self.peek() {
-            Some(t) if t.kind.is_assign_op() => {
+            Some(t) if trailing.is_none() && t.kind.is_assign_op() => {
                 if !expr.is_place() {
                     return Err(ParseError::new(
                         "invalid assignment target: expected a variable or a dereference",
@@ -287,7 +352,7 @@ impl<'a> Parser<'a> {
                 self.parse_var_assign(expr, &t.kind)
             }
             // Expression statement (e.g. a function call).
-            _ => Ok(StmtKind::Expr(Box::new(expr))),
+            _ => Ok((StmtKind::Expr(Box::new(expr)), trailing)),
         }
     }
 
@@ -460,22 +525,22 @@ impl<'a> Parser<'a> {
     ///
     /// No desugaring happens here: `x += e` and `x++` keep their own AST
     /// nodes so the tree mirrors the source.
-    fn parse_var_assign(&mut self, target: Expr, kind: &TokenKind) -> ParseResult<StmtKind> {
+    fn parse_var_assign(
+        &mut self,
+        target: Expr,
+        kind: &TokenKind,
+    ) -> ParseResult<(StmtKind, Option<TrailingCondition>)> {
         let target = Box::new(target);
-        Ok(if let Some(op) = IncDecOp::from_token(kind) {
-            StmtKind::IncDec { target, op }
-        } else if let Some(op) = BinOp::from_compound_assign_token(kind) {
-            StmtKind::CompoundAssign {
-                target,
-                op,
-                value: Box::new(self.parse_expression()?),
-            }
-        } else {
-            StmtKind::Assign {
-                target,
-                value: Box::new(self.parse_expression()?),
-            }
-        })
+        if let Some(op) = IncDecOp::from_token(kind) {
+            return Ok((StmtKind::IncDec { target, op }, None));
+        }
+        let (value, trailing) = self.parse_guarded_expression()?;
+        let value = Box::new(value);
+        let kind = match BinOp::from_compound_assign_token(kind) {
+            Some(op) => StmtKind::CompoundAssign { target, op, value },
+            None => StmtKind::Assign { target, value },
+        };
+        Ok((kind, trailing))
     }
 
     fn parse_expr(&mut self, min_bp: u8) -> ParseResult<Expr> {
@@ -485,28 +550,6 @@ impl<'a> Parser<'a> {
         let mut left = self.nud(token)?;
 
         while let Some(t) = self.peek() {
-            // The ternary binds loosest, so only a full expression takes it.
-            if t.kind == TokenKind::If {
-                if min_bp > 0 {
-                    break;
-                }
-                let Some((condition, else_branch)) = self.parse_ternary_tail()? else {
-                    break;
-                };
-                left = Expr {
-                    span: Span {
-                        start: left.span.start,
-                        end: else_branch.span.end,
-                    },
-                    kind: ExprKind::IfElse {
-                        condition: Box::new(condition),
-                        then_branch: Box::new(left),
-                        else_branch: Box::new(else_branch),
-                    },
-                };
-                continue;
-            }
-
             let Some(info) = infix_info(&t.kind) else {
                 break;
             };
@@ -518,22 +561,6 @@ impl<'a> Parser<'a> {
         }
 
         Ok(left)
-    }
-
-    /// Parses `if c else alt` following a ternary's then-expression and
-    /// returns `(c, alt)`.
-    ///
-    /// Without `else`, the `if` is a statement's trailing condition
-    /// (`return x if c;`): nothing is consumed and `None` is returned.
-    fn parse_ternary_tail(&mut self) -> ParseResult<Option<(Expr, Expr)>> {
-        let checkpoint = self.position;
-        self.expect(TokenKind::If)?;
-        let condition = self.parse_expression()?;
-        if !self.eat(TokenKind::Else) {
-            self.position = checkpoint;
-            return Ok(None);
-        }
-        Ok(Some((condition, self.parse_expression()?)))
     }
 
     /// Null-denotation: handles tokens that start an expression
