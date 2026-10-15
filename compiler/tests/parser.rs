@@ -943,5 +943,27 @@ fn parse_ternary_is_not_a_trailing_condition() {
 #[test]
 fn parse_ternary_without_else_is_rejected_in_expressions() {
     let (message, _) = parse_error("fn f(bool c)->i32{ let i32 x = 1 if c; return x; }");
-    assert_eq!(message, "Expected Semicolon, found If");
+    assert_eq!(message, "expected `else` to complete the `if` expression");
+}
+
+#[test]
+fn parse_trailing_condition_after_ternary_guards_the_statement() {
+    let body = parse_body("fn f(bool a, bool b)->i32{ return 1 if a else 2 if b; }");
+    assert!(matches!(
+        &body[0].kind,
+        StmtKind::If { inverted: false, then_branch, .. }
+            if matches!(&then_branch[0].kind, StmtKind::Return(value)
+                if matches!(value.kind, ExprKind::IfElse { .. }))
+    ));
+}
+
+#[test]
+fn parse_nested_trailing_conditions_in_linear_time() {
+    // Every condition is parsed once; reparsing would double the work per level.
+    let mut condition = "true".to_owned();
+    for _ in 0..64 {
+        condition = format!("loop {{ break true if {condition}; break false; }}");
+    }
+    let body = parse_body(&format!("fn f()->i32{{ return 1 if {condition}; }}"));
+    assert!(matches!(body[0].kind, StmtKind::If { .. }));
 }
