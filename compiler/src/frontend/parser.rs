@@ -155,7 +155,7 @@ impl<'a> Parser<'a> {
                 let inner = self.parse_type()?;
                 Ok(Type::Pointer(Box::new(inner)))
             }
-            TokenKind::And => {
+            TokenKind::Ampersand => {
                 self.advance();
                 let inner = self.parse_type()?;
                 Ok(Type::Reference(Box::new(inner)))
@@ -477,7 +477,7 @@ impl<'a> Parser<'a> {
     fn nud(&mut self, token: &'a Token) -> ParseResult<Expr> {
         let start = token.span.start;
         match token.kind {
-            TokenKind::Minus | TokenKind::Bang | TokenKind::Tilde => {
+            TokenKind::Minus | TokenKind::Not | TokenKind::Tilde => {
                 let op = UnaryOp::from_token(&token.kind)
                     .ok_or_else(|| self.error(format!("not a unary operator: {:?}", token.kind)))?;
                 let bp = op.precedence();

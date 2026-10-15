@@ -7,6 +7,7 @@
     { "include": "#strings" },
     { "include": "#function_definitions" },
     { "include": "#keywords_control" },
+    { "include": "#keywords_logical" },
     { "include": "#types" },
     { "include": "#constants" },
     { "include": "#function_calls" },
@@ -44,6 +45,11 @@
     "keywords_control": {
       "name": "keyword.control.xenon",
       "match": "\\b(if|else|while|until|for|loop|do|break|continue|return)\\b"
+    },
+
+    "keywords_logical": {
+      "name": "keyword.operator.logical.xenon",
+      "match": "\\b(and|or|xor|not)\\b"
     },
 
     "types": {
@@ -113,11 +119,6 @@
           "match": "==|!=|<=|>="
         },
         {
-          "comment": "Logical short-circuit and XOR.",
-          "name": "keyword.operator.logical.xenon",
-          "match": "&&|\\|\\||\\^\\^"
-        },
-        {
           "name": "keyword.operator.bitwise.shift.xenon",
           "match": "<<|>>"
         },
@@ -143,10 +144,6 @@
         {
           "name": "keyword.operator.bitwise.xenon",
           "match": "[&|^~]"
-        },
-        {
-          "name": "keyword.operator.unary.xenon",
-          "match": "!"
         },
         {
           "name": "keyword.operator.address.xenon",

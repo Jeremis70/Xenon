@@ -281,7 +281,7 @@ fn reference_named_return_is_error() {
 
 #[test]
 fn logical_operators_stay_logical() {
-    let dump = thir("fn f(bool a, bool b)->bool { return a && b; }");
+    let dump = thir("fn f(bool a, bool b)->bool { return a and b; }");
     assert!(dump.contains("LogicalAnd(a@b0, b@b1)"), "{dump}");
 }
 

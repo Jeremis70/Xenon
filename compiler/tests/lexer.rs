@@ -80,3 +80,39 @@ fn lex_hash_token() {
     assert_eq!(tokens[2].ident_value().unwrap(), "entry");
     assert_eq!(&src[tokens[0].span.start..tokens[0].span.end], "#");
 }
+
+#[test]
+fn lex_logical_keywords() {
+    let tokens = lex("and or xor not android order").expect("lexing should succeed");
+
+    let kinds: Vec<TokenKind> = tokens.iter().map(|t| t.kind).collect();
+    assert_eq!(
+        kinds,
+        vec![
+            TokenKind::And,
+            TokenKind::Or,
+            TokenKind::Xor,
+            TokenKind::Not,
+            TokenKind::Ident,
+            TokenKind::Ident,
+        ]
+    );
+}
+
+#[test]
+fn lex_bitwise_operators() {
+    let tokens = lex("& | ^ &= |= ^=").expect("lexing should succeed");
+
+    let kinds: Vec<TokenKind> = tokens.iter().map(|t| t.kind).collect();
+    assert_eq!(
+        kinds,
+        vec![
+            TokenKind::Ampersand,
+            TokenKind::Pipe,
+            TokenKind::Caret,
+            TokenKind::AmpersandEq,
+            TokenKind::PipeEq,
+            TokenKind::CaretEq,
+        ]
+    );
+}

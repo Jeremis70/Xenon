@@ -49,7 +49,7 @@ AST ──typecheck::check_program──▶ THIR ──mir::build_mir──▶ M
   supported maximum of 8,388,608 bits are rejected. Two floats of
   different types widen to the wider one. Pointers compare only with `==`
   and `!=`, and only to the same pointer type.
-- **Logical operators** `&&`, `||`, and `^^` take `bool` operands and
+- **Logical operators** `and`, `or`, and `xor` take `bool` operands and
   evaluate both sides. MIR lowers them to `BitAnd`, `BitOr`, and `BitXor`.
 - **Places** are bindings and dereferences. A binding of type `&T` is
   dereferenced automatically wherever it is used.

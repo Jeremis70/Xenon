@@ -244,11 +244,11 @@ pub enum Literal {
 /// Logical operators. Today they are eager: both operands are evaluated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LogicalOp {
-    /// `&&`
+    /// `and`
     And,
-    /// `||`
+    /// `or`
     Or,
-    /// `^^`
+    /// `xor`
     Xor,
 }
 

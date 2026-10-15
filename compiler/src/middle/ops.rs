@@ -8,7 +8,7 @@ use crate::types::Type;
 
 /// Binary operators.
 ///
-/// The logical operators `&&`, `||`, and `^^` are not binary operators:
+/// The logical operators `and`, `or`, and `xor` are not binary operators:
 /// THIR keeps them as [`LogicalOp`](crate::middle::thir::LogicalOp), and MIR
 /// construction lowers today's eager forms to `BitAnd`, `BitOr`, and
 /// `BitXor` on `bool` (short-circuiting forms would lower to control flow).

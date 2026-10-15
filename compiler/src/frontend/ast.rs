@@ -177,9 +177,9 @@ impl BinOp {
             TokenKind::StarEq => Some(BinOp::Mul),
             TokenKind::SlashEq => Some(BinOp::Div),
             TokenKind::PercentEq => Some(BinOp::Mod),
-            TokenKind::AndEq => Some(BinOp::BitwiseAnd),
-            TokenKind::OrEq => Some(BinOp::BitwiseOr),
-            TokenKind::XorEq => Some(BinOp::BitwiseXor),
+            TokenKind::AmpersandEq => Some(BinOp::BitwiseAnd),
+            TokenKind::PipeEq => Some(BinOp::BitwiseOr),
+            TokenKind::CaretEq => Some(BinOp::BitwiseXor),
             TokenKind::LShiftEq => Some(BinOp::LShift),
             TokenKind::RShiftEq => Some(BinOp::RShift),
             _ => None,
@@ -215,7 +215,7 @@ impl IncDecOp {
 #[derive(Debug, Clone, PartialEq)]
 pub enum UnaryOp {
     Neg,        // -x
-    Not,        // !x (logical NOT)
+    Not,        // not x (logical NOT)
     BitwiseNot, // ~x
 }
 
@@ -223,7 +223,7 @@ impl UnaryOp {
     pub fn from_token(kind: &TokenKind) -> Option<Self> {
         match kind {
             TokenKind::Minus => Some(UnaryOp::Neg),
-            TokenKind::Bang => Some(UnaryOp::Not),
+            TokenKind::Not => Some(UnaryOp::Not),
             TokenKind::Tilde => Some(UnaryOp::BitwiseNot),
             _ => None,
         }
