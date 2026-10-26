@@ -26,17 +26,17 @@ predicates = "3"
 tempfile = "3"
 
 [target.'cfg(windows)'.dependencies]
-inkwell = { version = "0.10.0", features = [
+inkwell = { version = "0.11.0", features = [
     "llvm22-1-force-dynamic",
 ], optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-inkwell = { version = "0.10.0", features = [
+inkwell = { version = "0.11.0", features = [
     "llvm22-1",
 ], optional = true }
 
 [target.'cfg(all(not(windows), not(target_os = "macos")))'.dependencies]
-inkwell = { version = "0.10.0", features = [
+inkwell = { version = "0.11.0", features = [
     "llvm22-1-prefer-dynamic",
 ], optional = true }
 
