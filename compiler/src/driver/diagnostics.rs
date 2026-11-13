@@ -48,7 +48,7 @@ impl<'a> Emitter<'a> {
         self.emit(Diagnostic {
             code: "lex",
             kind: "lexing error",
-            message: err.message.to_owned(),
+            message: "invalid token".to_owned(),
             span: Some(err.span),
             color: Color::Red,
         });

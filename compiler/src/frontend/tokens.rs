@@ -122,7 +122,12 @@ impl AsRef<[TokenKind]> for TokenKind {
 pub enum TokenValue {
     Ident(String),
     Int(BigInt),
-    Float(f64),
+    /// A float literal's value and its source text. The parser reads the
+    /// text where `t.0.1` puts two tuple indices into one float token.
+    Float {
+        value: f64,
+        text: String,
+    },
     Str(String),
 }
 
@@ -150,7 +155,15 @@ impl Token {
 
     pub fn float_value(&self) -> ParseResult<f64> {
         match &self.value {
-            Some(TokenValue::Float(v)) => Ok(*v),
+            Some(TokenValue::Float { value, .. }) => Ok(*value),
+            _ => Err(ParseError::new("expected float value", self.span)),
+        }
+    }
+
+    /// The source text of a float literal, as in `1.5e3`.
+    pub fn float_text(&self) -> ParseResult<&str> {
+        match &self.value {
+            Some(TokenValue::Float { text, .. }) => Ok(text),
             _ => Err(ParseError::new("expected float value", self.span)),
         }
     }
@@ -207,10 +220,10 @@ enum RawKind {
     Not,
 
     // ---------- Float literals (before plain integer regex) ----------
-    // A float needs digits before its `.`: `.5` is not a float, so that the
-    // tuple index in `t.5` lexes as `Period Int`.
+    // A float needs digits before its `.`: `.5` is not a float, so that
+    // `t.5` lexes as `Period Int`.
     #[regex(r"[0-9]+\.[0-9]*(?:[eE][+-]?[0-9]+)?", parse_float)]
-    FloatLit(f64),
+    FloatLit((f64, String)),
 
     // ---------- Delimiters ----------
     #[token("(")]
@@ -333,8 +346,9 @@ enum RawKind {
     LineComment,
 }
 
-fn parse_float(lex: &mut logos::Lexer<RawKind>) -> Option<f64> {
-    lex.slice().parse().ok()
+fn parse_float(lex: &mut logos::Lexer<RawKind>) -> Option<(f64, String)> {
+    let text = lex.slice();
+    Some((text.parse().ok()?, text.to_owned()))
 }
 
 fn parse_int(lex: &mut logos::Lexer<RawKind>) -> Option<BigInt> {
@@ -382,7 +396,9 @@ fn into_token_parts(raw: RawKind) -> (TokenKind, Option<TokenValue>) {
         RawKind::Not => (TokenKind::Not, None),
         RawKind::True => (TokenKind::True, None),
         RawKind::False => (TokenKind::False, None),
-        RawKind::FloatLit(f) => (TokenKind::Float, Some(TokenValue::Float(f))),
+        RawKind::FloatLit((value, text)) => {
+            (TokenKind::Float, Some(TokenValue::Float { value, text }))
+        }
         RawKind::LParen => (TokenKind::LParen, None),
         RawKind::RParen => (TokenKind::RParen, None),
         RawKind::LBrace => (TokenKind::LBrace, None),

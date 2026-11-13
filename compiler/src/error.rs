@@ -2,28 +2,9 @@ use crate::source::Span;
 use crate::types::Type;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-#[error("{message} at {span:?}")]
+#[error("lexing error at {span:?}")]
 pub struct LexError {
     pub span: Span,
-    pub message: &'static str,
-}
-
-impl LexError {
-    /// Input that no token matches.
-    pub fn invalid_token(span: Span) -> Self {
-        Self {
-            span,
-            message: "invalid token",
-        }
-    }
-
-    /// A number after `.` that is not a plain decimal tuple index.
-    pub fn invalid_tuple_index(span: Span) -> Self {
-        Self {
-            span,
-            message: "invalid tuple index: expected plain decimal digits without a leading zero",
-        }
-    }
 }
 
 pub type LexResult<T> = Result<T, LexError>;
