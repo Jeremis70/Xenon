@@ -134,19 +134,15 @@ fn tuple_index_lexes_as_period_int() {
     assert_eq!(*tokens[2].int_value().unwrap(), BigInt::from(10));
 }
 
+/// The lexer has no notion of tuple indices: `0.12` after a `.` is a
+/// float like any other. The parser takes it apart.
 #[test]
-fn nested_tuple_index_splits_the_float() {
+fn nested_tuple_index_lexes_as_a_float() {
     use TokenKind::*;
-    let src = "t.0.12";
-    let tokens = lex(src).expect("lexing should succeed");
+    let tokens = lex("t.0.12").expect("lexing should succeed");
     let kinds: Vec<TokenKind> = tokens.iter().map(|t| t.kind).collect();
-    assert_eq!(kinds, vec![Ident, Period, Int, Period, Int]);
-    let texts: Vec<&str> = tokens
-        .iter()
-        .map(|t| &src[t.span.start..t.span.end])
-        .collect();
-    assert_eq!(texts, vec!["t", ".", "0", ".", "12"]);
-    assert_eq!(*tokens[4].int_value().unwrap(), BigInt::from(12));
+    assert_eq!(kinds, vec![Ident, Period, Float]);
+    assert_eq!(tokens[2].float_text().unwrap(), "0.12");
 }
 
 #[test]
@@ -160,35 +156,4 @@ fn floats_need_leading_digits() {
 fn underscore_is_its_own_token() {
     use TokenKind::*;
     assert_eq!(kinds("_ _x x_ __"), vec![Underscore, Ident, Ident, Ident]);
-}
-
-#[test]
-fn invalid_tuple_indices_are_rejected() {
-    for (src, bad) in [
-        ("t.0x1", "0x1"),
-        ("t.0b1", "0b1"),
-        ("t.0o7", "0o7"),
-        ("t.01", "01"),
-        ("t.1e3", "1e3"),
-        ("t.1i32", "1i32"),
-        ("t.0.1e2", "0.1e2"),
-        ("t.0.01", "01"),
-    ] {
-        let error = lex(src).expect_err(src);
-        assert!(error.message.contains("invalid tuple index"), "{src}");
-        let start = src.find(bad).unwrap();
-        let start = if bad == "01" && src == "t.0.01" {
-            4
-        } else {
-            start
-        };
-        assert_eq!(
-            error.span,
-            Span {
-                start,
-                end: start + bad.len()
-            },
-            "{src}"
-        );
-    }
 }

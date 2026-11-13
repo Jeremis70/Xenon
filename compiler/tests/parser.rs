@@ -1196,3 +1196,57 @@ fn parse_rejects_ambiguous_lists() {
         assert!(message.contains(needle), "{src}: {message}");
     }
 }
+
+fn field_path(expr: &ExprKind) -> Vec<u32> {
+    match expr {
+        ExprKind::Field { base, index } => {
+            let mut path = field_path(&base.kind);
+            path.push(*index);
+            path
+        }
+        _ => Vec::new(),
+    }
+}
+
+#[test]
+fn parse_nested_tuple_indices() {
+    for src in [
+        "fn f(){ return t.0.12; }",
+        "fn f(){ return t. 0 . 12; }",
+        // The float `0.` ends at the second `.`; the next index follows it.
+        "fn f(){ return t.0. 12; }",
+        "fn f(){ return t.0.// comment\n12; }",
+    ] {
+        assert_eq!(field_path(&returned(src)), vec![0, 12], "{src}");
+    }
+}
+
+#[test]
+fn parse_rejects_invalid_tuple_indices() {
+    for (src, bad) in [
+        ("fn f(){ return t.0x1; }", "0x1"),
+        ("fn f(){ return t.0b1; }", "0b1"),
+        ("fn f(){ return t.0o7; }", "0o7"),
+        ("fn f(){ return t.01; }", "01"),
+        ("fn f(){ return t.1e3; }", "1e3"),
+        ("fn f(){ return t.1i32; }", "1i32"),
+        ("fn f(){ return t.0.1e2; }", "0.1e2"),
+        ("fn f(){ return t.0.01; }", ".01"),
+    ] {
+        let (message, span) = parse_error(src);
+        assert!(message.contains("invalid tuple index"), "{src}: {message}");
+        // `.01` locates the second index, after the first one's `.`.
+        let (start, len) = match bad.strip_prefix('.') {
+            Some(rest) => (src.find(bad).unwrap() + 1, rest.len()),
+            None => (src.find(bad).unwrap(), bad.len()),
+        };
+        assert_eq!(
+            span,
+            Span {
+                start,
+                end: start + len
+            },
+            "{src}"
+        );
+    }
+}

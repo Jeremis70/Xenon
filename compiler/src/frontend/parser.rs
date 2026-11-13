@@ -975,22 +975,63 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Parses the index of `base.N` after its `.`.
+    /// Parses the tuple index of `base.N`, after its `.`.
+    ///
+    /// The lexer knows nothing about tuple indices: like any number, it
+    /// reads the `0.1` of `t.0.1` as one float. Only here, where an index
+    /// is expected, is that float taken apart into the indices `0` and `1`.
+    /// An index is plain decimal digits without a leading zero, so
+    /// `t.0x1`, `t.01`, `t.1e3`, and `t.1i32` are rejected.
     fn parse_field(&mut self, base: Expr) -> ParseResult<Expr> {
         let token = match self.peek() {
-            Some(t) if t.kind == TokenKind::Int => t,
+            Some(t) if matches!(t.kind, TokenKind::Int | TokenKind::Float) => t,
             _ => return Err(self.error("expected a tuple index after `.`")),
         };
         self.advance();
-        let index = u32::try_from(token.int_value()?)
-            .map_err(|_| ParseError::new("tuple index is too large", token.span))?;
-        Ok(Expr {
-            span: base.span.to(token.span),
-            kind: ExprKind::Field {
-                base: Box::new(base),
-                index,
-            },
-        })
+        let expr = if token.kind == TokenKind::Int {
+            // A plain decimal index is exactly the decimal rendering of its
+            // value: `0x1` and `01` also mean 1, but their text is longer.
+            let value = token.int_value()?;
+            if value.to_string().len() != token.span.end - token.span.start {
+                return Err(invalid_tuple_index(token.span));
+            }
+            field(
+                base,
+                tuple_index(&value.to_string(), token.span)?,
+                token.span,
+            )
+        } else {
+            let text = token.float_text()?;
+            let Some((first, second)) = text.split_once('.').filter(|_| !text.contains(['e', 'E']))
+            else {
+                return Err(invalid_tuple_index(token.span));
+            };
+            let first_span = Span {
+                start: token.span.start,
+                end: token.span.start + first.len(),
+            };
+            let base = field(base, tuple_index(first, first_span)?, first_span);
+            if second.is_empty() {
+                // `t.0.` with the next index after a space or a comment.
+                return self.parse_field(base);
+            }
+            let second_span = Span {
+                start: first_span.end + 1,
+                end: token.span.end,
+            };
+            field(base, tuple_index(second, second_span)?, second_span)
+        };
+        // A name or number glued to the index, as in `t.1i32` or `t.1e3`.
+        if let Some(next) = self.peek()
+            && next.span.start == token.span.end
+            && matches!(
+                next.kind,
+                TokenKind::Ident | TokenKind::Int | TokenKind::Float | TokenKind::Underscore
+            )
+        {
+            return Err(invalid_tuple_index(token.span.to(next.span)));
+        }
+        Ok(expr)
     }
 
     /// Left-denotation: continues `left` with a binary infix operator.
@@ -1046,4 +1087,35 @@ impl<'a> Parser<'a> {
         }
         Ok(stmts)
     }
+}
+
+/// `base.index`, spanning from `base` to the index.
+fn field(base: Expr, index: u32, index_span: Span) -> Expr {
+    Expr {
+        span: base.span.to(index_span),
+        kind: ExprKind::Field {
+            base: Box::new(base),
+            index,
+        },
+    }
+}
+
+/// The tuple index written `text`: `0`, or decimal digits without a
+/// leading zero.
+fn tuple_index(text: &str, span: Span) -> ParseResult<u32> {
+    let plain = !text.is_empty()
+        && text.bytes().all(|b| b.is_ascii_digit())
+        && (text == "0" || !text.starts_with('0'));
+    if !plain {
+        return Err(invalid_tuple_index(span));
+    }
+    text.parse()
+        .map_err(|_| ParseError::new("tuple index is too large", span))
+}
+
+fn invalid_tuple_index(span: Span) -> ParseError {
+    ParseError::new(
+        "invalid tuple index: expected plain decimal digits without a leading zero",
+        span,
+    )
 }
