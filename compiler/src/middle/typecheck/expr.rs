@@ -9,8 +9,9 @@ use crate::middle::thir::{Expr, ExprKind, Literal};
 use crate::source::Span;
 use crate::types::Type;
 
-use super::FnCtxt;
 use super::literal::{LiteralClass, literal_class};
+use super::tuple::tuple_expr;
+use super::{Expectation, FnCtxt};
 
 impl FnCtxt<'_, '_> {
     /// Checks `expr`, using `expected` to type untyped literals and to pick
@@ -66,30 +67,93 @@ impl FnCtxt<'_, '_> {
             } => {
                 let condition = self.check_condition(condition)?;
                 let (then_expr, else_expr) = self.check_pair(then_branch, else_branch, expected)?;
-                if then_expr.ty != else_expr.ty {
-                    return Err(SemanticError::TypeMismatch {
-                        expected: then_expr.ty.to_string(),
-                        found: else_expr.ty.to_string(),
-                        span: else_expr.span,
-                    });
-                }
-                Ok(Expr {
-                    ty: then_expr.ty.clone(),
-                    kind: ExprKind::If {
-                        condition: Box::new(condition),
-                        then_expr: Box::new(then_expr),
-                        else_expr: Box::new(else_expr),
-                    },
-                    span,
-                })
+                if_else(condition, then_expr, else_expr, span)
             }
-            Ast::Loop { body } => self.check_loop(None, body, expected, span),
+            Ast::Loop { body } => {
+                self.check_loop(None, body, Expectation::from_type(expected), span)
+            }
             Ast::CondLoop {
                 post,
                 inverted,
                 condition,
                 body,
-            } => self.check_loop(Some((condition, *post, *inverted)), body, expected, span),
+            } => self.check_loop(
+                Some((condition, *post, *inverted)),
+                body,
+                Expectation::from_type(expected),
+                span,
+            ),
+        }
+    }
+
+    /// Checks `expr` against an expectation that may leave some elements of
+    /// a tuple unknown, as the pattern `u8 a, _` does.
+    ///
+    /// A fully known expectation is the plain [`Self::check_expr`]. A
+    /// partial one reaches the elements of tuple literals through
+    /// conditional expressions and loop `break` values; anything else is
+    /// checked without expectation.
+    pub(super) fn check_expr_expecting(
+        &mut self,
+        expr: &ast::Expr,
+        expected: &Expectation,
+    ) -> SemanticResult<Expr> {
+        if let Some(ty) = expected.to_type() {
+            return self.check_expr(expr, Some(&ty));
+        }
+        let Expectation::Tuple(parts) = expected else {
+            return self.check_expr(expr, None);
+        };
+        let span = expr.span;
+        match &expr.kind {
+            Ast::Tuple(elems) if elems.len() == parts.len() => {
+                let elems = elems
+                    .iter()
+                    .zip(parts)
+                    .map(|(elem, part)| self.check_expr_expecting(elem, part))
+                    .collect::<SemanticResult<Vec<_>>>()?;
+                Ok(tuple_expr(elems, span))
+            }
+            Ast::IfElse {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                let condition = self.check_condition(condition)?;
+                // As in `check_pair`: a branch of known type gives its type
+                // to a context-dependent one.
+                let (then_expr, else_expr) =
+                    match (needs_context(then_branch), needs_context(else_branch)) {
+                        (false, true) => {
+                            let then_expr = self.check_expr_expecting(then_branch, expected)?;
+                            let else_expr = self.check_expr(else_branch, Some(&then_expr.ty))?;
+                            (then_expr, else_expr)
+                        }
+                        (true, false) => {
+                            let else_expr = self.check_expr_expecting(else_branch, expected)?;
+                            let then_expr = self.check_expr(then_branch, Some(&else_expr.ty))?;
+                            (then_expr, else_expr)
+                        }
+                        _ => (
+                            self.check_expr_expecting(then_branch, expected)?,
+                            self.check_expr_expecting(else_branch, expected)?,
+                        ),
+                    };
+                if_else(condition, then_expr, else_expr, span)
+            }
+            Ast::Loop { body } => self.check_loop(None, body, expected.clone(), span),
+            Ast::CondLoop {
+                post,
+                inverted,
+                condition,
+                body,
+            } => self.check_loop(
+                Some((condition, *post, *inverted)),
+                body,
+                expected.clone(),
+                span,
+            ),
+            _ => self.check_expr(expr, None),
         }
     }
 
@@ -328,14 +392,41 @@ impl FnCtxt<'_, '_> {
 }
 
 /// Whether `expr` takes its type from context: a numeric literal
-/// expression, an address literal, an address-of expression, or a tuple
-/// literal containing one of those.
-fn needs_context(expr: &ast::Expr) -> bool {
+/// expression, an address literal, an address-of expression, a tuple
+/// literal containing one of those, or a conditional expression whose
+/// branches both do.
+pub(super) fn needs_context(expr: &ast::Expr) -> bool {
     match &expr.kind {
         Ast::Address(_) | Ast::AddressOf(_) => true,
         Ast::Tuple(elems) => elems.iter().any(needs_context),
+        Ast::IfElse {
+            then_branch,
+            else_branch,
+            ..
+        } => needs_context(then_branch) && needs_context(else_branch),
         _ => literal_class(expr).is_some(),
     }
+}
+
+/// The conditional expression `then_expr if condition else else_expr`,
+/// whose branches must have one type.
+fn if_else(condition: Expr, then_expr: Expr, else_expr: Expr, span: Span) -> SemanticResult<Expr> {
+    if then_expr.ty != else_expr.ty {
+        return Err(SemanticError::TypeMismatch {
+            expected: then_expr.ty.to_string(),
+            found: else_expr.ty.to_string(),
+            span: else_expr.span,
+        });
+    }
+    Ok(Expr {
+        ty: then_expr.ty.clone(),
+        kind: ExprKind::If {
+            condition: Box::new(condition),
+            then_expr: Box::new(then_expr),
+            else_expr: Box::new(else_expr),
+        },
+        span,
+    })
 }
 
 fn float_literal(value: f64, expected: Option<&Type>, span: Span) -> Expr {

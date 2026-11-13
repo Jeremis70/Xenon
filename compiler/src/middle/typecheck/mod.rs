@@ -148,11 +148,47 @@ impl<'a> GlobalCtxt<'a> {
     }
 }
 
+/// What a context knows about the type of an expression it checks.
+///
+/// Unlike a plain `Option<&Type>`, it can describe a tuple whose elements
+/// are only partly known, as for `let u8 a, _ = e;`: the first element is
+/// expected to be `u8`, the second is unconstrained. Like any expectation,
+/// it only guides context-dependent expressions such as literals; callers
+/// still check the resulting type.
+#[derive(Debug, Clone, PartialEq)]
+enum Expectation {
+    /// Nothing is known.
+    Unknown,
+    /// The whole type is known.
+    Type(Type),
+    /// A tuple of this arity, each element with its own expectation.
+    Tuple(Vec<Expectation>),
+}
+
+impl Expectation {
+    fn from_type(expected: Option<&Type>) -> Self {
+        expected.map_or(Expectation::Unknown, |ty| Expectation::Type(ty.clone()))
+    }
+
+    /// The expected type, if every part of it is known.
+    fn to_type(&self) -> Option<Type> {
+        match self {
+            Expectation::Unknown => None,
+            Expectation::Type(ty) => Some(ty.clone()),
+            Expectation::Tuple(elems) => elems
+                .iter()
+                .map(Expectation::to_type)
+                .collect::<Option<_>>()
+                .map(Type::Tuple),
+        }
+    }
+}
+
 /// The innermost-first stack entry of an enclosing loop.
 #[derive(Debug)]
 struct LoopFrame {
-    /// The type the loop's context expects, if any.
-    contextual: Option<Type>,
+    /// What the loop's context expects of its value.
+    contextual: Expectation,
     /// The result type fixed by the first `break`.
     break_ty: Option<Type>,
 }
