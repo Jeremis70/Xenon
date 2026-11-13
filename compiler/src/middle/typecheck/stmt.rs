@@ -9,7 +9,7 @@ use crate::middle::thir::{
 use crate::source::Span;
 use crate::types::Type;
 
-use super::{FnCtxt, LoopFrame};
+use super::{Expectation, FnCtxt, LoopFrame};
 
 impl FnCtxt<'_, '_> {
     /// Checks `stmts` as one lexical scope.
@@ -177,15 +177,18 @@ impl FnCtxt<'_, '_> {
         let Some(frame) = self.loops.last() else {
             return Err(SemanticError::BreakOutsideLoop { span });
         };
-        let expected = frame.break_ty.clone().or_else(|| frame.contextual.clone());
+        let expected = match &frame.break_ty {
+            Some(ty) => Expectation::Type(ty.clone()),
+            None => frame.contextual.clone(),
+        };
 
         let value = match value {
-            Some(value) => Some(self.check_expr(value, expected.as_ref())?),
+            Some(value) => Some(self.check_expr_expecting(value, &expected)?),
             None => None,
         };
         let (ty, ty_span) = match &value {
             Some(value) => (value.ty.clone(), value.span),
-            None => (expected.unwrap_or(Type::Int(64)), span),
+            None => (expected.to_type().unwrap_or(Type::Int(64)), span),
         };
 
         let Some(frame) = self.loops.last_mut() else {
@@ -214,7 +217,7 @@ impl FnCtxt<'_, '_> {
         &mut self,
         condition: Option<(&ast::Expr, bool, bool)>,
         body: &[ast::Stmt],
-        expected: Option<&Type>,
+        expected: Expectation,
         span: Span,
     ) -> SemanticResult<Expr> {
         let condition = match condition {
@@ -231,7 +234,7 @@ impl FnCtxt<'_, '_> {
         };
 
         self.loops.push(LoopFrame {
-            contextual: expected.cloned(),
+            contextual: expected,
             break_ty: None,
         });
         let body = self.check_block(body, span);
@@ -239,7 +242,7 @@ impl FnCtxt<'_, '_> {
         let body = body?;
 
         let ty = frame
-            .and_then(|frame| frame.break_ty.or(frame.contextual))
+            .and_then(|frame| frame.break_ty.or_else(|| frame.contextual.to_type()))
             .unwrap_or(Type::Int(64));
         // A loop left through its condition produces the zero value of its
         // type, and a reference has none, not even inside a tuple.

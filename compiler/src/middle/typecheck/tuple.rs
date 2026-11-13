@@ -23,7 +23,7 @@ use crate::middle::thir::{BindingKind, Expr, ExprKind, Stmt, StmtKind};
 use crate::source::Span;
 use crate::types::Type;
 
-use super::FnCtxt;
+use super::{Expectation, FnCtxt};
 
 /// The destination of one value of a destructuring `let`.
 enum Pending<'p> {
@@ -65,11 +65,7 @@ impl FnCtxt<'_, '_> {
             .enumerate()
             .map(|(index, elem)| self.check_expr(elem, expected.map(|tys| &tys[index])))
             .collect::<SemanticResult<Vec<_>>>()?;
-        Ok(Expr {
-            ty: Type::Tuple(elems.iter().map(|elem| elem.ty.clone()).collect()),
-            kind: ExprKind::Tuple(elems),
-            span,
-        })
+        Ok(tuple_expr(elems, span))
     }
 
     /// Checks `base.index`, a place if `base` is one.
@@ -155,8 +151,13 @@ impl FnCtxt<'_, '_> {
                 Ok(())
             }
             (Pattern::Tuple(..), _) => {
-                let expected = pattern_ty(pattern);
-                let value = self.check_expr(init, expected.as_ref())?;
+                let value = self.check_expr_expecting(init, &pattern_expectation(pattern))?;
+                // A pattern of only `_` reads no element of a variable, so
+                // read it whole, once: `let _, _ = r;` must not hide that
+                // `r` may be uninitialized, just as `let _ = r;` does not.
+                if is_stable(&value) && !binds_any(pattern) {
+                    entries.push((Pending::Discard, value.clone()));
+                }
                 self.destructure_value(pattern, value, entries)
             }
         }
@@ -302,8 +303,7 @@ impl FnCtxt<'_, '_> {
                 stores.push((place, temp));
             }
             (target @ Target::Tuple(_), _) => {
-                let expected = target_ty(&target);
-                let value = self.check_expr(value, expected.as_ref())?;
+                let value = self.check_expr_expecting(value, &target_expectation(&target))?;
                 let temp = self.store_temp(value, out);
                 self.assign_value(target, temp, stores)?;
             }
@@ -390,6 +390,15 @@ impl FnCtxt<'_, '_> {
     }
 }
 
+/// The tuple of `elems`, typed by their types.
+pub(super) fn tuple_expr(elems: Vec<Expr>, span: Span) -> Expr {
+    Expr {
+        ty: Type::Tuple(elems.iter().map(|elem| elem.ty.clone()).collect()),
+        kind: ExprKind::Tuple(elems),
+        span,
+    }
+}
+
 /// The unit value `()`.
 pub(super) fn unit(span: Span) -> Expr {
     Expr {
@@ -470,29 +479,34 @@ fn static_path(place: &Expr) -> Option<(BindingId, Vec<u32>)> {
     }
 }
 
-/// The type a pattern accepts, `None` if it contains `_`.
-fn pattern_ty(pattern: &Pattern) -> Option<Type> {
+/// What a pattern expects of its value; `_` leaves its part unknown.
+fn pattern_expectation(pattern: &Pattern) -> Expectation {
     match pattern {
-        Pattern::Binding(binding) => Some(binding.ty.clone()),
-        Pattern::Wildcard(_) => None,
-        Pattern::Tuple(patterns, _) => patterns
-            .iter()
-            .map(pattern_ty)
-            .collect::<Option<_>>()
-            .map(Type::Tuple),
+        Pattern::Binding(binding) => Expectation::Type(binding.ty.clone()),
+        Pattern::Wildcard(_) => Expectation::Unknown,
+        Pattern::Tuple(patterns, _) => {
+            Expectation::Tuple(patterns.iter().map(pattern_expectation).collect())
+        }
     }
 }
 
-/// The type a target accepts, `None` if it contains `_`.
-fn target_ty(target: &Target) -> Option<Type> {
+/// What a target expects of its value; `_` leaves its part unknown.
+fn target_expectation(target: &Target) -> Expectation {
     match target {
-        Target::Place(place) => Some(place.ty.clone()),
-        Target::Discard => None,
-        Target::Tuple(targets) => targets
-            .iter()
-            .map(target_ty)
-            .collect::<Option<_>>()
-            .map(Type::Tuple),
+        Target::Place(place) => Expectation::Type(place.ty.clone()),
+        Target::Discard => Expectation::Unknown,
+        Target::Tuple(targets) => {
+            Expectation::Tuple(targets.iter().map(target_expectation).collect())
+        }
+    }
+}
+
+/// Whether `pattern` binds at least one variable.
+fn binds_any(pattern: &Pattern) -> bool {
+    match pattern {
+        Pattern::Binding(_) => true,
+        Pattern::Wildcard(_) => false,
+        Pattern::Tuple(patterns, _) => patterns.iter().any(binds_any),
     }
 }
 

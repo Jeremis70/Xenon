@@ -565,3 +565,43 @@ fn tuple_programs_pass_flow_analysis() {
          t.0 = a; a, t.1 = t.0, b; return a if t == (1, true) else 0; }",
     );
 }
+
+/// Comparing `()` values reads no element, so the operands are read whole:
+/// an unassigned `()` result must still be reported.
+#[test]
+fn comparing_an_unassigned_unit_result_is_an_error() {
+    for src in [
+        "fn f()->() r { let bool same = r == (); return (); }",
+        "fn f()->((), ()) r { let bool same = r == ((), ()); return ((), ()); }",
+    ] {
+        assert!(
+            matches!(
+                error(src),
+                AnalysisErrorKind::UnassignedNamedResult { ref name, .. } if name == "r"
+            ),
+            "{src}"
+        );
+    }
+    checked("fn f()->() r { r = (); let bool same = r == (); return; }");
+}
+
+/// A pattern of only `_` still reads the variable it destructures, once.
+#[test]
+fn discarding_every_element_of_an_unassigned_result_is_an_error() {
+    for src in [
+        "fn f()->(i32, i32) r { let _, _ = r; return 1, 2; }",
+        "fn f()->((i32, i32), i32) r { let (_, _), _ = r; return (1, 2), 3; }",
+    ] {
+        let mut program = built(src);
+        let errors = analyze_program(&mut program, &TARGET).expect_err(src).0;
+        assert_eq!(errors.len(), 1, "{src}: {errors:?}");
+        assert!(
+            matches!(
+                errors[0].kind,
+                AnalysisErrorKind::UnassignedNamedResult { ref name, .. } if name == "r"
+            ),
+            "{src}"
+        );
+    }
+    checked("fn f()->(i32, i32) r { r = (1, 2); let _, _ = r; return; }");
+}

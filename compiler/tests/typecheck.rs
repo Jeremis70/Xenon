@@ -754,3 +754,28 @@ fn tuple_errors() {
 fn pointer_to_tuple_needs_an_explicit_dereference() {
     thir("fn f(*(i32, i32) p)->i32 { (*p).1 = 3; return (*p).0; }");
 }
+
+/// A conditional of tuple literals takes its type from the other operand,
+/// like a conditional of scalar literals does.
+#[test]
+fn conditional_tuple_literals_take_the_other_operands_type() {
+    let dump = thir("fn f(bool c, (u8, u8) t)->bool { return t == ((1, 2) if c else (3, 4)); }");
+    assert!(dump.contains("(1_u8, 2_u8)"), "{dump}");
+    assert!(dump.contains("(3_u8, 4_u8)"), "{dump}");
+}
+
+/// `_` leaves its element unconstrained without losing the expected types
+/// of the other elements, through conditionals and loops.
+#[test]
+fn discarded_elements_keep_the_other_expectations() {
+    for src in [
+        "fn f(bool c) { let u8 a, _ = (1, true) if c else (2, false); }",
+        "fn f(bool c) { let u8 a = 0; a, _ = (1, true) if c else (2, false); }",
+        "fn f() { let u8 a, _ = loop { break (1, true); }; }",
+        "fn f(bool c) { let (u8 a, _), _ = ((1, 2), 3) if c else ((4, 5), 6); }",
+        "fn f(bool c, (u8, i64) t) { let u8 a, _ = t if c else (1, 2); }",
+    ] {
+        let dump = thir(src);
+        assert!(dump.contains("1_u8"), "{src}:\n{dump}");
+    }
+}

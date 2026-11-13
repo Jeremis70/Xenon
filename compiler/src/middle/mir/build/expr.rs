@@ -206,13 +206,17 @@ impl Builder<'_> {
     /// A place holding the fully evaluated tuple `expr`: the place itself
     /// if it is one and no later evaluation can change it (`snapshot` is
     /// false), otherwise a temporary.
+    ///
+    /// A zero-sized tuple such as `()` is always copied: comparing it reads
+    /// no element, so the copy is the only read definite-initialization
+    /// analysis can see.
     fn as_stored_tuple(
         &mut self,
         block: BasicBlock,
         expr: &Expr,
         snapshot: bool,
     ) -> LowerResult<Place> {
-        if expr.is_place() && !snapshot {
+        if expr.is_place() && !snapshot && !expr.ty.is_zero_sized() {
             return self.as_place(block, expr);
         }
         let (block, temp) = unpack!(self.as_temp(block, expr));

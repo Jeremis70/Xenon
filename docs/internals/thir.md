@@ -63,6 +63,10 @@ AST ──typecheck::check_program──▶ THIR ──mir::build_mir──▶ M
   `!=`, only against the same type, and not when they contain references.
   THIR keeps such a comparison as a `Binary` on tuple operands, which MIR
   construction expands.
+- **Partial expectations.** A `_` in a pattern or assignment target leaves
+  its element unconstrained without dropping the expected types of the
+  others (`Expectation::Tuple`), through tuple literals, conditional
+  expressions, and loop `break` values.
 - **Destructuring and parallel assignment are desugared** into ordinary
   statements over unnamed temporaries (bindings with no name):
   - `let i32 a, i32 b = e1, e2;` matches a tuple literal element by element
