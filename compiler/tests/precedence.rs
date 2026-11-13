@@ -23,7 +23,7 @@ fn parse_expr(expr_src: &str) -> Expr {
     let mut parser = Parser::new(&tokens);
     let program = parser.parse_program().expect("parsing should succeed");
     match program.functions[0].body[0].kind.clone() {
-        StmtKind::Return(expr) => *expr,
+        StmtKind::Return(Some(expr)) => *expr,
         other => panic!("expected return statement, got {:?}", other),
     }
 }

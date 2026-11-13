@@ -99,8 +99,11 @@ impl Visitor for UseDef {
             PlaceContext::MutatingUse(MutatingUseContext::Store) => {
                 self.defs.insert(*local);
             }
+            // Writing one element keeps the others: a use, not a kill.
             PlaceContext::NonMutatingUse(_)
-            | PlaceContext::MutatingUse(MutatingUseContext::AddressOf) => {
+            | PlaceContext::MutatingUse(
+                MutatingUseContext::AddressOf | MutatingUseContext::Projection,
+            ) => {
                 if !self.defs.contains(local) {
                     self.uses.insert(*local);
                 }

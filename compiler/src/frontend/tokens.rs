@@ -68,6 +68,8 @@ pub enum TokenKind {
     Colon,
     Period,
     Hash,
+    /// `_`: the discard pattern. Longer names such as `_x` are identifiers.
+    Underscore,
     // Multi-char operators
     PlusEq,
     MinusEq,
@@ -205,7 +207,9 @@ enum RawKind {
     Not,
 
     // ---------- Float literals (before plain integer regex) ----------
-    #[regex(r"(?:[0-9]+\.[0-9]*|[0-9]*\.[0-9]+)(?:[eE][+-]?[0-9]+)?", parse_float)]
+    // A float needs digits before its `.`: `.5` is not a float, so that the
+    // tuple index in `t.5` lexes as `Period Int`.
+    #[regex(r"[0-9]+\.[0-9]*(?:[eE][+-]?[0-9]+)?", parse_float)]
     FloatLit(f64),
 
     // ---------- Delimiters ----------
@@ -314,6 +318,10 @@ enum RawKind {
     Str(String),
 
     // ---------- Identifiers ----------
+    // A literal token outranks the identifier regex on the same input.
+    #[token("_", priority = 3)]
+    Underscore,
+
     // Ident: letter/_ then letters/digits/_
     // Put AFTER keywords so keywords match first.
     #[regex(r"[A-Za-z_][A-Za-z0-9_]*", |lex| lex.slice().to_string())]
@@ -386,6 +394,7 @@ fn into_token_parts(raw: RawKind) -> (TokenKind, Option<TokenValue>) {
         RawKind::Colon => (TokenKind::Colon, None),
         RawKind::Period => (TokenKind::Period, None),
         RawKind::Hash => (TokenKind::Hash, None),
+        RawKind::Underscore => (TokenKind::Underscore, None),
         RawKind::PlusEq => (TokenKind::PlusEq, None),
         RawKind::MinusEq => (TokenKind::MinusEq, None),
         RawKind::StarEq => (TokenKind::StarEq, None),

@@ -1,11 +1,15 @@
 //! Lowering of expressions in each category: place, operand, rvalue, and
 //! into a destination.
 
-use crate::middle::ops::BinOp;
+use crate::middle::ops::{BinOp, UnOp};
 use crate::middle::thir::visit::{Visitor, walk_expr};
 use crate::middle::thir::{Expr, ExprKind, Literal, LogicalOp};
+use crate::source::Span;
+use crate::types::Type;
 
-use super::super::{BasicBlock, Constant, Local, Operand, Place, Rvalue, TerminatorKind};
+use super::super::{
+    AggregateKind, BasicBlock, Constant, Local, Operand, Place, Rvalue, TerminatorKind,
+};
 use super::{Builder, Flow, LowerResult};
 
 impl Builder<'_> {
@@ -25,6 +29,12 @@ impl Builder<'_> {
                 let (block, temp) = unpack!(self.as_temp(block, pointer));
                 Ok(Flow::Continue(block, Place::from(temp).deref()))
             }
+            // An element of a place is a place; an element of a value is
+            // read from a temporary holding the value.
+            ExprKind::Field { base, index } => {
+                let (block, base) = unpack!(self.as_place(block, base));
+                Ok(Flow::Continue(block, base.field(*index)))
+            }
             _ => {
                 let (block, temp) = unpack!(self.as_temp(block, expr));
                 Ok(Flow::Continue(block, temp.into()))
@@ -43,6 +53,10 @@ impl Builder<'_> {
                 let (block, temp) = unpack!(self.as_temp(block, pointer));
                 Ok(Flow::Continue(block, Place::from(temp).deref()))
             }
+            ExprKind::Field { base, index } => {
+                let (block, base) = unpack!(self.as_stable_place(block, base));
+                Ok(Flow::Continue(block, base.field(*index)))
+            }
             _ => self.as_place(block, expr),
         }
     }
@@ -55,7 +69,7 @@ impl Builder<'_> {
                 block,
                 Operand::constant(constant(literal, expr)),
             )),
-            ExprKind::Binding(_) | ExprKind::Deref(_) => {
+            ExprKind::Binding(_) | ExprKind::Deref(_) | ExprKind::Field { .. } => {
                 let (block, place) = unpack!(self.as_place(block, expr));
                 Ok(Flow::Continue(block, Operand::Copy(place)))
             }
@@ -109,9 +123,19 @@ impl Builder<'_> {
     /// Lowers `expr` to a single computation.
     pub(super) fn as_rvalue(&mut self, block: BasicBlock, expr: &Expr) -> LowerResult<Rvalue> {
         let (block, rvalue) = match &expr.kind {
-            ExprKind::Literal(_) | ExprKind::Binding(_) | ExprKind::Deref(_) => {
+            ExprKind::Literal(_)
+            | ExprKind::Binding(_)
+            | ExprKind::Deref(_)
+            | ExprKind::Field { .. } => {
                 let (block, operand) = unpack!(self.as_operand(block, expr));
                 (block, Rvalue::Use(operand))
+            }
+            ExprKind::Tuple(elems) => {
+                let (block, operands) = unpack!(self.as_operands(block, elems));
+                (block, Rvalue::Aggregate(AggregateKind::Tuple, operands))
+            }
+            ExprKind::Binary { op, lhs, rhs } if lhs.ty.tuple_elems().is_some() => {
+                unpack!(self.tuple_comparison(block, *op, lhs, rhs, expr.span))
             }
             ExprKind::Unary { op, operand } => {
                 let (block, operand) = unpack!(self.as_operand(block, operand));
@@ -149,6 +173,93 @@ impl Builder<'_> {
         let (block, lhs) = unpack!(self.as_ordered_operand(block, lhs, has_side_effects(rhs)));
         let (block, rhs) = unpack!(self.as_operand(block, rhs));
         Ok(Flow::Continue(block, Rvalue::binary(op, lhs, rhs)))
+    }
+
+    /// Lowers `lhs == rhs` or `lhs != rhs` on two tuples of the same type.
+    ///
+    /// Both sides are evaluated completely, left to right, before any
+    /// element is compared: every call in them runs exactly once and in
+    /// source order. The elements are then compared with plain reads of the
+    /// two stored tuples, and the results combined with a non-short-circuit
+    /// `&`; since those reads have no side effects, switching to a
+    /// short-circuit combination later would not change what is evaluated.
+    fn tuple_comparison(
+        &mut self,
+        block: BasicBlock,
+        op: BinOp,
+        lhs: &Expr,
+        rhs: &Expr,
+        span: Span,
+    ) -> LowerResult<Rvalue> {
+        let (block, lhs_place) = unpack!(self.as_stored_tuple(block, lhs, has_side_effects(rhs)));
+        let (block, rhs_place) = unpack!(self.as_stored_tuple(block, rhs, false));
+        let equal = self.elements_equal(block, lhs_place, rhs_place, &lhs.ty, span);
+        Ok(Flow::Continue(
+            block,
+            match op {
+                BinOp::Ne => Rvalue::UnaryOp(UnOp::Not, equal),
+                _ => Rvalue::Use(equal),
+            },
+        ))
+    }
+
+    /// A place holding the fully evaluated tuple `expr`: the place itself
+    /// if it is one and no later evaluation can change it (`snapshot` is
+    /// false), otherwise a temporary.
+    fn as_stored_tuple(
+        &mut self,
+        block: BasicBlock,
+        expr: &Expr,
+        snapshot: bool,
+    ) -> LowerResult<Place> {
+        if expr.is_place() && !snapshot {
+            return self.as_place(block, expr);
+        }
+        let (block, temp) = unpack!(self.as_temp(block, expr));
+        Ok(Flow::Continue(block, temp.into()))
+    }
+
+    /// Compares the values of type `ty` at `lhs` and `rhs`, element by
+    /// element for tuples, and returns the `bool` result.
+    fn elements_equal(
+        &mut self,
+        block: BasicBlock,
+        lhs: Place,
+        rhs: Place,
+        ty: &Type,
+        span: Span,
+    ) -> Operand {
+        let source_info = self.source_info(span);
+        let Some(elems) = ty.tuple_elems() else {
+            let equal = self.cfg.new_temp(Type::Bool, span);
+            let rvalue = Rvalue::binary(BinOp::Eq, Operand::Copy(lhs), Operand::Copy(rhs));
+            self.cfg
+                .push_assign(block, source_info, equal.into(), rvalue);
+            return Operand::Copy(equal.into());
+        };
+        let mut all_equal: Option<Operand> = None;
+        for (index, elem_ty) in elems.iter().enumerate() {
+            let index = index as u32;
+            let equal = self.elements_equal(
+                block,
+                lhs.clone().field(index),
+                rhs.clone().field(index),
+                elem_ty,
+                span,
+            );
+            all_equal = Some(match all_equal {
+                None => equal,
+                Some(previous) => {
+                    let both = self.cfg.new_temp(Type::Bool, span);
+                    let rvalue = Rvalue::binary(BinOp::BitAnd, previous, equal);
+                    self.cfg
+                        .push_assign(block, source_info, both.into(), rvalue);
+                    Operand::Copy(both.into())
+                }
+            });
+        }
+        // `()` has a single value, so two units are always equal.
+        all_equal.unwrap_or_else(|| Operand::constant(Constant::bool(true)))
     }
 
     /// Lowers `expr` into a new temporary.

@@ -101,6 +101,9 @@ pub struct LocalDecl {
     pub source_info: SourceInfo,
     /// The source-level name, if the local corresponds to a user binding.
     pub debug_name: Option<String>,
+    /// Whether the local holds a named result (`-> i32 r`). Named results
+    /// start uninitialized; flow analysis words its diagnostics for them.
+    pub is_named_result: bool,
 }
 
 impl LocalDecl {
@@ -110,6 +113,7 @@ impl LocalDecl {
             ty,
             source_info: SourceInfo::outermost(span),
             debug_name: None,
+            is_named_result: false,
         }
     }
 
@@ -119,6 +123,7 @@ impl LocalDecl {
             ty,
             source_info,
             debug_name: Some(name.into()),
+            is_named_result: false,
         }
     }
 }

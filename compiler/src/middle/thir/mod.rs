@@ -53,11 +53,13 @@ pub struct Function {
     pub params: Vec<BindingId>,
     /// The declared return type.
     pub return_ty: Type,
-    /// The binding of a named return value (`-> i32 result`), if any.
+    /// The bindings of the named results (`-> i32 q, i32 r`), in order;
+    /// empty when the results are unnamed.
     ///
-    /// It is an ordinary zero-initialized variable; `return e` still
-    /// returns `e`, not the binding.
-    pub named_return: Option<BindingId>,
+    /// They are ordinary variables that start uninitialized; flow analysis
+    /// requires them to be assigned before they are read. `return e` still
+    /// returns `e`; a bare `return;` returns the results.
+    pub named_returns: Vec<BindingId>,
     /// Every binding of the function, indexed by [`BindingId`].
     pub bindings: IndexVec<BindingId, Binding>,
     /// The function body.
@@ -169,15 +171,20 @@ impl Expr {
     /// Returns `true` if the expression denotes a memory location rather
     /// than a value.
     pub fn is_place(&self) -> bool {
-        matches!(self.kind, ExprKind::Binding(_) | ExprKind::Deref(_))
+        match &self.kind {
+            ExprKind::Binding(_) | ExprKind::Deref(_) => true,
+            ExprKind::Field { base, .. } => base.is_place(),
+            _ => false,
+        }
     }
 }
 
 /// The kinds of [`Expr`].
 ///
-/// Place expressions ([`Binding`](ExprKind::Binding) and
-/// [`Deref`](ExprKind::Deref)) denote memory locations; using one as a value
-/// reads it. Every other expression produces a value.
+/// Place expressions ([`Binding`](ExprKind::Binding),
+/// [`Deref`](ExprKind::Deref), and a [`Field`](ExprKind::Field) of a place)
+/// denote memory locations; using one as a value reads it. Every other
+/// expression produces a value.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExprKind {
     /// A constant of the expression's type.
@@ -188,6 +195,12 @@ pub enum ExprKind {
     Binding(BindingId),
     /// The location a pointer or reference points to.
     Deref(Box<Expr>),
+    /// Element `index` of a tuple. A place if `base` is one; otherwise the
+    /// element of a tuple value.
+    Field { base: Box<Expr>, index: u32 },
+    /// Builds a tuple from its elements, evaluated left to right. `()` is
+    /// the empty tuple.
+    Tuple(Vec<Expr>),
     /// The address of a place, as a `*T` or `&T`.
     AddressOf {
         kind: IndirectionKind,
@@ -197,6 +210,10 @@ pub enum ExprKind {
     Unary { op: UnOp, operand: Box<Expr> },
     /// A binary operation whose operands already have the types MIR typing
     /// requires (identical, except for shift amounts).
+    ///
+    /// The one exception is `==` / `!=` on two tuples of the same type: MIR
+    /// has no tuple comparison, so MIR construction evaluates both operands
+    /// into temporaries and compares them element by element.
     Binary {
         op: BinOp,
         lhs: Box<Expr>,

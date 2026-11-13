@@ -101,7 +101,7 @@ pub fn eval_rvalue(
                 _ => EvalResult::Unknown,
             }
         }
-        Rvalue::Cast(..) | Rvalue::AddressOf(..) => EvalResult::Unknown,
+        Rvalue::Cast(..) | Rvalue::AddressOf(..) | Rvalue::Aggregate(..) => EvalResult::Unknown,
     };
     Ok(result)
 }

@@ -263,6 +263,12 @@ impl Place {
         self
     }
 
+    /// Returns the place `self.index`, an element of a tuple.
+    pub fn field(mut self, index: u32) -> Self {
+        self.projection.push(ProjectionElem::Field(index));
+        self
+    }
+
     /// Returns the local if the place has no projections.
     pub fn as_local(&self) -> Option<Local> {
         self.projection.is_empty().then_some(self.local)
@@ -285,13 +291,15 @@ impl From<Local> for Place {
 
 /// One step of a [`Place`] projection.
 ///
-/// Arrays will add `Index(Local)` and `ConstantIndex`; structs will add
-/// `Field`. Each new element only needs typing, verification, and backend
-/// support; analyses see it through [`super::visit`] automatically.
+/// Arrays will add `Index(Local)` and `ConstantIndex`. Each new element only
+/// needs typing, verification, and backend support; analyses see it through
+/// [`super::visit`] automatically.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ProjectionElem {
     /// Follows a pointer or reference to its pointee.
     Deref,
+    /// Selects element `index` of a tuple.
+    Field(u32),
 }
 
 // ---------------------------------------------------------------------------
@@ -356,25 +364,40 @@ impl Constant {
         }
     }
 
-    /// The zero value of `ty`: `false`, `0`, `0.0`, or the null pointer.
+    /// The unit value `()`.
+    pub fn unit() -> Self {
+        Self {
+            ty: Type::unit(),
+            value: ConstValue::Tuple(Vec::new()),
+        }
+    }
+
+    /// The zero value of `ty`: `false`, `0`, `0.0`, the null pointer, or a
+    /// tuple of zero values.
     ///
     /// Returns `None` for types without a zero value, such as references,
-    /// which must never be null.
+    /// which must never be null, and tuples containing them.
     pub fn zero(ty: &Type) -> Option<Self> {
-        let value = if ty.is_bool() {
-            ConstValue::Bool(false)
-        } else if ty.is_integer() {
-            ConstValue::Int(BigInt::ZERO)
-        } else if ty.is_float() {
-            ConstValue::Float(0.0)
-        } else if matches!(ty, Type::Pointer(_)) {
-            ConstValue::Address(BigInt::ZERO)
-        } else {
-            return None;
-        };
         Some(Self {
             ty: ty.clone(),
-            value,
+            value: zero_value(ty)?,
+        })
+    }
+
+    /// The constant's tuple elements, each with its type; `None` if it is
+    /// not a well-formed tuple constant.
+    pub fn tuple_elems(&self) -> Option<Vec<Constant>> {
+        let (ConstValue::Tuple(values), Some(tys)) = (&self.value, self.ty.tuple_elems()) else {
+            return None;
+        };
+        (values.len() == tys.len()).then(|| {
+            tys.iter()
+                .zip(values)
+                .map(|(ty, value)| Constant {
+                    ty: ty.clone(),
+                    value: value.clone(),
+                })
+                .collect()
         })
     }
 
@@ -385,6 +408,23 @@ impl Constant {
             value: ConstValue::Address(value.into()),
         }
     }
+}
+
+/// The payload of the zero value of `ty`, see [`Constant::zero`].
+fn zero_value(ty: &Type) -> Option<ConstValue> {
+    Some(if ty.is_bool() {
+        ConstValue::Bool(false)
+    } else if ty.is_integer() {
+        ConstValue::Int(BigInt::ZERO)
+    } else if ty.is_float() {
+        ConstValue::Float(0.0)
+    } else if matches!(ty, Type::Pointer(_)) {
+        ConstValue::Address(BigInt::ZERO)
+    } else if let Type::Tuple(elems) = ty {
+        ConstValue::Tuple(elems.iter().map(zero_value).collect::<Option<_>>()?)
+    } else {
+        return None;
+    })
 }
 
 /// The payload of a [`Constant`].
@@ -399,6 +439,8 @@ pub enum ConstValue {
     Float(f64),
     /// A machine address; must fit the target pointer width.
     Address(BigInt),
+    /// The elements of a tuple, typed by the constant's tuple type.
+    Tuple(Vec<ConstValue>),
 }
 
 // ---------------------------------------------------------------------------
@@ -423,6 +465,16 @@ pub enum Rvalue {
     Cast(CastKind, Operand, Type),
     /// Takes the address of a place, producing a `*T` or `&T`.
     AddressOf(IndirectionKind, Place),
+    /// Builds a compound value from its elements, in one step. Its type is
+    /// derived from the operands.
+    Aggregate(AggregateKind, Vec<Operand>),
+}
+
+/// The kind of value an [`Rvalue::Aggregate`] builds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AggregateKind {
+    /// A tuple whose element types are the operand types.
+    Tuple,
 }
 
 impl Rvalue {
@@ -442,29 +494,46 @@ impl Rvalue {
 // ---------------------------------------------------------------------------
 
 impl fmt::Display for Place {
+    /// Writes `(*_1)` for a dereference and `_1.0` for an element.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for elem in self.projection.iter().rev() {
-            match elem {
-                ProjectionElem::Deref => f.write_str("(*")?,
-            }
-        }
-        write!(f, "{}", self.local)?;
+        let mut text = self.local.to_string();
         for elem in &self.projection {
-            match elem {
-                ProjectionElem::Deref => f.write_str(")")?,
-            }
+            text = match elem {
+                ProjectionElem::Deref => format!("(*{text})"),
+                ProjectionElem::Field(index) => format!("{text}.{index}"),
+            };
         }
-        Ok(())
+        f.write_str(&text)
     }
 }
 
 impl fmt::Display for Constant {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match &self.value {
-            ConstValue::Bool(value) => write!(f, "const {value}"),
-            ConstValue::Int(value) => write!(f, "const {value}_{}", self.ty),
-            ConstValue::Float(value) => write!(f, "const {value:?}_{}", self.ty),
-            ConstValue::Address(value) => write!(f, "const @{value:#x}: {}", self.ty),
+        f.write_str("const ")?;
+        write_const_value(f, &self.value, &self.ty)
+    }
+}
+
+/// Writes `value`, of type `ty`, without the `const` keyword.
+fn write_const_value(f: &mut fmt::Formatter<'_>, value: &ConstValue, ty: &Type) -> fmt::Result {
+    match value {
+        ConstValue::Bool(value) => write!(f, "{value}"),
+        ConstValue::Int(value) => write!(f, "{value}_{ty}"),
+        ConstValue::Float(value) => write!(f, "{value:?}_{ty}"),
+        ConstValue::Address(value) => write!(f, "@{value:#x}: {ty}"),
+        ConstValue::Tuple(values) => {
+            f.write_str("(")?;
+            let tys = ty.tuple_elems().unwrap_or_default();
+            for (index, value) in values.iter().enumerate() {
+                if index > 0 {
+                    f.write_str(", ")?;
+                }
+                match tys.get(index) {
+                    Some(ty) => write_const_value(f, value, ty)?,
+                    None => write!(f, "{value:?}")?,
+                }
+            }
+            f.write_str(if values.len() == 1 { ",)" } else { ")" })
         }
     }
 }
@@ -492,6 +561,16 @@ impl fmt::Display for Rvalue {
             Rvalue::Cast(kind, operand, ty) => write!(f, "{operand} as {ty} ({kind:?})"),
             Rvalue::AddressOf(IndirectionKind::Pointer, place) => write!(f, "@raw {place}"),
             Rvalue::AddressOf(IndirectionKind::Reference, place) => write!(f, "@ref {place}"),
+            Rvalue::Aggregate(AggregateKind::Tuple, operands) => {
+                f.write_str("(")?;
+                for (index, operand) in operands.iter().enumerate() {
+                    if index > 0 {
+                        f.write_str(", ")?;
+                    }
+                    write!(f, "{operand}")?;
+                }
+                f.write_str(if operands.len() == 1 { ",)" } else { ")" })
+            }
         }
     }
 }

@@ -189,7 +189,8 @@ impl Guards<'_> {
             | Rvalue::UnaryOp(..)
             | Rvalue::Overflows(..)
             | Rvalue::Cast(..)
-            | Rvalue::AddressOf(..) => Ok(()),
+            | Rvalue::AddressOf(..)
+            | Rvalue::Aggregate(..) => Ok(()),
         }
     }
 

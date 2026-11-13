@@ -28,7 +28,9 @@
 //! - `literal`: classification of untyped literal expressions;
 //! - `expr`: expressions and places;
 //! - `operator`: unary, binary, and compound-assignment operators;
-//! - `stmt`: statements, blocks, and loops.
+//! - `stmt`: statements, blocks, and loops;
+//! - `tuple`: tuple expressions, element access, destructuring `let`,
+//!   parallel assignment, and bare `return`.
 
 mod entry;
 mod expr;
@@ -36,6 +38,7 @@ mod literal;
 mod operator;
 mod scope;
 mod stmt;
+mod tuple;
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
@@ -103,7 +106,7 @@ impl<'a> GlobalCtxt<'a> {
                     .iter()
                     .map(|param| param.ty.clone())
                     .collect(),
-                return_ty: function.return_type.ty.clone(),
+                return_ty: function.return_ty(),
             });
             match by_name.entry(function.name.as_str()) {
                 Entry::Vacant(entry) => {
@@ -159,6 +162,8 @@ struct LoopFrame {
 struct FnCtxt<'g, 'a> {
     globals: &'g GlobalCtxt<'a>,
     return_ty: Type,
+    /// The bindings of the named results, in order.
+    named_returns: Vec<BindingId>,
     bindings: IndexVec<BindingId, thir::Binding>,
     scopes: Scopes,
     loops: Vec<LoopFrame>,
@@ -168,7 +173,8 @@ impl<'g, 'a> FnCtxt<'g, 'a> {
     fn new(globals: &'g GlobalCtxt<'a>, function: &ast::Function) -> Self {
         Self {
             globals,
-            return_ty: function.return_type.ty.clone(),
+            return_ty: function.return_ty(),
+            named_returns: Vec::new(),
             bindings: IndexVec::new(),
             scopes: Scopes::default(),
             loops: Vec::new(),
@@ -186,18 +192,18 @@ impl<'g, 'a> FnCtxt<'g, 'a> {
             .iter()
             .map(|param| self.declare(param, BindingKind::Param))
             .collect();
-        let named_return = match &function.return_type {
-            ret if ret.name.is_none() => None,
-            // A named return starts out zeroed, and a reference has no
-            // zero value: it would be a null reference.
-            ret if matches!(ret.ty, Type::Reference(_)) => {
+        for result in function.returns.iter().filter(|r| r.name.is_some()) {
+            // A reference can only be bound at its declaration, and a named
+            // result has none: it could never refer to anything.
+            if matches!(result.ty, Type::Reference(_)) {
                 return Err(SemanticError::ReferenceNamedReturn {
-                    ty: ret.ty.clone(),
-                    span: ret.span,
+                    ty: result.ty.clone(),
+                    span: result.span,
                 });
             }
-            ret => Some(self.declare(ret, BindingKind::NamedReturn)),
-        };
+            let id = self.declare(result, BindingKind::NamedReturn);
+            self.named_returns.push(id);
+        }
         let body = self.check_block(&function.body, function.span)?;
         self.scopes.pop();
 
@@ -205,7 +211,7 @@ impl<'g, 'a> FnCtxt<'g, 'a> {
             name: function.name.clone(),
             params,
             return_ty: self.return_ty,
-            named_return,
+            named_returns: self.named_returns,
             bindings: self.bindings,
             body,
             span: function.span,
@@ -224,6 +230,17 @@ impl<'g, 'a> FnCtxt<'g, 'a> {
             self.scopes.insert(name.clone(), id);
         }
         id
+    }
+
+    /// Creates an unnamed binding of type `ty` for a compiler temporary.
+    /// It is never in scope, so it cannot shadow anything.
+    fn declare_temp(&mut self, ty: Type, span: Span) -> BindingId {
+        self.bindings.push(thir::Binding {
+            name: None,
+            ty,
+            kind: BindingKind::Local,
+            span,
+        })
     }
 
     /// Checks that `expr` has type `expected`.

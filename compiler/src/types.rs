@@ -37,6 +37,10 @@ pub enum Type {
     Pointer(Box<Type>),
     /// Transparent reference `&T`: the source language auto-dereferences it.
     Reference(Box<Type>),
+
+    /// Anonymous positional product `(T1, T2, ..)`. The empty tuple `()` is
+    /// the unit type, the return type of functions that return nothing.
+    Tuple(Vec<Type>),
 }
 
 impl Type {
@@ -74,9 +78,40 @@ impl Type {
     }
 
     /// Returns `true` for types with a single value and no bits: `i0` and
-    /// `u0`, which only hold `0`.
+    /// `u0`, which only hold `0`, and tuples of such types, including `()`.
     pub fn is_zero_sized(&self) -> bool {
-        matches!(self, Type::Int(0) | Type::UInt(0))
+        match self {
+            Type::Int(0) | Type::UInt(0) => true,
+            Type::Tuple(elems) => elems.iter().all(Type::is_zero_sized),
+            _ => false,
+        }
+    }
+
+    /// Returns `true` for a reference type or a tuple containing one.
+    pub fn contains_reference(&self) -> bool {
+        match self {
+            Type::Reference(_) => true,
+            Type::Tuple(elems) => elems.iter().any(Type::contains_reference),
+            _ => false,
+        }
+    }
+
+    /// The unit type `()`.
+    pub fn unit() -> Self {
+        Type::Tuple(Vec::new())
+    }
+
+    /// Returns `true` for the unit type `()`.
+    pub fn is_unit(&self) -> bool {
+        matches!(self, Type::Tuple(elems) if elems.is_empty())
+    }
+
+    /// The element types of a tuple, `None` for other types.
+    pub fn tuple_elems(&self) -> Option<&[Type]> {
+        match self {
+            Type::Tuple(elems) => Some(elems),
+            _ => None,
+        }
     }
 
     /// Returns `true` for signed integer types (`iN`, `isize`).
@@ -200,6 +235,20 @@ impl std::fmt::Display for Type {
             Type::Bool => write!(f, "bool"),
             Type::Pointer(inner) => write!(f, "*{inner}"),
             Type::Reference(inner) => write!(f, "&{inner}"),
+            Type::Tuple(elems) => {
+                f.write_str("(")?;
+                for (index, elem) in elems.iter().enumerate() {
+                    if index > 0 {
+                        f.write_str(", ")?;
+                    }
+                    write!(f, "{elem}")?;
+                }
+                // A one-tuple keeps its comma: `(i32,)` is not `(i32)`.
+                if elems.len() == 1 {
+                    f.write_str(",")?;
+                }
+                f.write_str(")")
+            }
         }
     }
 }

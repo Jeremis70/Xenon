@@ -33,23 +33,63 @@ u32 out = foo(5, 20);
 u32 out = foo(y = 12, x = 5);
 ```
 
-## Multiple return values (named returns)
+## Return types and `()`
 
-Named returns declare return variables that exist as local variables inside the function body. Functions with named return variables **require an explicit `return`** (implicit returns are not permitted).
+A function without `->` returns `()`, the unit type. `fn f() { .. }` and
+`fn f() -> () { .. }` are the same signature. In such a function `return;`
+and `return ();` are equivalent, and falling off the end of the body returns
+`()`. Every other function needs an explicit `return` on every path.
+
+## Multiple results
+
+A function can return several values. Its return type is the tuple of
+their types:
 
 ```xe
-fn count_colored_sheep(SheepImage img) -> u32 white, u32 black, u32 other, u32 total {
-    white = count(img, Color.White);
-    black = count(img, Color.Black);
-    other = count(img, Color.Other);
-    total = white + black + other;
-    return;
+fn min_max(i32 a, i32 b) -> i32, i32 {   // returns (i32, i32)
+    return a, b if a < b;
+    return b, a;
 }
 ```
 
-Caller-side destructuring:
+A single result stays scalar: `-> i32` and `-> i32 r` return `i32`, not
+`(i32,)`.
+
+### Named results
+
+Results can be named. Named results are local variables of the function, and
+a bare `return;` returns their current values:
+
 ```xe
-u32 white, u32 black, u32 other, u32 total = count_colored_sheep(img);
+fn divmod(i32 n, i32 d) -> i32 q, i32 r {
+    q = n / d;
+    r = n % d;
+    return;            // returns (q, r)
+}
+```
+
+- Either every result is named or none is.
+- Named results start **unassigned**. Each must be assigned on every path
+  that reaches a bare `return;` (or reads it); otherwise compilation fails
+  with "named result `r` is not assigned on every path".
+- A bare `return;` is an error while a named result is shadowed by a
+  variable of the same name in an inner scope, since it would silently
+  return the outer variable.
+- `return e;` still returns `e`, ignoring the named results.
+- A named result cannot have a reference type, since a reference must be
+  bound at its declaration.
+
+### Taking results apart
+
+The caller usually destructures the results immediately, spelling each
+type, or assigns them to existing variables:
+
+```xe
+let i32 q, i32 r = divmod(17, 5);   // new variables
+q, r = divmod(9, 4);                // existing variables
+let _, i32 rest = divmod(9, 4);     // ignore the quotient
+let (i32, i32) both = divmod(9, 4); // or keep the tuple
+i32 three = divmod(17, 5).0;
 ```
 
 ## Callable model

@@ -156,6 +156,26 @@ impl FnCtxt<'_, '_> {
         };
         let (l, r) = (&lhs.ty, &rhs.ty);
 
+        // Tuples compare element-wise with `==` and `!=` only, and without
+        // widening: both sides must have the same type. MIR construction
+        // evaluates both sides fully before comparing any element.
+        if l.tuple_elems().is_some() || r.tuple_elems().is_some() {
+            if l != r {
+                return Err(invalid(format!("incompatible types `{l}` and `{r}`")));
+            }
+            if !matches!(bin_op, BinOp::Eq | BinOp::Ne) {
+                return Err(invalid(format!(
+                    "tuples only support `==` and `!=`, not `{op:?}`"
+                )));
+            }
+            if l.contains_reference() {
+                return Err(invalid(format!(
+                    "tuples containing references cannot be compared: `{l}`"
+                )));
+            }
+            return Ok(binary(bin_op, Type::Bool, lhs, rhs, span));
+        }
+
         if l.is_indirect() || r.is_indirect() {
             if l != r || !matches!(bin_op, BinOp::Eq | BinOp::Ne) {
                 return Err(invalid(format!(

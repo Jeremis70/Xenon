@@ -13,7 +13,8 @@ use inkwell::targets::{
 };
 use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum, IntType};
 use inkwell::values::{
-    BasicMetadataValueEnum, BasicValueEnum, FunctionValue, IntValue, PointerValue,
+    AggregateValueEnum, BasicMetadataValueEnum, BasicValueEnum, FunctionValue, IntValue,
+    PointerValue,
 };
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate, OptimizationLevel};
 use num_bigint::{BigInt, Sign};
@@ -394,7 +395,33 @@ impl<'ctx, 'a> MirCodegen<'ctx, 'a> {
                 self.cast(*kind, value, operand_type(operand, body)?, target)
             }
             Rvalue::AddressOf(_, place) => Ok(self.place_ptr(place, body)?.into()),
+            Rvalue::Aggregate(_, operands) => {
+                let ty = typing::rvalue_ty(rvalue, body)
+                    .map_err(|error| invalid_mir(error.to_string()))?;
+                let elems = operands
+                    .iter()
+                    .map(|operand| self.operand(operand, body))
+                    .collect::<Result<Vec<_>, _>>()?;
+                self.tuple(&ty, elems)
+            }
         }
+    }
+
+    /// Builds a value of the tuple type `ty` from its elements.
+    fn tuple(
+        &self,
+        ty: &Type,
+        elems: Vec<BasicValueEnum<'ctx>>,
+    ) -> Result<BasicValueEnum<'ctx>, BackendError> {
+        let struct_ty = self.llvm_type(ty)?.into_struct_type();
+        let mut value: AggregateValueEnum<'ctx> = struct_ty.get_poison().into();
+        for (index, elem) in elems.into_iter().enumerate() {
+            value = self
+                .builder
+                .build_insert_value(value, elem, index as u32, "tuple")
+                .map_err(llvm_error("insert tuple element"))?;
+        }
+        Ok(value.into_struct_value().into())
     }
 
     fn unary(
@@ -652,6 +679,15 @@ impl<'ctx, 'a> MirCodegen<'ctx, 'a> {
                     .map_err(llvm_error("address constant conversion"))?
                     .into()
             }
+            ConstValue::Tuple(_) => {
+                let elems = constant
+                    .tuple_elems()
+                    .ok_or_else(|| invalid_mir(format!("malformed tuple constant `{constant}`")))?
+                    .iter()
+                    .map(|elem| self.constant(elem))
+                    .collect::<Result<Vec<_>, _>>()?;
+                return self.tuple(&constant.ty, elems);
+            }
         })
     }
 
@@ -673,6 +709,16 @@ impl<'ctx, 'a> MirCodegen<'ctx, 'a> {
                     ty = ty
                         .pointee()
                         .ok_or_else(|| invalid_mir("dereference of non-pointer".to_owned()))?;
+                }
+                ProjectionElem::Field(index) => {
+                    pointer = self
+                        .builder
+                        .build_struct_gep(self.llvm_type(ty)?, pointer, *index, "field")
+                        .map_err(llvm_error("tuple element address"))?;
+                    ty = ty
+                        .tuple_elems()
+                        .and_then(|elems| elems.get(*index as usize))
+                        .ok_or_else(|| invalid_mir(format!("no element {index} in `{ty}`")))?;
                 }
             }
         }
@@ -699,7 +745,7 @@ impl<'ctx, 'a> MirCodegen<'ctx, 'a> {
             Type::Bool => self.context.bool_type().into(),
             // Runtime MIR never computes on a zero-sized integer, so it only
             // needs a size-zero value to store, pass, and return.
-            ty if ty.is_zero_sized() => self.context.struct_type(&[], false).into(),
+            Type::Int(0) | Type::UInt(0) => self.context.struct_type(&[], false).into(),
             Type::Int(width) | Type::UInt(width) => self.int_type(*width)?.into(),
             Type::USize | Type::ISize => self.int_type(self.target.pointer_width())?.into(),
             Type::Float16 => self.context.f16_type().into(),
@@ -709,6 +755,13 @@ impl<'ctx, 'a> MirCodegen<'ctx, 'a> {
             Type::Float128 => self.context.f128_type().into(),
             Type::Pointer(_) | Type::Reference(_) => {
                 self.context.ptr_type(AddressSpace::default()).into()
+            }
+            Type::Tuple(elems) => {
+                let fields = elems
+                    .iter()
+                    .map(|elem| self.llvm_type(elem))
+                    .collect::<Result<Vec<_>, _>>()?;
+                self.context.struct_type(&fields, false).into()
             }
         })
     }

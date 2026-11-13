@@ -1,7 +1,7 @@
 use crate::error::{ParseError, ParseResult, TypeError};
 use crate::frontend::ast::{
-    Attribute, BinOp, Binding, Expr, ExprKind, Function, IncDecOp, Program, Stmt, StmtKind, Type,
-    UnaryOp,
+    Attribute, BinOp, Binding, Expr, ExprKind, Function, IncDecOp, Pattern, Program, Stmt,
+    StmtKind, Type, UnaryOp,
 };
 use crate::frontend::precedence::{OpInfo, UNARY_BP, infix_info};
 use crate::frontend::tokens::{Span, Token, TokenKind};
@@ -12,6 +12,24 @@ struct TrailingCondition {
     condition: Expr,
     /// End of the statement the condition guards.
     guarded_end: usize,
+}
+
+/// An expression that may end with a statement's trailing condition.
+struct Guarded {
+    expr: Expr,
+    trailing: Option<TrailingCondition>,
+    /// Whether `expr` is a conditional expression `a if c else b` written
+    /// without parentheses.
+    bare_ternary: bool,
+}
+
+/// A statement-level list of expressions, `a, b, ..`.
+struct ExprList {
+    /// The single expression, or a [`ExprKind::Tuple`] of several.
+    expr: Expr,
+    trailing: Option<TrailingCondition>,
+    /// Whether the list had more than one element.
+    is_list: bool,
 }
 
 pub struct Parser<'a> {
@@ -152,15 +170,19 @@ impl<'a> Parser<'a> {
         let params = self.parse_params()?;
         self.expect(TokenKind::RParen)?;
 
-        self.expect(TokenKind::Arrow)?;
-        let return_type = self.parse_return_type()?;
+        // Without `->`, the function returns `()`.
+        let returns = if self.eat(TokenKind::Arrow) {
+            self.parse_return_list()?
+        } else {
+            Vec::new()
+        };
 
         let body = self.parse_block()?;
 
         Ok(Function {
             name,
             params,
-            return_type,
+            returns,
             body,
             attributes,
             span: self.span_since(start),
@@ -179,6 +201,27 @@ impl<'a> Parser<'a> {
                 self.advance();
                 let inner = self.parse_type()?;
                 Ok(Type::Reference(Box::new(inner)))
+            }
+            TokenKind::LParen => {
+                // `()` is unit, `(T)` is `T`, `(T,)` and `(T, U, ..)` are tuples.
+                self.advance();
+                if self.eat(TokenKind::RParen) {
+                    return Ok(Type::unit());
+                }
+                let first = self.parse_type()?;
+                if self.eat(TokenKind::RParen) {
+                    return Ok(first);
+                }
+                self.expect([TokenKind::Comma, TokenKind::RParen])?;
+                let mut elems = vec![first];
+                while !self.at(TokenKind::RParen) {
+                    elems.push(self.parse_type()?);
+                    if !self.eat(TokenKind::Comma) {
+                        break;
+                    }
+                }
+                self.expect(TokenKind::RParen)?;
+                Ok(Type::Tuple(elems))
             }
             TokenKind::Ident => {
                 let token = self.expect(TokenKind::Ident)?;
@@ -207,15 +250,30 @@ impl<'a> Parser<'a> {
     /// An `if c` is first read as a trailing condition and becomes a ternary
     /// once `else` follows, so every condition is parsed exactly once.
     fn parse_guarded_expression(&mut self) -> ParseResult<(Expr, Option<TrailingCondition>)> {
+        let guarded = self.parse_guarded()?;
+        Ok((guarded.expr, guarded.trailing))
+    }
+
+    /// [`Self::parse_guarded_expression`], also reporting whether the
+    /// expression is an unparenthesized conditional expression.
+    fn parse_guarded(&mut self) -> ParseResult<Guarded> {
         let then_branch = self.parse_expr(0)?;
         if !self.at(TokenKind::If) {
-            return Ok((then_branch, None));
+            return Ok(Guarded {
+                expr: then_branch,
+                trailing: None,
+                bare_ternary: false,
+            });
         }
         let trailing = self
             .parse_trailing_condition()?
             .expect("an `if` starts a trailing condition");
         if !self.eat(TokenKind::Else) {
-            return Ok((then_branch, Some(trailing)));
+            return Ok(Guarded {
+                expr: then_branch,
+                trailing: Some(trailing),
+                bare_ternary: false,
+            });
         }
         // Right-associative: `a if b else c if d else e` nests in the else
         // branch, which also carries a trailing condition up to the statement.
@@ -231,7 +289,72 @@ impl<'a> Parser<'a> {
                 else_branch: Box::new(else_branch),
             },
         };
-        Ok((ternary, trailing_after))
+        Ok(Guarded {
+            expr: ternary,
+            trailing: trailing_after,
+            bare_ternary: true,
+        })
+    }
+
+    /// Parses a statement-level list `a, b, ..` of guarded expressions.
+    ///
+    /// Several elements form a [`ExprKind::Tuple`]. A trailing `if c`
+    /// without `else` guards the whole statement, so it may only follow the
+    /// last element. A conditional expression inside a list must be
+    /// parenthesized: `return a, b if c else d;` would read as returning
+    /// the pair only if `c`. A one-element tuple needs parentheses, `(x,)`.
+    fn parse_expr_list(&mut self) -> ParseResult<ExprList> {
+        let mut items = Vec::new();
+        let mut bare_ternary = None;
+        let trailing = loop {
+            let item = self.parse_guarded()?;
+            if item.bare_ternary {
+                bare_ternary.get_or_insert(item.expr.span);
+            }
+            items.push(item.expr);
+            if let Some(trailing) = item.trailing {
+                if self.at(TokenKind::Comma) {
+                    return Err(self.error(
+                        "a trailing `if` or `unless` must end the statement; \
+                         parenthesize a conditional expression in a list",
+                    ));
+                }
+                break Some(trailing);
+            }
+            if !self.eat(TokenKind::Comma) {
+                break None;
+            }
+            if self.at_statement_end() || self.at(TokenKind::Eq) {
+                return Err(ParseError::new(
+                    "trailing comma: a one-element tuple needs parentheses, as in `(x,)`",
+                    self.prev_span(),
+                ));
+            }
+        };
+        if items.len() == 1 {
+            let expr = items.pop().expect("one item");
+            return Ok(ExprList {
+                expr,
+                trailing,
+                is_list: false,
+            });
+        }
+        if let Some(span) = bare_ternary {
+            return Err(ParseError::new(
+                "parenthesize the conditional expression in this list, \
+                 as in `a, (b if c else d)`",
+                span,
+            ));
+        }
+        let span = items[0].span.to(items[items.len() - 1].span);
+        Ok(ExprList {
+            expr: Expr {
+                kind: ExprKind::Tuple(items),
+                span,
+            },
+            trailing,
+            is_list: true,
+        })
     }
 
     /// Parses `if c` or `unless c` when next.
@@ -284,6 +407,8 @@ impl<'a> Parser<'a> {
             | TokenKind::Break
             | TokenKind::Continue
             | TokenKind::Ident
+            | TokenKind::Underscore
+            | TokenKind::LParen
             | TokenKind::Star => self.parse_simple_statement(start),
             _ => Err(self.error("expected statement")),
         }
@@ -325,8 +450,11 @@ impl<'a> Parser<'a> {
         &mut self,
     ) -> ParseResult<(StmtKind, Option<TrailingCondition>)> {
         if self.eat(TokenKind::Return) {
-            let (value, trailing) = self.parse_guarded_expression()?;
-            return Ok((StmtKind::Return(Box::new(value)), trailing));
+            if self.at_statement_end() {
+                return Ok((StmtKind::Return(None), None));
+            }
+            let list = self.parse_expr_list()?;
+            return Ok((StmtKind::Return(Some(Box::new(list.expr))), list.trailing));
         }
         if self.eat(TokenKind::Break) {
             if self.at_statement_end() {
@@ -339,18 +467,39 @@ impl<'a> Parser<'a> {
             return Ok((StmtKind::Continue, None));
         }
 
-        let (expr, trailing) = self.parse_guarded_expression()?;
+        let ExprList {
+            expr,
+            trailing,
+            is_list,
+        } = self.parse_expr_list()?;
         match self.peek() {
-            Some(t) if trailing.is_none() && t.kind.is_assign_op() => {
-                if !expr.is_place() {
+            Some(t) if trailing.is_none() && t.kind == TokenKind::Eq => {
+                if !expr.is_assign_target() {
                     return Err(ParseError::new(
-                        "invalid assignment target: expected a variable or a dereference",
+                        "invalid assignment target: expected a variable, a dereference, \
+                         a tuple element, `_`, or a list of those",
                         expr.span,
                     ));
                 }
                 self.advance();
                 self.parse_var_assign(expr, &t.kind)
             }
+            Some(t) if trailing.is_none() && t.kind.is_assign_op() => {
+                if !expr.is_place() {
+                    let message = if matches!(expr.kind, ExprKind::Tuple(_)) {
+                        "compound assignment needs a single place, not a list"
+                    } else {
+                        "invalid assignment target: expected a variable or a dereference"
+                    };
+                    return Err(ParseError::new(message, expr.span));
+                }
+                self.advance();
+                self.parse_var_assign(expr, &t.kind)
+            }
+            _ if is_list => Err(ParseError::new(
+                "a list of values is only allowed in `return`, `let`, and assignments",
+                expr.span,
+            )),
             // Expression statement (e.g. a function call).
             _ => Ok((StmtKind::Expr(Box::new(expr)), trailing)),
         }
@@ -468,14 +617,129 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_var_decl(&mut self, start: usize) -> ParseResult<Stmt> {
-        let mut binding = self.parse_typed_binding()?;
+        let pattern = self.parse_pattern_list()?;
         self.expect(TokenKind::Eq)?;
-        binding.default = Some(Box::new(self.parse_expression()?));
+        let init = self.parse_expr_list()?;
+        if init.trailing.is_some() {
+            return Err(self.error("expected `else` to complete the `if` expression"));
+        }
         self.expect(TokenKind::Semicolon)?;
+        let init = Box::new(init.expr);
+        let kind = match pattern {
+            Pattern::Binding(mut binding) => {
+                binding.default = Some(init);
+                StmtKind::VarDecl(binding)
+            }
+            pattern => StmtKind::Destructure { pattern, init },
+        };
         Ok(Stmt {
-            kind: StmtKind::VarDecl(binding),
+            kind,
             span: self.span_since(start),
         })
+    }
+
+    /// Parses the patterns of a `let`: one pattern, or a bare list
+    /// `p1, p2, ..` that destructures a tuple.
+    fn parse_pattern_list(&mut self) -> ParseResult<Pattern> {
+        let first = self.parse_pattern()?;
+        if !self.at(TokenKind::Comma) {
+            return Ok(first);
+        }
+        let start = first.span().start;
+        let mut items = vec![first];
+        while self.eat(TokenKind::Comma) {
+            if self.at(TokenKind::Eq) {
+                return Err(ParseError::new(
+                    "trailing comma: a one-element pattern needs parentheses, as in `(i32 x,)`",
+                    self.prev_span(),
+                ));
+            }
+            items.push(self.parse_pattern()?);
+        }
+        Ok(Pattern::Tuple(items, self.span_since(start)))
+    }
+
+    /// Parses one pattern: `_`, `<type> <name>`, or `( patterns )`.
+    ///
+    /// After `(`, the input is either a tuple type, as in
+    /// `(i32, i32) pair`, or a nested pattern, as in `(i32 a, i32 b)`. A
+    /// type is tried first; if it parses, the parser commits to a binding
+    /// of that type. Otherwise the attempt is discarded without a trace
+    /// and the input is parsed as a nested pattern, whose error, if any, is
+    /// the one reported.
+    fn parse_pattern(&mut self) -> ParseResult<Pattern> {
+        let token = self
+            .peek()
+            .ok_or_else(|| self.error("expected a pattern"))?;
+        match token.kind {
+            TokenKind::Underscore => {
+                self.advance();
+                Ok(Pattern::Wildcard(token.span))
+            }
+            TokenKind::LParen => {
+                let saved = self.position;
+                match self.parse_type() {
+                    Ok(ty) => {
+                        let Some(name_token) = self.peek().filter(|t| t.kind == TokenKind::Ident)
+                        else {
+                            return Err(self
+                                .error(format!("expected a variable name after the type `{ty}`")));
+                        };
+                        self.advance();
+                        Ok(Pattern::Binding(Binding {
+                            name: Some(name_token.ident_value()?.to_string()),
+                            ty,
+                            default: None,
+                            span: token.span.to(name_token.span),
+                        }))
+                    }
+                    Err(_) => {
+                        self.position = saved;
+                        self.parse_paren_pattern()
+                    }
+                }
+            }
+            _ => Ok(Pattern::Binding(self.parse_typed_binding()?)),
+        }
+    }
+
+    /// Parses `( p )`, which is `p`, or `( p, .. )`, a tuple pattern.
+    fn parse_paren_pattern(&mut self) -> ParseResult<Pattern> {
+        let start = self.expect(TokenKind::LParen)?.span.start;
+        if self.at(TokenKind::RParen) {
+            return Err(self.error("expected a pattern: `()` has no values to bind"));
+        }
+        let first = self.parse_pattern()?;
+        if self.eat(TokenKind::RParen) {
+            return Ok(first);
+        }
+        self.expect([TokenKind::Comma, TokenKind::RParen])?;
+        let mut items = vec![first];
+        while !self.at(TokenKind::RParen) {
+            items.push(self.parse_pattern()?);
+            if !self.eat(TokenKind::Comma) {
+                break;
+            }
+        }
+        self.expect(TokenKind::RParen)?;
+        Ok(Pattern::Tuple(items, self.span_since(start)))
+    }
+
+    /// Parses the results after `->`: `T`, `T name`, or a comma-separated
+    /// list of either. Every result must be named, or none.
+    fn parse_return_list(&mut self) -> ParseResult<Vec<Binding>> {
+        let mut returns = vec![self.parse_return_type()?];
+        while self.eat(TokenKind::Comma) {
+            returns.push(self.parse_return_type()?);
+        }
+        let named = returns[0].name.is_some();
+        if let Some(mixed) = returns.iter().find(|r| r.name.is_some() != named) {
+            return Err(ParseError::new(
+                "name every result or none of them",
+                mixed.span,
+            ));
+        }
+        Ok(returns)
     }
 
     fn parse_return_type(&mut self) -> ParseResult<Binding> {
@@ -534,9 +798,19 @@ impl<'a> Parser<'a> {
         if let Some(op) = IncDecOp::from_token(kind) {
             return Ok((StmtKind::IncDec { target, op }, None));
         }
-        let (value, trailing) = self.parse_guarded_expression()?;
+        let ExprList {
+            expr: value,
+            trailing,
+            is_list,
+        } = self.parse_expr_list()?;
         let value = Box::new(value);
         let kind = match BinOp::from_compound_assign_token(kind) {
+            Some(_) if is_list => {
+                return Err(ParseError::new(
+                    "compound assignment takes a single value, not a list",
+                    value.span,
+                ));
+            }
             Some(op) => StmtKind::CompoundAssign { target, op, value },
             None => StmtKind::Assign { target, value },
         };
@@ -550,6 +824,12 @@ impl<'a> Parser<'a> {
         let mut left = self.nud(token)?;
 
         while let Some(t) = self.peek() {
+            // `.N` binds tighter than every prefix and infix operator.
+            if t.kind == TokenKind::Period {
+                self.advance();
+                left = self.parse_field(left)?;
+                continue;
+            }
             let Some(info) = infix_info(&t.kind) else {
                 break;
             };
@@ -655,19 +935,62 @@ impl<'a> Parser<'a> {
                 }
             }
             TokenKind::LParen => {
-                let expr = self.parse_expression()?;
+                // `()` is unit, `(e)` is `e`, `(e,)` and `(e, f, ..)` are tuples.
+                if self.eat(TokenKind::RParen) {
+                    return Ok(Expr {
+                        kind: ExprKind::Tuple(Vec::new()),
+                        span: self.span_since(start),
+                    });
+                }
+                let first = self.parse_expression()?;
+                if self.eat(TokenKind::RParen) {
+                    return Ok(Expr {
+                        kind: first.kind,
+                        span: self.span_since(start),
+                    });
+                }
+                self.expect([TokenKind::Comma, TokenKind::RParen])?;
+                let mut elems = vec![first];
+                while !self.at(TokenKind::RParen) {
+                    elems.push(self.parse_expression()?);
+                    if !self.eat(TokenKind::Comma) {
+                        break;
+                    }
+                }
                 self.expect(TokenKind::RParen)?;
                 Ok(Expr {
-                    kind: expr.kind,
+                    kind: ExprKind::Tuple(elems),
                     span: self.span_since(start),
                 })
             }
+            TokenKind::Underscore => Ok(Expr {
+                kind: ExprKind::Wildcard,
+                span: token.span,
+            }),
             TokenKind::Loop => self.parse_loop(start),
             _ => Err(ParseError::new(
                 format!("Expected expression, found {:?}", token.kind),
                 token.span,
             )),
         }
+    }
+
+    /// Parses the index of `base.N` after its `.`.
+    fn parse_field(&mut self, base: Expr) -> ParseResult<Expr> {
+        let token = match self.peek() {
+            Some(t) if t.kind == TokenKind::Int => t,
+            _ => return Err(self.error("expected a tuple index after `.`")),
+        };
+        self.advance();
+        let index = u32::try_from(token.int_value()?)
+            .map_err(|_| ParseError::new("tuple index is too large", token.span))?;
+        Ok(Expr {
+            span: base.span.to(token.span),
+            kind: ExprKind::Field {
+                base: Box::new(base),
+                index,
+            },
+        })
     }
 
     /// Left-denotation: continues `left` with a binary infix operator.

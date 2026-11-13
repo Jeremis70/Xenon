@@ -65,7 +65,8 @@ use crate::types::Type;
 
 use super::{
     BasicBlock, Body, BodyBuilder, BuildError, Constant, FnDecl, FnSig, Local, LocalDecl,
-    MirProgram, Operand, ProgramError, Rvalue, START_BLOCK, SourceInfo, TerminatorKind,
+    MirProgram, Operand, ProgramError, RETURN_PLACE, Rvalue, START_BLOCK, SourceInfo,
+    TerminatorKind,
 };
 use scope::Scopes;
 
@@ -209,18 +210,28 @@ impl<'thir> Builder<'thir> {
         let function = self.function;
         let source_info = SourceInfo::outermost(function.span);
 
-        if let Some(binding) = function.named_return {
-            let local = self.declare_binding(START_BLOCK, binding)?;
-            let zero = zero_rvalue(&function.bindings[binding].ty)?;
-            self.cfg
-                .push_assign(START_BLOCK, source_info, local.into(), zero);
+        // Named results start uninitialized: flow analysis requires each to
+        // be assigned on every path that reads it.
+        for &binding in &function.named_returns {
+            self.declare_binding(START_BLOCK, binding)?;
         }
 
         let flow = self.lower_block(START_BLOCK, &function.body)?;
-        // Leaves the outermost scope, which holds the named return value.
+        // Leaves the outermost scope, which holds the named results.
         if let Flow::Continue(end, ()) = self.pop_scope(flow, function.span) {
-            self.cfg
-                .terminate(end, source_info, TerminatorKind::EndOfBody);
+            if function.return_ty.is_unit() {
+                // Falling off the end of a `()` function returns `()`.
+                self.cfg.push_assign(
+                    end,
+                    source_info,
+                    RETURN_PLACE.into(),
+                    Rvalue::Use(Operand::constant(Constant::unit())),
+                );
+                self.cfg.terminate(end, source_info, TerminatorKind::Return);
+            } else {
+                self.cfg
+                    .terminate(end, source_info, TerminatorKind::EndOfBody);
+            }
         }
         Ok(self.cfg.finish()?)
     }
@@ -247,5 +258,6 @@ fn local_decl(binding: &thir::Binding, source_info: SourceInfo) -> LocalDecl {
         ty: binding.ty.clone(),
         source_info,
         debug_name: binding.name.clone(),
+        is_named_result: binding.kind == thir::BindingKind::NamedReturn,
     }
 }

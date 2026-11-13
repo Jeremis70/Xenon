@@ -19,15 +19,59 @@ impl PartialEq for Binding {
     }
 }
 
+/// The left-hand side of a destructuring `let`.
+#[derive(Debug, Clone)]
+pub enum Pattern {
+    /// `<type> <name>`: declares a variable.
+    Binding(Binding),
+    /// `p1, p2, ..` or `(p1, p2, ..)`: destructures a tuple of the same
+    /// arity. `(p,)` is a one-element tuple; `(p)` is just `p`.
+    Tuple(Vec<Pattern>, Span),
+    /// `_`: ignores the value.
+    Wildcard(Span),
+}
+
+impl Pattern {
+    /// The source range of the pattern.
+    pub fn span(&self) -> Span {
+        match self {
+            Pattern::Binding(binding) => binding.span,
+            Pattern::Tuple(_, span) | Pattern::Wildcard(span) => *span,
+        }
+    }
+}
+
+impl PartialEq for Pattern {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Pattern::Binding(a), Pattern::Binding(b)) => a == b,
+            (Pattern::Tuple(a, _), Pattern::Tuple(b, _)) => a == b,
+            (Pattern::Wildcard(_), Pattern::Wildcard(_)) => true,
+            _ => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum StmtKind {
-    Return(Box<Expr>),
+    /// `return value;`, or a bare `return;` (`None`), which returns the
+    /// named results, or `()`.
+    Return(Option<Box<Expr>>),
     Expr(Box<Expr>),
 
     /// Variable declaration: `<type> <name> = <expr>;`
     VarDecl(Binding),
-    /// Assignment: `<place> = <value>`. The target is a place expression
-    /// ([`ExprKind::Ident`] or [`ExprKind::Deref`]).
+    /// Destructuring declaration: `let i32 a, (bool b, _) = <expr>;`.
+    ///
+    /// `pattern` is never a plain [`Pattern::Binding`]; that form is a
+    /// [`StmtKind::VarDecl`].
+    Destructure {
+        pattern: Pattern,
+        init: Box<Expr>,
+    },
+    /// Assignment: `<target> = <value>`. The target is a place expression
+    /// ([`ExprKind::Ident`], [`ExprKind::Deref`], [`ExprKind::Field`]), `_`,
+    /// or a tuple of targets: `a, b = b, a` assigns in parallel.
     Assign {
         target: Box<Expr>,
         value: Box<Expr>,
@@ -91,6 +135,16 @@ pub enum ExprKind {
     AddressOf(Box<Expr>),
     /// Dereference operator (`*p`). Also valid as an assignment target.
     Deref(Box<Expr>),
+    /// Tuple expression: `(a, b)`, `(a,)`, the unit value `()`, or a bare
+    /// list `a, b` where a statement allows one.
+    Tuple(Vec<Expr>),
+    /// Tuple element access `t.0`. A place when `base` is one.
+    Field {
+        base: Box<Expr>,
+        index: u32,
+    },
+    /// `_`. Only valid as an assignment target, where it discards a value.
+    Wildcard,
 
     // Function call
     Call {
@@ -139,12 +193,24 @@ impl PartialEq for Expr {
 }
 
 impl Expr {
-    /// Returns `true` when this expression denotes an assignable location.
-    ///
-    /// Only bare identifiers and dereferences are places today; indexing and
-    /// field access will extend this once those forms exist.
+    /// Returns `true` when this expression denotes an assignable location:
+    /// a variable, a dereference, or an element of a place.
     pub fn is_place(&self) -> bool {
-        matches!(self.kind, ExprKind::Ident(_) | ExprKind::Deref(_))
+        match &self.kind {
+            ExprKind::Ident(_) | ExprKind::Deref(_) => true,
+            ExprKind::Field { base, .. } => base.is_place(),
+            _ => false,
+        }
+    }
+
+    /// Returns `true` when this expression can be assigned to with `=`: a
+    /// place, `_`, or a non-empty tuple of such targets.
+    pub fn is_assign_target(&self) -> bool {
+        match &self.kind {
+            ExprKind::Wildcard => true,
+            ExprKind::Tuple(elems) => !elems.is_empty() && elems.iter().all(Expr::is_assign_target),
+            _ => self.is_place(),
+        }
     }
 }
 
@@ -251,7 +317,10 @@ pub struct Attribute {
 pub struct Function {
     pub name: String,
     pub params: Vec<Binding>,
-    pub return_type: Binding,
+    /// The results after `->`, in order: `-> i32`, `-> i32 r`, or
+    /// `-> i32 q, i32 r`. Either every result is named or none is. Empty
+    /// when the `->` is omitted, which means `-> ()`.
+    pub returns: Vec<Binding>,
     pub body: Vec<Stmt>,
     pub attributes: Vec<Attribute>,
     pub span: Span,
@@ -261,9 +330,26 @@ impl PartialEq for Function {
     fn eq(&self, other: &Self) -> bool {
         self.name == other.name
             && self.params == other.params
-            && self.return_type == other.return_type
+            && self.returns == other.returns
             && self.body == other.body
             && self.attributes == other.attributes
+    }
+}
+
+impl Function {
+    /// The return type: `()` without results, the type of a single result,
+    /// or the tuple of several results' types.
+    pub fn return_ty(&self) -> Type {
+        match self.returns.as_slice() {
+            [] => Type::unit(),
+            [single] => single.ty.clone(),
+            results => Type::Tuple(results.iter().map(|r| r.ty.clone()).collect()),
+        }
+    }
+
+    /// Whether the results are named (`-> i32 q, i32 r`).
+    pub fn has_named_results(&self) -> bool {
+        self.returns.iter().any(|result| result.name.is_some())
     }
 }
 

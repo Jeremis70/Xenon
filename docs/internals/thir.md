@@ -33,6 +33,7 @@ AST ──typecheck::check_program──▶ THIR ──mir::build_mir──▶ M
 | `middle/typecheck/expr.rs` | Expressions, places, literals, and calls. |
 | `middle/typecheck/operator.rs` | Unary, binary, compound, shift, and comparison operators. |
 | `middle/typecheck/stmt.rs` | Blocks, statements, `break`, and loops. |
+| `middle/typecheck/tuple.rs` | Tuple expressions, `.N`, destructuring `let`, parallel assignment, and bare `return`. |
 
 ## Typing rules
 
@@ -52,8 +53,31 @@ AST ──typecheck::check_program──▶ THIR ──mir::build_mir──▶ M
   and `!=`, and only to the same pointer type.
 - **Logical operators** `and`, `or`, and `xor` take `bool` operands and
   evaluate both sides. MIR lowers them to `BitAnd`, `BitOr`, and `BitXor`.
-- **Places** are bindings and dereferences. A binding of type `&T` is
-  dereferenced automatically wherever it is used.
+- **Places** are bindings, dereferences, and elements (`.N`) of places. A
+  binding or tuple element of type `&T` is dereferenced automatically
+  wherever it is used.
+- **Tuples.** A tuple literal gives each element the matching element of
+  its expected tuple type, if the arities agree. A tuple literal of the
+  wrong length is reported as an arity mismatch ("expected 2 values, found
+  3"), a non-tuple counting as one value. Tuples compare only with `==` and
+  `!=`, only against the same type, and not when they contain references.
+  THIR keeps such a comparison as a `Binary` on tuple operands, which MIR
+  construction expands.
+- **Destructuring and parallel assignment are desugared** into ordinary
+  statements over unnamed temporaries (bindings with no name):
+  - `let i32 a, i32 b = e1, e2;` matches a tuple literal element by element
+    and becomes `let a = e1; let b = e2;`. Every initializer is checked
+    before any name is declared. Any other initializer is stored in a
+    temporary and destructured with `.N` reads.
+  - `a, b = e1, e2;` stores each value in a temporary, left to right, then
+    assigns each target, left to right. A target assigned twice, or a
+    tuple together with one of its elements, is an error.
+  - `_` evaluates its value for side effects and drops it.
+- **Results.** `-> i32 q, i32 r` declares two `NamedReturn` bindings and
+  returns `(i32, i32)`. A bare `return;` returns the named results (a tuple
+  of them if there are several), or `()` in a `()` function, and is an
+  error if a named result is shadowed at that point. A function without
+  `->` returns `()`.
 - **Address expressions.** Address literals require a pointer/reference type
   from context. `@place` produces a reference when a reference is expected,
   and a raw pointer otherwise. In operand or conditional-branch pairs, a

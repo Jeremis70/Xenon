@@ -517,3 +517,77 @@ fn backend_complements_literal_zero_sized_integers() {
         assert_eq!(code, 7, "`~0` as `{ty}`");
     }
 }
+
+#[cfg(feature = "llvm-backend")]
+#[test]
+fn backend_runs_tuples_and_multiple_results() {
+    // Each check adds a distinct bit when it holds.
+    let code = compile_and_run(concat!(
+        "fn divmod(i32 n, i32 d) -> i32 q, i32 r {\n",
+        "    q = n / d;\n",
+        "    r = n % d;\n",
+        "    return;\n",
+        "}\n",
+        "fn pair() -> i32, bool { return 7, true; }\n",
+        "fn nothing() {}\n",
+        "#[entry]\n",
+        "fn main() -> i32 {\n",
+        "    let i32 q, i32 r = divmod(17, 5);\n",
+        "    q, r = r, q;\n",
+        "    let (i32, i32) p = (12, 13);\n",
+        "    p.0, p.1 = p.1, p.0;\n",
+        "    let i32 a, (bool b, _) = 1, (true, 5);\n",
+        "    let _, bool ok = pair();\n",
+        "    nothing();\n",
+        "    let i32 total = 0;\n",
+        "    total += 1 if (q, r) == (2, 3);\n",
+        "    total += 2 if p == (13, 12);\n",
+        "    total += 4 if ok and b;\n",
+        "    total += 8 if (a, ()) != (2, ());\n",
+        "    total += 16 if divmod(9, 4).1 == 1;\n",
+        "    total += 32 if pair() == (7, true);\n",
+        "    return total;\n",
+        "}\n",
+    ));
+    assert_eq!(code, 63);
+}
+
+#[cfg(feature = "llvm-backend")]
+#[test]
+fn backend_evaluates_tuple_comparisons_in_order() {
+    let code = compile_and_run(concat!(
+        "fn log(*i32 trace, i32 v) -> i32 {\n",
+        "    *trace = *trace * 10 + v;\n",
+        "    return v;\n",
+        "}\n",
+        "#[entry]\n",
+        "fn main() -> i32 {\n",
+        "    let i32 trace = 0;\n",
+        "    let *i32 p = @trace;\n",
+        "    let i32 total = 0;\n",
+        "    total += 1 unless (log(p, 1), log(p, 2)) == (log(p, 3), log(p, 4));\n",
+        "    total += 2 if trace == 1234;\n",
+        "    trace = 0;\n",
+        "    total += 4 unless (log(p, 5), log(p, 6)) != (log(p, 5), log(p, 6));\n",
+        "    total += 8 if trace == 5656;\n",
+        "    return total;\n",
+        "}\n",
+    ));
+    assert_eq!(code, 15);
+}
+
+#[test]
+fn unassigned_named_result_is_a_flow_error() {
+    let diagnostic = single_json_diagnostic(
+        "check",
+        concat!(
+            "fn f(bool c) -> i32 q, i32 r { q = 1; if c { r = 2; } return; }\n",
+            "#[entry] fn main() -> i32 { let i32 a, i32 b = f(true); return a; }\n",
+        ),
+    );
+    let message = diagnostic["message"].as_str().expect("message");
+    assert!(
+        message.contains("named result `r` is not assigned on every path"),
+        "{diagnostic}"
+    );
+}
