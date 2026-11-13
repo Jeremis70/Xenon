@@ -380,14 +380,15 @@ fn return_ends_storage_of_every_scope() {
 }
 
 #[test]
-fn named_return_value_is_a_zero_initialized_local() {
-    let dump = mir("fn f()->i32 r { r += 2; return r; }");
+fn named_return_value_is_an_uninitialized_local() {
+    let dump = mir("fn f()->i32 r { r = 3; r += 2; return r; }");
+    assert!(!dump.contains("const 0_i32"), "{dump}");
     assert_in_order(
         &dump,
         &[
             "debug r => _1;",
             "StorageLive(_1);",
-            "_1 = const 0_i32;",
+            "_1 = const 3_i32;",
             "_1 = Add(copy _1, const 2_i32);",
             "_0 = copy _1;",
             "StorageDead(_1);",
@@ -405,4 +406,95 @@ fn built_bodies_contain_only_built_terminators() {
         .iter()
         .any(|block| matches!(block.terminator.kind, TerminatorKind::EndOfBody));
     assert!(has_end);
+}
+
+// ── Tuples ────────────────────────────────────────────────────────────────────
+
+#[test]
+fn tuples_are_built_by_aggregates_and_written_by_element() {
+    let dump = mir("fn f(i32 a)->i32 { let (i32, bool) t = (a, true); t.0 += 1; return t.0; }");
+    assert_in_order(
+        &dump,
+        &[
+            "debug t => _2;",
+            "_2 = (copy _1, const true);",
+            "_2.0 = Add(copy _2.0, const 1_i32);",
+            "_0 = copy _2.0;",
+        ],
+    );
+}
+
+#[test]
+fn multiple_named_results_are_returned_as_a_tuple() {
+    let dump = mir("fn f()->i32 q, bool r { q = 1; r = true; return; }");
+    assert_in_order(
+        &dump,
+        &[
+            "fn f() -> (i32, bool) {",
+            "debug q => _1;",
+            "debug r => _2;",
+            "_1 = const 1_i32;",
+            "_2 = const true;",
+            "_0 = (copy _1, copy _2);",
+            "return;",
+        ],
+    );
+}
+
+#[test]
+fn unit_function_falls_off_the_end_with_unit() {
+    let dump = mir("fn f() { let i32 x = 1; }");
+    assert_in_order(
+        &dump,
+        &[
+            "fn f() -> () {",
+            "StorageDead(_1);",
+            "_0 = const ();",
+            "return;",
+        ],
+    );
+    assert!(!dump.contains("end_of_body"), "{dump}");
+}
+
+#[test]
+fn tuple_equality_evaluates_both_sides_before_comparing() {
+    let dump = mir("fn g(i32 x)->(i32, i32) { return x, x; }\n\
+         fn f()->bool { return g(1) == g(2); }");
+    let f = &dump[dump.find("fn f()").expect("f is dumped")..];
+    // Each call runs exactly once, both before any element comparison.
+    assert_eq!(f.matches("= g(").count(), 2, "{f}");
+    assert_in_order(
+        f,
+        &[
+            "_1 = g(const 1_i32)",
+            "_2 = g(const 2_i32)",
+            "_3 = Eq(copy _1.0, copy _2.0);",
+            "_4 = Eq(copy _1.1, copy _2.1);",
+            "_5 = BitAnd(copy _3, copy _4);",
+            "_0 = copy _5;",
+        ],
+    );
+}
+
+#[test]
+fn tuple_inequality_negates_the_element_comparison() {
+    let dump = mir("fn f((i32, bool) a, (i32, bool) b)->bool { return a != b; }");
+    assert_in_order(
+        &dump,
+        &[
+            "_3 = Eq(copy _1.0, copy _2.0);",
+            "_4 = Eq(copy _1.1, copy _2.1);",
+            "_5 = BitAnd(copy _3, copy _4);",
+            "_0 = Not(copy _5);",
+        ],
+    );
+}
+
+#[test]
+fn tuple_equality_snapshots_a_place_before_side_effects() {
+    // `g` may change `t` through the pointer, so `t` is read first.
+    let dump = mir("fn g(*(i32, i32) p)->(i32, i32) { return 1, 2; }\n\
+         fn f()->bool { let (i32, i32) t = (1, 2); return t == g(@t); }");
+    let f = &dump[dump.find("fn f()").expect("f is dumped")..];
+    assert_in_order(f, &["_2 = copy _1;", "= g(", "Eq(copy _2.0,"]);
 }

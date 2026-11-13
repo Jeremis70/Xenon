@@ -51,6 +51,9 @@ pub enum MutatingUseContext {
     Call,
     /// Its address is taken; it may be modified through the pointer.
     AddressOf,
+    /// Part of it is written, as in `_1.0 = ..`: the rest keeps its value,
+    /// so the local must already hold one.
+    Projection,
 }
 
 /// Kinds of [`PlaceContext::NonUse`].
@@ -217,7 +220,7 @@ macro_rules! make_mir_visitor {
 
             /// Walks the children of a local declaration.
             fn super_local_decl(&mut self, _local: Local, decl: &$($mutability)? LocalDecl) {
-                let LocalDecl { ty: _, source_info, debug_name: _ } = decl;
+                let LocalDecl { ty: _, source_info, debug_name: _, is_named_result: _ } = decl;
                 self.visit_source_info(source_info);
             }
 
@@ -326,6 +329,11 @@ macro_rules! make_mir_visitor {
                         let context = PlaceContext::MutatingUse(MutatingUseContext::AddressOf);
                         self.visit_place(place, context, location);
                     }
+                    Rvalue::Aggregate(_, operands) => {
+                        for operand in iter_items!(operands, $($mutability)?) {
+                            self.visit_operand(operand, location);
+                        }
+                    }
                 }
             }
 
@@ -352,6 +360,16 @@ macro_rules! make_mir_visitor {
             ) {
                 let local_context = if place.is_indirect() {
                     PlaceContext::NonMutatingUse(NonMutatingUseContext::Projection)
+                } else if !place.projection.is_empty()
+                    && matches!(
+                        context,
+                        PlaceContext::MutatingUse(
+                            MutatingUseContext::Store | MutatingUseContext::Call
+                        )
+                    )
+                {
+                    // Writing an element is not a definition of the local.
+                    PlaceContext::MutatingUse(MutatingUseContext::Projection)
                 } else {
                     context
                 };

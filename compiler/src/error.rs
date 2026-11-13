@@ -2,9 +2,28 @@ use crate::source::Span;
 use crate::types::Type;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-#[error("lexing error at {span:?}")]
+#[error("{message} at {span:?}")]
 pub struct LexError {
     pub span: Span,
+    pub message: &'static str,
+}
+
+impl LexError {
+    /// Input that no token matches.
+    pub fn invalid_token(span: Span) -> Self {
+        Self {
+            span,
+            message: "invalid token",
+        }
+    }
+
+    /// A number after `.` that is not a plain decimal tuple index.
+    pub fn invalid_tuple_index(span: Span) -> Self {
+        Self {
+            span,
+            message: "invalid tuple index: expected plain decimal digits without a leading zero",
+        }
+    }
 }
 
 pub type LexResult<T> = Result<T, LexError>;
@@ -122,7 +141,9 @@ pub enum SemanticError {
         ty: Type,
         span: Span,
     },
-    #[error("named return value cannot have reference type `{ty}`: it has no initial value")]
+    #[error(
+        "named result cannot have reference type `{ty}`: a reference is bound at its declaration, and a named result has none"
+    )]
     ReferenceNamedReturn { ty: Type, span: Span },
     #[error("loop cannot have reference type `{ty}`")]
     ReferenceLoop { ty: Type, span: Span },
@@ -132,6 +153,36 @@ pub enum SemanticError {
         first_span: Span,
         span: Span,
     },
+    #[error("expected {expected} value(s), found {found}")]
+    TupleArityMismatch {
+        expected: usize,
+        found: usize,
+        span: Span,
+    },
+    #[error("tuple `{ty}` has no element {index}")]
+    TupleIndexOutOfRange { index: u32, ty: Type, span: Span },
+    #[error("`.{index}` needs a tuple, found `{found}`")]
+    NotATuple {
+        index: u32,
+        found: String,
+        span: Span,
+    },
+    #[error(
+        "a bare `return;` needs named results or a `()` return type; this function returns `{ty}`"
+    )]
+    BareReturnWithoutNamedResults { ty: Type, span: Span },
+    #[error("bare `return` would return the named result `{name}`, which is shadowed here")]
+    ShadowedNamedResult {
+        name: String,
+        shadow_span: Span,
+        span: Span,
+    },
+    #[error("`{target}` is assigned more than once in this assignment")]
+    DuplicateAssignTarget { target: String, span: Span },
+    #[error("`{name}` is bound more than once in this pattern")]
+    DuplicatePatternBinding { name: String, span: Span },
+    #[error("`_` can only be assigned to, not read")]
+    WildcardAsValue { span: Span },
 }
 
 pub type SemanticResult<T> = Result<T, SemanticError>;
@@ -140,6 +191,14 @@ impl SemanticError {
     pub fn span(&self) -> Option<Span> {
         match self {
             SemanticError::ConstantOutOfRange { span, .. }
+            | SemanticError::TupleArityMismatch { span, .. }
+            | SemanticError::TupleIndexOutOfRange { span, .. }
+            | SemanticError::NotATuple { span, .. }
+            | SemanticError::BareReturnWithoutNamedResults { span, .. }
+            | SemanticError::ShadowedNamedResult { span, .. }
+            | SemanticError::DuplicateAssignTarget { span, .. }
+            | SemanticError::DuplicatePatternBinding { span, .. }
+            | SemanticError::WildcardAsValue { span }
             | SemanticError::TypeMismatch { span, .. }
             | SemanticError::ConditionNotBool { span, .. }
             | SemanticError::ReturnTypeMismatch { span, .. }

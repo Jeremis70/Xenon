@@ -57,6 +57,16 @@ pub enum AnalysisErrorKind {
         local: Local,
     },
 
+    /// A named result is read before it is assigned on every path, most
+    /// often by a `return` that returns it.
+    #[error("named result `{name}` is not assigned on every path to this point")]
+    UnassignedNamedResult {
+        /// The source name of the result.
+        name: String,
+        /// The local holding the result.
+        local: Local,
+    },
+
     /// A return reads `_0` before assigning the return value.
     #[error("return value may be uninitialized")]
     UninitializedReturn,
@@ -229,6 +239,15 @@ fn check_body(program: &MirProgram, body: &Body) -> Vec<AnalysisError> {
             let kind = match local {
                 None => AnalysisErrorKind::MissingReturn,
                 Some(RETURN_PLACE) => AnalysisErrorKind::UninitializedReturn,
+                Some(local) if body.local_decls()[local].is_named_result => {
+                    AnalysisErrorKind::UnassignedNamedResult {
+                        name: body.local_decls()[local]
+                            .debug_name
+                            .clone()
+                            .unwrap_or_else(|| local.to_string()),
+                        local,
+                    }
+                }
                 Some(local) => AnalysisErrorKind::UninitializedLocal {
                     name: body.local_decls()[local]
                         .debug_name
@@ -308,7 +327,9 @@ struct InitWalker<'a> {
 impl Visitor for InitWalker<'_> {
     fn visit_local(&mut self, local: &Local, context: PlaceContext, location: Location) {
         match context {
-            PlaceContext::NonMutatingUse(_) => {
+            // Writing one element keeps the others, which must hold values.
+            PlaceContext::NonMutatingUse(_)
+            | PlaceContext::MutatingUse(MutatingUseContext::Projection) => {
                 if !self.state[*local]
                     && let Some(reads) = &mut self.uninitialized_reads
                 {

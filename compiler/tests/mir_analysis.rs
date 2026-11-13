@@ -62,6 +62,32 @@ fn error(src: &str) -> AnalysisErrorKind {
 }
 
 #[test]
+fn named_result_must_be_assigned_on_every_path() {
+    assert!(matches!(
+        error("fn f(bool c)->i32 r { if c { r = 1; } return r; }"),
+        AnalysisErrorKind::UnassignedNamedResult { ref name, .. } if name == "r"
+    ));
+}
+
+#[test]
+fn named_result_read_before_assignment_is_an_error() {
+    assert!(matches!(
+        error("fn f()->i32 r { r += 2; return r; }"),
+        AnalysisErrorKind::UnassignedNamedResult { ref name, .. } if name == "r"
+    ));
+}
+
+#[test]
+fn named_result_assigned_on_every_path_is_accepted() {
+    checked("fn f(bool c)->i32 r { if c { r = 1; } else { r = 2; } return r; }");
+}
+
+#[test]
+fn unassigned_named_result_is_fine_when_not_returned() {
+    checked("fn f()->i32 r { return 5; }");
+}
+
+#[test]
 fn reachable_fallthrough_is_a_missing_return() {
     assert!(matches!(
         error("fn f()->i32 { let i32 x = 0; }"),
@@ -474,5 +500,68 @@ fn runtime_mir_rejects_zero_sized_computation() {
             .iter()
             .any(|error| error.kind == VerifyErrorKind::ZeroSizedComputation),
         "{errors}"
+    );
+}
+
+/// `fn f() -> i32` whose body stores `const 1` into `t.0` of an
+/// uninitialized tuple `t`, then returns `t.1`.
+fn element_store_program() -> (MirProgram, Local) {
+    let mut program = MirProgram::new();
+    let def_id = program.declare(FnDecl {
+        name: "f".to_owned(),
+        sig: FnSig {
+            inputs: vec![],
+            output: Type::Int(32),
+        },
+        span: Span::ZERO,
+    });
+    let mut builder = BodyBuilder::new(def_id, Span::ZERO, Type::Int(32), []);
+    let pair = Type::Tuple(vec![Type::Int(32), Type::Int(32)]);
+    let t = builder.new_local(LocalDecl::named(pair, "t", SI));
+    let start = BasicBlock::new(0);
+    builder.storage_live(start, SI, t);
+    builder.push_assign(
+        start,
+        SI,
+        xenonc::middle::mir::Place::from(t).field(0),
+        Rvalue::Use(Operand::constant(Constant::int(1, Type::Int(32)))),
+    );
+    builder.push_assign(
+        start,
+        SI,
+        Local::new(0).into(),
+        Rvalue::Use(Operand::Copy(xenonc::middle::mir::Place::from(t).field(1))),
+    );
+    builder.terminate(start, SI, TerminatorKind::Return);
+    program
+        .set_body(builder.finish().expect("well-formed body"))
+        .expect("declared function");
+    (program, t)
+}
+
+#[test]
+fn element_store_does_not_initialize_a_tuple() {
+    let (mut program, _) = element_store_program();
+    let errors = analyze_program(&mut program, &TARGET).expect_err("t has no value");
+    assert!(matches!(
+        errors.0[0].kind,
+        AnalysisErrorKind::UninitializedLocal { ref name, .. } if name == "t"
+    ));
+}
+
+#[test]
+fn element_store_is_a_use_for_liveness() {
+    let (program, t) = element_store_program();
+    let body = program.body(DefId::new(0)).expect("body");
+    // The store keeps the other element, so `t` is live into the block.
+    assert!(analyze_liveness(body).is_live_in(BasicBlock::new(0), t));
+}
+
+#[test]
+fn tuple_programs_pass_flow_analysis() {
+    checked(
+        "fn g()->(i32, bool) { return 1, true; }\n\
+         fn f()->i32 { let i32 a, bool b = g(); let (i32, bool) t = g(); \
+         t.0 = a; a, t.1 = t.0, b; return a if t == (1, true) else 0; }",
     );
 }

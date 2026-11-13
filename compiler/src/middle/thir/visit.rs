@@ -83,6 +83,7 @@ pub fn walk_expr<'thir, V: Visitor<'thir>>(visitor: &mut V, expr: &'thir Expr) {
     match &expr.kind {
         ExprKind::Literal(_) | ExprKind::Binding(_) => {}
         ExprKind::Deref(operand)
+        | ExprKind::Field { base: operand, .. }
         | ExprKind::Unary { operand, .. }
         | ExprKind::Cast { operand, .. }
         | ExprKind::AddressOf { place: operand, .. } => visitor.visit_expr(operand),
@@ -90,7 +91,7 @@ pub fn walk_expr<'thir, V: Visitor<'thir>>(visitor: &mut V, expr: &'thir Expr) {
             visitor.visit_expr(lhs);
             visitor.visit_expr(rhs);
         }
-        ExprKind::Call { args, .. } => {
+        ExprKind::Call { args, .. } | ExprKind::Tuple(args) => {
             for arg in args {
                 visitor.visit_expr(arg);
             }

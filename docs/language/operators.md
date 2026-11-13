@@ -89,12 +89,14 @@ rules, but Xenon's lifetime and aliasing rules are not finalized.
 | `or` | Logical OR |
 | `xor` | Logical XOR |
 | `not` | Logical NOT |
-| `==`, `!=` | Equality and inequality |
+| `==`, `!=` | Equality and inequality (also element-wise on tuples) |
 | `<`, `>`, `<=`, `>=` | Comparison |
 
 ## Assignment variants
 
 - Compound assignment includes arithmetic and bitwise forms (for example `+=`, `&=`, `>>=`).
+- Parallel assignment `a, b = b, a` evaluates every value before storing
+  any; see [Syntax Basics](syntax-basics.md#tuples-and-parallel-assignment).
 - Increment/decrement (`++`, `--`) are statement-only in the draft notes.
 
 ## Overflow modes

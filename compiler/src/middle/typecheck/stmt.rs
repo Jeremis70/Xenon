@@ -21,18 +21,23 @@ impl FnCtxt<'_, '_> {
         fallback: Span,
     ) -> SemanticResult<Block> {
         self.scopes.push();
+        let mut out = Vec::with_capacity(stmts.len());
         let result = stmts
             .iter()
-            .map(|stmt| self.check_stmt(stmt))
-            .collect::<SemanticResult<_>>();
+            .try_for_each(|stmt| self.check_stmt(stmt, &mut out));
         self.scopes.pop();
+        result?;
         Ok(Block {
-            stmts: result?,
+            stmts: out,
             span: Self::block_span(stmts, fallback),
         })
     }
 
-    fn check_stmt(&mut self, stmt: &ast::Stmt) -> SemanticResult<Stmt> {
+    /// Checks `stmt`, appending the THIR statements it becomes to `out`.
+    ///
+    /// Most statements become one THIR statement; destructuring and
+    /// parallel assignment become several (see the `tuple` module).
+    fn check_stmt(&mut self, stmt: &ast::Stmt, out: &mut Vec<Stmt>) -> SemanticResult<()> {
         let span = stmt.span;
         let kind = match &stmt.kind {
             AstStmt::VarDecl(binding) => {
@@ -45,11 +50,17 @@ impl FnCtxt<'_, '_> {
                 let binding = self.declare(binding, BindingKind::Local);
                 StmtKind::Let { binding, init }
             }
+            AstStmt::Destructure { pattern, init } => {
+                return self.check_destructure(pattern, init, span, out);
+            }
             AstStmt::Expr(expr) => StmtKind::Expr(self.check_expr(expr, None)?),
-            AstStmt::Assign { target, value } => {
+            AstStmt::Assign { target, value } if target.is_place() => {
                 let place = self.check_place(target)?;
                 let value = self.check_expr_has_type(value, &place.ty)?;
                 StmtKind::Assign { place, value }
+            }
+            AstStmt::Assign { target, value } => {
+                return self.check_parallel_assign(target, value, span, out);
             }
             AstStmt::CompoundAssign { target, op, value } => {
                 let place = self.check_place(target)?;
@@ -76,10 +87,11 @@ impl FnCtxt<'_, '_> {
                     value: one,
                 }
             }
-            AstStmt::Return(value) => {
+            AstStmt::Return(Some(value)) => {
                 let return_ty = self.return_ty.clone();
                 StmtKind::Return(self.check_expr_has_type(value, &return_ty)?)
             }
+            AstStmt::Return(None) => StmtKind::Return(self.bare_return_value(span)?),
             AstStmt::If {
                 inverted,
                 condition,
@@ -109,11 +121,12 @@ impl FnCtxt<'_, '_> {
                 StmtKind::Continue
             }
         };
-        Ok(Stmt { kind, span })
+        out.push(Stmt { kind, span });
+        Ok(())
     }
 
     /// Checks the initializer of a variable declaration.
-    fn check_initializer(
+    pub(super) fn check_initializer(
         &mut self,
         binding: &ast::Binding,
         init: &ast::Expr,
@@ -228,7 +241,9 @@ impl FnCtxt<'_, '_> {
         let ty = frame
             .and_then(|frame| frame.break_ty.or(frame.contextual))
             .unwrap_or(Type::Int(64));
-        if matches!(ty, Type::Reference(_)) {
+        // A loop left through its condition produces the zero value of its
+        // type, and a reference has none, not even inside a tuple.
+        if ty.contains_reference() {
             return Err(SemanticError::ReferenceLoop { ty, span });
         }
         Ok(Expr {

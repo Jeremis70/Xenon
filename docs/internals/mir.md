@@ -28,10 +28,16 @@ A `Body` is one function:
 - **Statements**: `Assign(place, rvalue)`, `StorageLive`, `StorageDead`, `Nop`.
 - **Terminators**: `Goto`, `SwitchInt`, `Call`, `Assert`, `Return`,
   `Unreachable`, and `EndOfBody` (allowed only in the `Built` phase).
-- **Places**: a local plus projections, for example `(*_1)`. Arrays and
-  structs will add projection elements.
-- **Operands**: `copy place` or `const value`.
-- **Rvalues**: `Use`, `UnaryOp`, `BinaryOp`, `Overflows`, `Cast`, `AddressOf`.
+- **Places**: a local plus projections: `Deref`, as in `(*_1)`, and
+  `Field(i)`, a tuple element, as in `_1.0` or `(*_1).1`. Arrays will add
+  index projections.
+- **Operands**: `copy place` or `const value`. Constants include tuples,
+  such as `const (0_i32, false)` and the unit value `const ()`.
+- **Rvalues**: `Use`, `UnaryOp`, `BinaryOp`, `Overflows`, `Cast`,
+  `AddressOf`, and `Aggregate`, which builds a whole tuple at once:
+  `_2 = (copy _1, const true)`. Its type is derived from its operands.
+- **Tuples have no operators.** `BinaryOp` is only defined on scalars;
+  MIR construction expands tuple `==` and `!=` (see below).
 
 Example dump:
 
@@ -142,7 +148,9 @@ locals that are not initialized on every incoming path. Arguments begin
 initialized; `StorageLive` and `StorageDead` clear a local's initialized
 state. Call destinations become initialized only on the normal-return edge.
 Indirect places track initialization of their base pointer, not the memory
-they point to; aggregate field/index initialization is future work.
+they point to. Tuples are initialized as a whole (by an `Aggregate`, a call,
+or a constant); a store to one element requires the tuple to be initialized
+already, so partial initialization is never tracked.
 
 `analysis::analyze_liveness` is a reusable backward local analysis. Results
 are owned by the caller rather than cached on `Body`, so a MIR mutation cannot
@@ -217,9 +225,23 @@ Lowering rules:
   condition in a header block; a `do` loop tests it in a latch block after
   the body. Exit and latch blocks are created only when something jumps to
   them, so a loop that is never left has no exit and diverges.
-- **Named return values** are ordinary locals, zero-initialized at entry.
-- **Falling off the end** of a body ends with `EndOfBody`. Flow checking
-  reports it as a missing `return`.
+- **Named return values** are ordinary locals that start uninitialized
+  (`LocalDecl::is_named_result`). Definite-initialization analysis reports
+  any read of one that is not assigned on every path as
+  `UnassignedNamedResult`; a bare `return;` reads all of them.
+- **Tuples** are built with one `Aggregate`, so a tuple local is initialized
+  in a single step. An element store such as `_1.0 = ..` is visited with
+  `MutatingUseContext::Projection`: it is not a definition of `_1`, so flow
+  analysis requires `_1` to be initialized already and liveness counts it
+  as a use.
+- **Tuple `==` / `!=`** evaluate both operands completely, left to right,
+  into places (a left place is snapshotted if the right side has side
+  effects), then compare the elements pairwise with scalar `Eq` and fold
+  the results with `BitAnd` (`Not` for `!=`). Every call in the operands
+  runs exactly once and before any comparison.
+- **Falling off the end** of a body ends with `EndOfBody`, which flow
+  checking reports as a missing `return`, except in a function returning
+  `()`, where it becomes `_0 = const ()` and `return`.
 - **No runtime checks.** Built MIR has no overflow, division, or shift
   checks. A later pass inserts them.
 

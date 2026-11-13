@@ -207,3 +207,36 @@ fn zero_sized_integers_are_empty_structs() {
     assert!(ir.contains("define {} @add({} %0, {} %1)"), "{ir}");
     assert!(!ir.contains("i0"), "{ir}");
 }
+
+#[test]
+fn tuples_lower_to_llvm_structs() {
+    let ir = ir_for(
+        "fn divmod(i32 n, i32 d)->i32 q, i32 r { q = n / d; r = n % d; return; }\n\
+         fn swap(i32 a, i32 b)->i32, i32 { a, b = b, a; return a, b; }\n\
+         fn unit() {}\n",
+    );
+    assert!(
+        ir.contains("define { i32, i32 } @divmod(i32 %0, i32 %1)"),
+        "{ir}"
+    );
+    assert!(
+        ir.contains("define { i32, i32 } @swap(i32 %0, i32 %1)"),
+        "{ir}"
+    );
+    assert!(ir.contains("define {} @unit()"), "{ir}");
+    assert!(ir.contains("insertvalue { i32, i32 }"), "{ir}");
+}
+
+#[test]
+fn tuple_elements_are_addressed_with_struct_geps() {
+    let ir = ir_for("fn f((i32, bool) t)->bool { t.0 = 3; return t.1; }\n");
+    assert!(ir.contains("getelementptr inbounds"), "{ir}");
+    assert!(ir.contains("{ i32, i1 }"), "{ir}");
+}
+
+#[test]
+fn zero_sized_tuples_keep_their_elements() {
+    // `(i0, i0)` has no bits, but its elements must stay addressable.
+    let ir = ir_for("fn f((i0, i0) t)->i0 { return t.1; }\n");
+    assert!(ir.contains("{ {}, {} }"), "{ir}");
+}

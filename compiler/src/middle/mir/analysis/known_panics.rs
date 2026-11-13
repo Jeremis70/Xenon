@@ -188,7 +188,11 @@ impl Visitor for DefCounter {
             PlaceContext::MutatingUse(MutatingUseContext::AddressOf) => {
                 self.address_taken[*local] = true;
             }
-            PlaceContext::MutatingUse(MutatingUseContext::Store | MutatingUseContext::Call) => {
+            PlaceContext::MutatingUse(
+                MutatingUseContext::Store
+                | MutatingUseContext::Call
+                | MutatingUseContext::Projection,
+            ) => {
                 self.defs[*local] += 1;
             }
             PlaceContext::NonMutatingUse(_) | PlaceContext::NonUse(_) => {}

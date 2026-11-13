@@ -15,7 +15,7 @@ use crate::index::IndexVec;
 use crate::types::Type;
 
 use super::body::{Body, Local, LocalDecl};
-use super::syntax::{BinOp, CastKind, Operand, Place, ProjectionElem, Rvalue, UnOp};
+use super::syntax::{AggregateKind, BinOp, CastKind, Operand, Place, ProjectionElem, Rvalue, UnOp};
 
 /// Anything that owns MIR local declarations and can therefore type places.
 pub trait HasLocalDecls {
@@ -43,6 +43,9 @@ pub enum TypingError {
 
     #[error("cannot dereference a value of non-pointer type `{0}`")]
     DerefOfNonPointer(Type),
+
+    #[error("`{ty}` has no element {index}")]
+    InvalidField { ty: Type, index: u32 },
 
     #[error("`{op:?}` operands have different types `{lhs}` and `{rhs}`")]
     OperandMismatch { op: BinOp, lhs: Type, rhs: Type },
@@ -79,6 +82,13 @@ pub fn place_ty<'a>(place: &Place, decls: &'a impl HasLocalDecls) -> Result<&'a 
             ProjectionElem::Deref => ty
                 .pointee()
                 .ok_or_else(|| TypingError::DerefOfNonPointer(ty.clone()))?,
+            ProjectionElem::Field(index) => ty
+                .tuple_elems()
+                .and_then(|elems| elems.get(*index as usize))
+                .ok_or_else(|| TypingError::InvalidField {
+                    ty: ty.clone(),
+                    index: *index,
+                })?,
         };
     }
     Ok(ty)
@@ -126,6 +136,12 @@ pub fn rvalue_ty(rvalue: &Rvalue, decls: &impl HasLocalDecls) -> Result<Type, Ty
             Ok(target.clone())
         }
         Rvalue::AddressOf(kind, place) => Ok(kind.pointer_to(place_ty(place, decls)?.clone())),
+        Rvalue::Aggregate(AggregateKind::Tuple, operands) => Ok(Type::Tuple(
+            operands
+                .iter()
+                .map(|operand| operand_ty(operand, decls).cloned())
+                .collect::<Result<_, _>>()?,
+        )),
     }
 }
 
@@ -140,7 +156,7 @@ pub fn computes_on_zero_sized(
     decls: &impl HasLocalDecls,
 ) -> Result<bool, TypingError> {
     let (first, second) = match rvalue {
-        Rvalue::Use(_) | Rvalue::AddressOf(..) => return Ok(false),
+        Rvalue::Use(_) | Rvalue::AddressOf(..) | Rvalue::Aggregate(..) => return Ok(false),
         Rvalue::UnaryOp(_, operand) | Rvalue::Cast(_, operand, _) => (operand, None),
         Rvalue::BinaryOp(_, operands) | Rvalue::Overflows(_, operands) => {
             (&operands.0, Some(&operands.1))
@@ -195,7 +211,11 @@ pub fn binary_op_ty(op: BinOp, lhs: &Type, rhs: &Type) -> Result<Type, TypingErr
             lhs.is_integer() || lhs.is_float()
         }
         BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor => lhs.is_integer() || lhs.is_bool(),
-        BinOp::Eq | BinOp::Ne => true,
+        // Compound values have no comparison: MIR construction compares
+        // tuples element by element.
+        BinOp::Eq | BinOp::Ne => {
+            lhs.is_integer() || lhs.is_float() || lhs.is_bool() || lhs.is_indirect()
+        }
         BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
             lhs.is_integer() || lhs.is_float() || lhs.is_bool()
         }

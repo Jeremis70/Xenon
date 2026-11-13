@@ -534,3 +534,107 @@ fn invalid_scopes() {
         vec![VerifyErrorKind::UnknownScope(SourceScope::new(6))]
     );
 }
+
+fn pair() -> Type {
+    Type::Tuple(vec![Type::Int(32), Type::Bool])
+}
+
+#[test]
+fn well_formed_tuple_operations_have_no_errors() {
+    let errors = verify_stmts(|b| {
+        let t = b.new_local(LocalDecl::temp(pair(), Span::ZERO));
+        assign(
+            b,
+            t,
+            Rvalue::Aggregate(
+                AggregateKind::Tuple,
+                vec![
+                    int(1, Type::Int(32)),
+                    Operand::constant(Constant::bool(true)),
+                ],
+            ),
+        );
+        assign(
+            b,
+            Place::from(t).field(0),
+            Rvalue::Use(int(2, Type::Int(32))),
+        );
+        assign(b, RETURN_PLACE, Rvalue::Use(copy(Place::from(t).field(1))));
+        let z = b.new_local(LocalDecl::temp(pair(), Span::ZERO));
+        assign(
+            b,
+            z,
+            Rvalue::Use(Operand::constant(Constant::zero(&pair()).expect("zero"))),
+        );
+    });
+    assert_eq!(errors, vec![]);
+}
+
+#[test]
+fn field_of_non_tuple_or_out_of_range() {
+    let errors = verify_stmts(|b| {
+        assign(
+            b,
+            Place::from(RETURN_PLACE).field(0),
+            Rvalue::Use(Operand::constant(Constant::bool(true))),
+        );
+        let t = b.new_local(LocalDecl::temp(pair(), Span::ZERO));
+        assign(b, RETURN_PLACE, Rvalue::Use(copy(Place::from(t).field(2))));
+    });
+    assert_eq!(
+        errors,
+        vec![
+            VerifyErrorKind::Typing(TypingError::InvalidField {
+                ty: Type::Bool,
+                index: 0
+            }),
+            VerifyErrorKind::Typing(TypingError::InvalidField {
+                ty: pair(),
+                index: 2
+            }),
+        ]
+    );
+}
+
+#[test]
+fn aggregate_must_match_its_destination() {
+    let errors = verify_stmts(|b| {
+        let t = b.new_local(LocalDecl::temp(pair(), Span::ZERO));
+        assign(
+            b,
+            t,
+            Rvalue::Aggregate(AggregateKind::Tuple, vec![int(1, Type::Int(32))]),
+        );
+    });
+    assert_eq!(errors.len(), 1, "{errors:?}");
+}
+
+#[test]
+fn tuples_have_no_mir_comparison() {
+    let errors = verify_stmts(|b| {
+        let t = b.new_local(LocalDecl::temp(pair(), Span::ZERO));
+        assign(b, RETURN_PLACE, Rvalue::binary(BinOp::Eq, copy(t), copy(t)));
+    });
+    assert!(
+        matches!(
+            errors.as_slice(),
+            [VerifyErrorKind::Typing(
+                TypingError::InvalidBinaryOperand { .. }
+            )]
+        ),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn malformed_tuple_constant() {
+    let errors = verify_stmts(|b| {
+        let t = b.new_local(LocalDecl::temp(pair(), Span::ZERO));
+        let constant = Constant {
+            ty: pair(),
+            value: ConstValue::Tuple(vec![ConstValue::Bool(true)]),
+        };
+        assign(b, t, Rvalue::Use(Operand::constant(constant)));
+    });
+    assert_eq!(errors, vec![VerifyErrorKind::ConstantKindMismatch(pair())]);
+}

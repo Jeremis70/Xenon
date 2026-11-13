@@ -125,12 +125,44 @@ but their borrowing and lifetime rules are not finalized. The compiler does
 Tuples are anonymous positional product types written as `(T1, T2, ...)`:
 
 ```xe
-(u32, u32) pair = (10, 20);
-u32 x = pair.0;
-u32 y = pair.1;
+let (u32, u32) pair = (10, 20);
+let u32 x = pair.0;
+pair.1 = 30;              // elements of a variable are assignable
+let (i32, (bool, u8)) nested = (1, (true, 2));
+let u8 inner = nested.1.1;
 ```
 
-Tuples are nameless (fields are accessed strictly by 0-based index or via destructuring `u32 x, u32 y = pair`). Multiple function returns (`fn foo() -> u32 x, u32 y`) evaluate to tuple types under the hood.
+- `()` is the **unit** type, the empty tuple. A function without a return
+  type returns `()`.
+- `(T,)` is a one-element tuple; `(T)` is just `T`. The same holds for
+  values: `(x,)` is a tuple, `(x)` is `x`.
+- Elements are read by 0-based index, `t.0`, which binds tighter than any
+  operator (`-t.0` is `-(t.0)`). The index must be plain decimal digits
+  without a leading zero: `t.0x1`, `t.01`, and `t.1e3` are errors.
+- An element of type `&T` denotes its `T`, like a variable of type `&T`.
+  A pointer to a tuple must be dereferenced explicitly: `(*p).0`.
+- Tuples compare with `==` and `!=`, element by element, and only with a
+  tuple of exactly the same type. Both sides are evaluated completely, left
+  to right, before any element is compared. Ordering (`<`, ...) is not
+  defined on tuples.
+- A tuple literal checked against a tuple type gives each element its
+  expected type: in `let (u8, i64) p = (1, 2);` the literals are `u8` and
+  `i64`. Elements are never widened implicitly.
+
+Most code never names a tuple type. Multiple function results
+(`fn foo() -> u32 x, u32 y`) are tuples, and they are usually taken apart
+right away with a destructuring declaration:
+
+```xe
+let u32 x, u32 y = foo();
+let u32 first, _ = foo();           // `_` ignores a value
+let i32 a, (bool b, u8 c) = 1, (true, 2);
+```
+
+Every new name spells its type: there is no type inference. See
+[Syntax Basics](syntax-basics.md#tuples-and-parallel-assignment) for
+destructuring and parallel assignment, and [Functions](functions.md) for
+multiple results.
 
 ## Related pages
 

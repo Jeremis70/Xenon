@@ -271,19 +271,19 @@ fn parse_program_parses_minimal_function() {
     assert_eq!(function.name, "x");
     assert!(function.params.is_empty());
     assert_eq!(
-        function.return_type,
-        Binding {
+        function.returns,
+        vec![Binding {
             name: None,
             ty: Type::UInt(32),
             default: None,
             span: Span::ZERO,
-        }
+        }]
     );
     assert_eq!(function.body.len(), 1);
 
     assert!(matches!(
         &function.body[0].kind,
-        StmtKind::Return(expr) if matches!(&expr.kind, ExprKind::Int(v) if *v == bi(42))
+        StmtKind::Return(Some(expr)) if matches!(&expr.kind, ExprKind::Int(v) if *v == bi(42))
     ));
 }
 
@@ -317,14 +317,20 @@ fn parse_function_with_parameters() {
 
 #[test]
 fn parse_program_reports_token_span_for_invalid_return_expr() {
-    let src = "fn x()->u32{return;}";
+    let src = "fn x()->u32{return );}";
     let tokens = lex(src).expect("lexing should succeed");
     let mut parser = Parser::new(&tokens);
     let err = parser
         .parse_program()
-        .expect_err("parsing should fail on missing return expression");
-    assert_eq!(err.message, "Expected expression, found Semicolon");
-    assert_eq!(err.span, Span { start: 18, end: 19 });
+        .expect_err("parsing should fail on an invalid return expression");
+    assert_eq!(err.message, "Expected expression, found RParen");
+    assert_eq!(err.span, Span { start: 19, end: 20 });
+}
+
+#[test]
+fn parse_bare_return() {
+    let body = parse_body("fn x()->u32{return;}");
+    assert!(matches!(body[0].kind, StmtKind::Return(None)));
 }
 
 #[test]
@@ -335,7 +341,7 @@ fn parse_program_reports_eof_span_when_expression_is_missing() {
     let err = parser
         .parse_program()
         .expect_err("parsing should fail at end of input");
-    assert_eq!(err.message, "expected expression, found end of input");
+    assert_eq!(err.message, "Expected Semicolon, found end of input");
     assert_eq!(err.span, Span { start: 18, end: 18 });
 }
 
@@ -347,7 +353,9 @@ fn parse_program_parses_return_ident() {
     let program = parser.parse_program().expect("parsing should succeed");
 
     match &program.functions[0].body[0].kind {
-        StmtKind::Return(expr) => assert!(matches!(&expr.kind, ExprKind::Ident(s) if s == "y")),
+        StmtKind::Return(Some(expr)) => {
+            assert!(matches!(&expr.kind, ExprKind::Ident(s) if s == "y"))
+        }
         other => panic!("Expected return statement, got {:?}", other),
     }
 }
@@ -362,7 +370,7 @@ fn parse_call_no_args() {
     let program = parser.parse_program().expect("parsing should succeed");
 
     match &program.functions[0].body[0].kind {
-        StmtKind::Return(expr) => match &expr.kind {
+        StmtKind::Return(Some(expr)) => match &expr.kind {
             ExprKind::Call { name, args } => {
                 assert_eq!(name, "foo");
                 assert!(args.is_empty());
@@ -381,7 +389,7 @@ fn parse_call_single_arg() {
     let program = parser.parse_program().expect("parsing should succeed");
 
     match &program.functions[0].body[0].kind {
-        StmtKind::Return(expr) => match &expr.kind {
+        StmtKind::Return(Some(expr)) => match &expr.kind {
             ExprKind::Call { name, args } => {
                 assert_eq!(name, "inc");
                 assert_eq!(args.len(), 1);
@@ -401,7 +409,7 @@ fn parse_call_multiple_args() {
     let program = parser.parse_program().expect("parsing should succeed");
 
     match &program.functions[0].body[0].kind {
-        StmtKind::Return(expr) => match &expr.kind {
+        StmtKind::Return(Some(expr)) => match &expr.kind {
             ExprKind::Call { name, args } => {
                 assert_eq!(name, "add");
                 assert_eq!(args.len(), 3);
@@ -423,7 +431,7 @@ fn parse_call_arg_can_be_expression() {
     let program = parser.parse_program().expect("parsing should succeed");
 
     match &program.functions[0].body[0].kind {
-        StmtKind::Return(expr) => match &expr.kind {
+        StmtKind::Return(Some(expr)) => match &expr.kind {
             ExprKind::Call { name, args } => {
                 assert_eq!(name, "twice");
                 assert_eq!(args.len(), 1);
@@ -699,7 +707,7 @@ fn parse_pointer_return_type() {
     let program = parser.parse_program().expect("parsing should succeed");
 
     let f = &program.functions[0];
-    assert_eq!(f.return_type.ty, Type::Pointer(Box::new(Type::Int(32))));
+    assert_eq!(f.return_ty(), Type::Pointer(Box::new(Type::Int(32))));
 }
 
 // ── Pointer / Reference expressions ───────────────────────────────────────────
@@ -936,7 +944,7 @@ fn parse_ternary_is_not_a_trailing_condition() {
     let body = parse_body("fn f(bool c)->i32{ return 1 if c else 2; }");
     assert!(matches!(
         &body[0].kind,
-        StmtKind::Return(value) if matches!(value.kind, ExprKind::IfElse { .. })
+        StmtKind::Return(Some(value)) if matches!(value.kind, ExprKind::IfElse { .. })
     ));
 }
 
@@ -952,7 +960,7 @@ fn parse_trailing_condition_after_ternary_guards_the_statement() {
     assert!(matches!(
         &body[0].kind,
         StmtKind::If { inverted: false, then_branch, .. }
-            if matches!(&then_branch[0].kind, StmtKind::Return(value)
+            if matches!(&then_branch[0].kind, StmtKind::Return(Some(value))
                 if matches!(value.kind, ExprKind::IfElse { .. }))
     ));
 }
@@ -966,4 +974,225 @@ fn parse_nested_trailing_conditions_in_linear_time() {
     }
     let body = parse_body(&format!("fn f()->i32{{ return 1 if {condition}; }}"));
     assert!(matches!(body[0].kind, StmtKind::If { .. }));
+}
+
+// Tuples, patterns, and multiple results
+
+fn parse_function(src: &str) -> xenonc::frontend::ast::Function {
+    let tokens = lex(src).expect("lexing should succeed");
+    let mut program = Parser::new(&tokens)
+        .parse_program()
+        .expect("parsing should succeed");
+    program.functions.remove(0)
+}
+
+fn returned(src: &str) -> ExprKind {
+    match &parse_body(src)[0].kind {
+        StmtKind::Return(Some(value)) => value.kind.clone(),
+        other => panic!("expected a return value, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_tuple_types() {
+    let decl = |src: &str| match &parse_body(src)[0].kind {
+        StmtKind::VarDecl(binding) => binding.ty.clone(),
+        other => panic!("expected VarDecl, got {other:?}"),
+    };
+    assert_eq!(decl("fn f(){ let () u = (); }"), Type::unit());
+    assert_eq!(decl("fn f(){ let (i32) x = 1; }"), Type::Int(32));
+    assert_eq!(
+        decl("fn f(){ let (i32,) x = (1,); }"),
+        Type::Tuple(vec![Type::Int(32)])
+    );
+    assert_eq!(
+        decl("fn f(){ let (i32, (bool, *u8)) x = y; }"),
+        Type::Tuple(vec![
+            Type::Int(32),
+            Type::Tuple(vec![Type::Bool, Type::Pointer(Box::new(Type::UInt(8)))]),
+        ])
+    );
+}
+
+#[test]
+fn parse_tuple_expressions_and_grouping() {
+    assert!(matches!(returned("fn f(){ return (); }"), ExprKind::Tuple(e) if e.is_empty()));
+    assert!(matches!(
+        returned("fn f(){ return (x); }"),
+        ExprKind::Ident(_)
+    ));
+    assert!(matches!(returned("fn f(){ return (x,); }"), ExprKind::Tuple(e) if e.len() == 1));
+    assert!(matches!(returned("fn f(){ return (x, y, z); }"), ExprKind::Tuple(e) if e.len() == 3));
+    assert!(matches!(returned("fn f(){ return x, y; }"), ExprKind::Tuple(e) if e.len() == 2));
+}
+
+#[test]
+fn parse_field_access_binds_tighter_than_prefix_operators() {
+    let ExprKind::UnaryOp { operand, .. } = returned("fn f(){ return -t.0.1; }") else {
+        panic!("expected negation");
+    };
+    let ExprKind::Field { base, index: 1 } = &operand.kind else {
+        panic!("expected `.1`, got {:?}", operand.kind);
+    };
+    assert!(matches!(&base.kind, ExprKind::Field { index: 0, .. }));
+    assert!(matches!(
+        returned("fn f(){ return g(x).0; }"),
+        ExprKind::Field { index: 0, .. }
+    ));
+}
+
+#[test]
+fn parse_parallel_assignment() {
+    for src in [
+        "fn f(){ a, b = b, a; }",
+        "fn f(){ (a, b) = (b, a); }",
+        "fn f(){ t.0, t.1 = t.1, t.0; }",
+        "fn f(){ _, b = g(); }",
+        "fn f(){ (a, _), *p = g(); }",
+    ] {
+        let body = parse_body(src);
+        let StmtKind::Assign { target, .. } = &body[0].kind else {
+            panic!("expected assignment for {src}");
+        };
+        assert!(matches!(target.kind, ExprKind::Tuple(_)), "{src}");
+    }
+}
+
+#[test]
+fn parse_destructuring_let() {
+    use xenonc::frontend::ast::Pattern;
+    let body = parse_body("fn f(){ let i32 a, (bool b, _) = g(); }");
+    let StmtKind::Destructure { pattern, .. } = &body[0].kind else {
+        panic!("expected Destructure, got {:?}", body[0].kind);
+    };
+    let Pattern::Tuple(items, _) = pattern else {
+        panic!("expected tuple pattern");
+    };
+    assert!(matches!(&items[0], Pattern::Binding(b) if b.ty == Type::Int(32)));
+    assert!(
+        matches!(&items[1], Pattern::Tuple(inner, _) if matches!(inner[1], Pattern::Wildcard(_)))
+    );
+
+    // A parenthesized single binding is just that binding.
+    assert!(matches!(
+        parse_body("fn f(){ let (i32 a) = 1; }")[0].kind,
+        StmtKind::VarDecl(_)
+    ));
+    // A tuple type followed by a name is a plain declaration.
+    assert!(matches!(
+        &parse_body("fn f(){ let (i32, i32) p = (1, 2); }")[0].kind,
+        StmtKind::VarDecl(b) if b.ty == Type::Tuple(vec![Type::Int(32), Type::Int(32)])
+    ));
+    assert!(matches!(
+        parse_body("fn f(){ let (i32 a,) = t; }")[0].kind,
+        StmtKind::Destructure {
+            pattern: Pattern::Tuple(..),
+            ..
+        }
+    ));
+}
+
+#[test]
+fn parse_pattern_backtracking_reports_one_error() {
+    // Neither a type nor a pattern: the pattern's error is reported.
+    let (message, span) = parse_error("fn f(){ let (a) = 1; }");
+    assert_eq!(message, "unknown type: `a`");
+    assert_eq!(span, Span { start: 13, end: 14 });
+    // A type without a name.
+    let (message, span) = parse_error("fn f(){ let (i32, i32) = p; }");
+    assert_eq!(
+        message,
+        "expected a variable name after the type `(i32, i32)`"
+    );
+    assert_eq!(span, Span { start: 23, end: 24 });
+    // A pattern element without a type.
+    let (message, span) = parse_error("fn f(){ let (i32 a, b) = p; }");
+    assert_eq!(message, "unknown type: `b`");
+    assert_eq!(span, Span { start: 20, end: 21 });
+}
+
+#[test]
+fn parse_return_lists() {
+    let named = parse_function("fn f() -> i32 q, i32 r { return; }");
+    assert_eq!(named.returns.len(), 2);
+    assert!(named.has_named_results());
+    assert_eq!(
+        named.return_ty(),
+        Type::Tuple(vec![Type::Int(32), Type::Int(32)])
+    );
+
+    let unnamed = parse_function("fn f() -> i32, bool { return 1, true; }");
+    assert!(!unnamed.has_named_results());
+    assert_eq!(
+        unnamed.return_ty(),
+        Type::Tuple(vec![Type::Int(32), Type::Bool])
+    );
+
+    let single = parse_function("fn f() -> i32 r { return; }");
+    assert_eq!(single.return_ty(), Type::Int(32));
+
+    // No `->` and `-> ()` are the same signature.
+    assert_eq!(parse_function("fn f() {}").return_ty(), Type::unit());
+    assert_eq!(parse_function("fn f() -> () {}").return_ty(), Type::unit());
+
+    let (message, _) = parse_error("fn f() -> i32 q, bool { return; }");
+    assert_eq!(message, "name every result or none of them");
+}
+
+#[test]
+fn parse_trailing_guard_on_a_list_guards_the_statement() {
+    let body = parse_body("fn f(bool c){ return a, b if c; }");
+    let StmtKind::If { then_branch, .. } = &body[0].kind else {
+        panic!("expected the guard to wrap the statement");
+    };
+    assert!(matches!(
+        &then_branch[0].kind,
+        StmtKind::Return(Some(value)) if matches!(value.kind, ExprKind::Tuple(_))
+    ));
+
+    // A parenthesized conditional expression is an ordinary element.
+    let ExprKind::Tuple(elems) = returned("fn f(bool c){ return a, (b if c else d); }") else {
+        panic!("expected a tuple");
+    };
+    assert!(matches!(elems[1].kind, ExprKind::IfElse { .. }));
+}
+
+#[test]
+fn parse_rejects_ambiguous_lists() {
+    for (src, needle) in [
+        (
+            "fn f(bool c){ return a, b if c else d; }",
+            "parenthesize the conditional",
+        ),
+        (
+            "fn f(bool c){ return a if c else b, d; }",
+            "parenthesize the conditional",
+        ),
+        (
+            "fn f(bool c){ return a if c, b; }",
+            "must end the statement",
+        ),
+        (
+            "fn f(){ return x,; }",
+            "one-element tuple needs parentheses",
+        ),
+        ("fn f(){ a, = 1; }", "one-element tuple needs parentheses"),
+        (
+            "fn f(){ let i32 a, = 1; }",
+            "one-element pattern needs parentheses",
+        ),
+        (
+            "fn f(){ a, b += 1; }",
+            "compound assignment needs a single place",
+        ),
+        (
+            "fn f(){ a += 1, 2; }",
+            "compound assignment takes a single value",
+        ),
+        ("fn f(){ a, b; }", "list of values is only allowed"),
+        ("fn f(){ a, 1 = 2, 3; }", "invalid assignment target"),
+    ] {
+        let (message, _) = parse_error(src);
+        assert!(message.contains(needle), "{src}: {message}");
+    }
 }

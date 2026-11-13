@@ -36,6 +36,9 @@ impl FnCtxt<'_, '_> {
             }),
             Ast::Address(value) => self.address_literal(value, expected, span),
             Ast::Ident(_) | Ast::Deref(_) => self.check_place(expr),
+            Ast::Field { base, index } => self.check_field(base, *index, span),
+            Ast::Tuple(elems) => self.check_tuple(elems, expected, span),
+            Ast::Wildcard => Err(SemanticError::WildcardAsValue { span }),
             Ast::AddressOf(operand) => {
                 let place = self.check_place(operand)?;
                 // The context picks the flavor: `&T` where a reference is
@@ -96,6 +99,18 @@ impl FnCtxt<'_, '_> {
         expr: &ast::Expr,
         expected: &Type,
     ) -> SemanticResult<Expr> {
+        // A tuple literal of the wrong length is reported by counting
+        // values: `return a, b;` in a function returning `i32` expects 1.
+        if let Ast::Tuple(elems) = &expr.kind {
+            let arity = expected.tuple_elems().map_or(1, <[Type]>::len);
+            if arity != elems.len() {
+                return Err(SemanticError::TupleArityMismatch {
+                    expected: arity,
+                    found: elems.len(),
+                    span: expr.span,
+                });
+            }
+        }
         let checked = self.check_expr(expr, Some(expected))?;
         self.coerce(checked, expected)
     }
@@ -125,10 +140,6 @@ impl FnCtxt<'_, '_> {
         rhs: &ast::Expr,
         expected: Option<&Type>,
     ) -> SemanticResult<(Expr, Expr)> {
-        let needs_context = |expr: &ast::Expr| {
-            literal_class(expr).is_some()
-                || matches!(&expr.kind, Ast::Address(_) | Ast::AddressOf(_))
-        };
         match (needs_context(lhs), needs_context(rhs)) {
             (false, true) => {
                 let lhs = self.check_expr(lhs, expected)?;
@@ -191,6 +202,7 @@ impl FnCtxt<'_, '_> {
                     span,
                 })
             }
+            Ast::Field { base, index } if base.is_place() => self.check_field(base, *index, span),
             _ => Err(SemanticError::NotAPlaceExpression { span }),
         }
     }
@@ -312,6 +324,17 @@ impl FnCtxt<'_, '_> {
             ty: signature.return_ty.clone(),
             span,
         })
+    }
+}
+
+/// Whether `expr` takes its type from context: a numeric literal
+/// expression, an address literal, an address-of expression, or a tuple
+/// literal containing one of those.
+fn needs_context(expr: &ast::Expr) -> bool {
+    match &expr.kind {
+        Ast::Address(_) | Ast::AddressOf(_) => true,
+        Ast::Tuple(elems) => elems.iter().any(needs_context),
+        _ => literal_class(expr).is_some(),
     }
 }
 

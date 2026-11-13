@@ -108,7 +108,7 @@ fn bindings_record_their_kind() {
             BindingKind::Local
         ]
     );
-    assert!(function.named_return.is_some());
+    assert_eq!(function.named_returns.len(), 1);
 }
 
 #[test]
@@ -541,4 +541,216 @@ fn zero_sized_integers_only_hold_zero() {
             "{src}: {err:?}"
         );
     }
+}
+
+// ── Tuples ────────────────────────────────────────────────────────────────────
+
+#[test]
+fn tuple_literal_elements_take_their_expected_types() {
+    let dump = thir("fn f()->i32 { let (u8, i64) p = (1, 2); return 0; }");
+    assert!(
+        dump.contains("let p@b0: (u8, i64) = (1_u8, 2_i64);"),
+        "{dump}"
+    );
+    let dump = thir("fn f()->i32 { let u8 a, i16 b = 1, 2; return 0; }");
+    assert!(dump.contains("let a@b0: u8 = 1_u8;"), "{dump}");
+    assert!(dump.contains("let b@b1: i16 = 2_i16;"), "{dump}");
+}
+
+#[test]
+fn tuple_literal_out_of_range_names_the_variable() {
+    assert!(matches!(
+        error("fn f()->i32 { let u8 a, u8 b = 1, 300; return 0; }"),
+        SemanticError::ConstantOutOfRange { ref name, .. } if name == "b"
+    ));
+}
+
+#[test]
+fn destructuring_evaluates_every_value_before_declaring() {
+    // The new `x` and `y` are initialized from the old `y` and `x`.
+    let dump =
+        thir("fn f()->i32 { let i32 x = 1; let i32 y = 2; let i32 x, i32 y = y, x; return x; }");
+    assert!(dump.contains("let x@b2: i32 = y@b1;"), "{dump}");
+    assert!(dump.contains("let y@b3: i32 = x@b0;"), "{dump}");
+}
+
+#[test]
+fn destructuring_a_call_goes_through_a_temporary() {
+    let dump = thir(
+        "fn g()->(i32, (bool, u8)) { return 1, (true, 2); }\n\
+         fn f()->i32 { let i32 a, (bool b, _) = g(); return a; }",
+    );
+    assert!(
+        dump.contains("let _@b0: (i32, (bool, u8)) = g();"),
+        "{dump}"
+    );
+    assert!(dump.contains("let a@b1: i32 = _@b0.0;"), "{dump}");
+    assert!(dump.contains("let b@b2: bool = _@b0.1.0;"), "{dump}");
+}
+
+#[test]
+fn parallel_assignment_evaluates_values_before_storing() {
+    let dump = thir("fn f()->i32 { let i32 a = 1; let i32 b = 2; a, b = b, a; return a; }");
+    let swap = [
+        "let _@b2: i32 = b@b1;",
+        "let _@b3: i32 = a@b0;",
+        "a@b0 = _@b2;",
+        "b@b1 = _@b3;",
+    ];
+    let mut rest = dump.as_str();
+    for needle in swap {
+        let at = rest
+            .find(needle)
+            .unwrap_or_else(|| panic!("{needle} in {dump}"));
+        rest = &rest[at + needle.len()..];
+    }
+}
+
+#[test]
+fn element_places_are_assignable() {
+    let dump = thir("fn f()->i32 { let (i32, i32) t = (1, 2); t.0 += 5; t.1 = t.0; return t.1; }");
+    assert!(dump.contains("t@b0.0 Add= 5_i32;"), "{dump}");
+    assert!(dump.contains("t@b0.1 = t@b0.0;"), "{dump}");
+}
+
+#[test]
+fn reference_elements_are_dereferenced_on_access() {
+    let dump = thir("fn f(&i32 r)->i32 { let (&i32, i32) t = (@r, 1); return t.0; }");
+    assert!(dump.contains("return (*t@b1.0);"), "{dump}");
+}
+
+#[test]
+fn tuple_equality_type_checks() {
+    let dump = thir("fn f((i32, bool) t)->bool { return t == (1, true); }");
+    assert!(dump.contains("return Eq(t@b0, (1_i32, true));"), "{dump}");
+    assert!(matches!(
+        error("fn f((i32, bool) t)->bool { return t < t; }"),
+        SemanticError::InvalidOperands { .. }
+    ));
+    assert!(matches!(
+        error("fn f((i32, bool) t, (i64, bool) u)->bool { return t == u; }"),
+        SemanticError::InvalidOperands { .. }
+    ));
+}
+
+#[test]
+fn bare_return_returns_the_named_results() {
+    let dump = thir("fn f()->i32 q, i32 r { q = 1; r = 2; return; }");
+    assert!(dump.contains("return (q@b0, r@b1);"), "{dump}");
+    let dump = thir("fn f()->i32 r { r = 1; return; }");
+    assert!(dump.contains("return r@b0;"), "{dump}");
+    let dump = thir("fn f() { return; }");
+    assert!(dump.contains("return ();"), "{dump}");
+}
+
+#[test]
+fn unit_spellings_are_identical() {
+    // No `->` and `-> ()` produce the same signature, and `return;`,
+    // `return ();`, and falling off the end mean the same.
+    let implicit = thir("fn f() { return; }");
+    let explicit = thir("fn f() -> () { return (); }");
+    assert_eq!(implicit, explicit);
+    let program = check("fn f() {}\nfn g() -> () {}").expect("should type-check");
+    assert_eq!(program.functions[DefId::new(0)].return_ty, Type::unit());
+    assert_eq!(program.functions[DefId::new(1)].return_ty, Type::unit());
+}
+
+#[test]
+fn bare_return_with_a_shadowed_result_is_error() {
+    assert!(matches!(
+        error("fn f()->i32 r { r = 1; if true { let i32 r = 2; return; } return; }"),
+        SemanticError::ShadowedNamedResult { ref name, .. } if name == "r"
+    ));
+    // Once the shadowing variable is out of scope, `return;` is fine.
+    thir("fn f()->i32 r { r = 1; if true { let i32 r = 2; } return; }");
+}
+
+#[test]
+fn tuple_errors() {
+    type Check = fn(&SemanticError) -> bool;
+    let cases: &[(&str, Check)] = &[
+        ("fn f()->i32 { return 1, 2; }", |e| {
+            matches!(
+                e,
+                SemanticError::TupleArityMismatch {
+                    expected: 1,
+                    found: 2,
+                    ..
+                }
+            )
+        }),
+        (
+            "fn f()->i32 { let i32 a, i32 b = 1, 2, 3; return a; }",
+            |e| {
+                matches!(
+                    e,
+                    SemanticError::TupleArityMismatch {
+                        expected: 2,
+                        found: 3,
+                        ..
+                    }
+                )
+            },
+        ),
+        (
+            "fn g()->(i32, i32) { return 1, 2; } fn f()->i32 { let i32 a, i32 b, i32 c = g(); return a; }",
+            |e| {
+                matches!(
+                    e,
+                    SemanticError::TupleArityMismatch {
+                        expected: 3,
+                        found: 2,
+                        ..
+                    }
+                )
+            },
+        ),
+        (
+            "fn f()->i32 { let (i32, i32) t = (1, 2); return t.2; }",
+            |e| matches!(e, SemanticError::TupleIndexOutOfRange { index: 2, .. }),
+        ),
+        ("fn f()->i32 { let i32 x = 1; return x.0; }", |e| {
+            matches!(e, SemanticError::NotATuple { .. })
+        }),
+        ("fn f(*(i32, i32) p)->i32 { return p.0; }", |e| {
+            matches!(e, SemanticError::NotATuple { .. })
+        }),
+        ("fn f()->i32 { return; }", |e| {
+            matches!(e, SemanticError::BareReturnWithoutNamedResults { .. })
+        }),
+        (
+            "fn f()->i32 { let i32 a = 1; a, a = 1, 2; return a; }",
+            |e| matches!(e, SemanticError::DuplicateAssignTarget { .. }),
+        ),
+        (
+            "fn f()->i32 { let (i32, i32) t = (1, 2); t, t.0 = (3, 4), 5; return 0; }",
+            |e| matches!(e, SemanticError::DuplicateAssignTarget { .. }),
+        ),
+        (
+            "fn f()->i32 { let i32 a, (bool a, _) = 1, (true, 2); return a; }",
+            |e| matches!(e, SemanticError::DuplicatePatternBinding { .. }),
+        ),
+        ("fn f()->i32 { return _; }", |e| {
+            matches!(e, SemanticError::WildcardAsValue { .. })
+        }),
+        ("fn f()->i32 { let i32 a, bool b = 1, 2; return a; }", |e| {
+            matches!(e, SemanticError::TypeMismatch { .. })
+        }),
+        ("fn f()->&i32 q, i32 r { return; }", |e| {
+            matches!(e, SemanticError::ReferenceNamedReturn { .. })
+        }),
+        (
+            "fn f(&i32 r)->i32 { let (&i32, i32) t = loop { break (@r, 1); }; return 0; }",
+            |e| matches!(e, SemanticError::ReferenceLoop { .. }),
+        ),
+    ];
+    for (src, check) in cases {
+        let found = error(src);
+        assert!(check(&found), "{src}: unexpected error {found:?}");
+    }
+}
+
+#[test]
+fn pointer_to_tuple_needs_an_explicit_dereference() {
+    thir("fn f(*(i32, i32) p)->i32 { (*p).1 = 3; return (*p).0; }");
 }

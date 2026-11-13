@@ -77,6 +77,44 @@ return x if (done);
 count++ unless (skip);
 ```
 
+## Tuples and parallel assignment
+
+A `let` can declare several variables at once from a tuple, and nest:
+
+```xe
+let i32 q, i32 r = divmod(17, 5);
+let i32 a, (bool b, _) = 1, (true, 2);
+let (i32 x, i32 y) = point;            // same as `let i32 x, i32 y = point;`
+```
+
+All values are evaluated first, left to right, and only then are the names
+declared, so the initializers still see the variables the new names shadow.
+
+Assigning to a list of places assigns **in parallel**: every value on the
+right is evaluated first, left to right, and then stored into each target,
+left to right. This makes swaps work:
+
+```xe
+a, b = b, a;
+t.0, t.1 = t.1, t.0;
+_, r = divmod(9, 4);        // `_` discards a value
+```
+
+Assigning the same place twice (`a, a = 1, 2`), or a tuple and one of its
+elements (`t, t.0 = ..`), is an error. A list cannot be used with compound
+assignment (`a, b += 1` is an error).
+
+A bare comma list is allowed only after `return`, after the `=` of a `let`
+or an assignment, and as an assignment target. Everywhere else a tuple
+needs parentheses: `f((a, b))`. A one-element tuple always needs them:
+`return (x,);` (`return x,;` is an error).
+
+A trailing `if` or `unless` on a list guards the **whole statement**:
+`return a, b if done;` returns the pair when `done`. A conditional
+expression inside a list must therefore be parenthesized:
+`return a, (b if c else d);`. Writing it without the parentheses is an
+error, since it would read as a guard.
+
 ## Statement punctuation
 
 - Examples consistently use semicolons for statements.

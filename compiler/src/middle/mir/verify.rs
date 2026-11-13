@@ -222,7 +222,9 @@ fn collect_errors(program: &MirProgram, body: &Body, target: &TargetSpec) -> Vec
 fn reported_by_place_checks(error: &TypingError) -> bool {
     matches!(
         error,
-        TypingError::UnknownLocal(_) | TypingError::DerefOfNonPointer(_)
+        TypingError::UnknownLocal(_)
+            | TypingError::DerefOfNonPointer(_)
+            | TypingError::InvalidField { .. }
     )
 }
 
@@ -426,6 +428,13 @@ impl Checker<'_> {
             ConstValue::Address(value) => ty
                 .is_indirect()
                 .then(|| (value, self.target.address_bounds())),
+            ConstValue::Tuple(_) => {
+                match constant.tuple_elems() {
+                    Some(elems) => elems.iter().for_each(|elem| self.check_constant(elem)),
+                    None => self.report(VerifyErrorKind::ConstantKindMismatch(ty.clone())),
+                }
+                return;
+            }
         };
         match range {
             None => self.report(VerifyErrorKind::ConstantKindMismatch(ty.clone())),
@@ -531,8 +540,10 @@ impl Visitor for Checker<'_> {
     fn visit_place(&mut self, place: &Place, context: PlaceContext, location: Location) {
         // Only the projection is checked here; an unknown base local is
         // reported once by `visit_local`.
-        if let Err(TypingError::DerefOfNonPointer(ty)) = typing::place_ty(place, self.body) {
-            self.report(VerifyErrorKind::Typing(TypingError::DerefOfNonPointer(ty)));
+        if let Err(error @ (TypingError::DerefOfNonPointer(_) | TypingError::InvalidField { .. })) =
+            typing::place_ty(place, self.body)
+        {
+            self.report(VerifyErrorKind::Typing(error));
         }
         self.super_place(place, context, location);
     }

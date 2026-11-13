@@ -45,9 +45,9 @@ pub use builder::{BodyBuilder, BuildError};
 pub use interpret::{EvalResult, eval_rvalue, known_operand};
 pub use program::{FnDecl, FnSig, MirProgram, ProgramError};
 pub use syntax::{
-    AssertKind, BinOp, CastKind, ConstValue, Constant, IndirectionKind, Operand, Place,
-    ProjectionElem, Rvalue, Statement, StatementKind, SwitchTargets, Terminator, TerminatorKind,
-    UnOp,
+    AggregateKind, AssertKind, BinOp, CastKind, ConstValue, Constant, IndirectionKind, Operand,
+    Place, ProjectionElem, Rvalue, Statement, StatementKind, SwitchTargets, Terminator,
+    TerminatorKind, UnOp,
 };
 pub use verify::{
     ErrorSite, VerifyError, VerifyErrorKind, VerifyErrors, verify_body, verify_program,

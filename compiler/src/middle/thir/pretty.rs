@@ -78,8 +78,8 @@ impl Printer<'_> {
             write!(self.out, ": {}", function.bindings[param].ty)?;
         }
         write!(self.out, ") -> {}", function.return_ty)?;
-        if let Some(named) = function.named_return {
-            self.out.write_str(" ")?;
+        for (index, &named) in function.named_returns.iter().enumerate() {
+            self.out.write_str(if index == 0 { " " } else { ", " })?;
             self.binding(named)?;
         }
         self.out.write_str(" ")?;
@@ -165,6 +165,21 @@ impl Printer<'_> {
                 self.out.write_str("(*")?;
                 self.expr(operand)?;
                 self.out.write_str(")")
+            }
+            ExprKind::Field { base, index } => {
+                self.expr(base)?;
+                write!(self.out, ".{index}")
+            }
+            ExprKind::Tuple(elems) => {
+                self.out.write_str("(")?;
+                for (index, elem) in elems.iter().enumerate() {
+                    if index > 0 {
+                        self.out.write_str(", ")?;
+                    }
+                    self.expr(elem)?;
+                }
+                self.out
+                    .write_str(if elems.len() == 1 { ",)" } else { ")" })
             }
             ExprKind::AddressOf { kind, place } => {
                 self.out.write_str(match kind {
