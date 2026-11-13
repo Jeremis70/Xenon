@@ -18,12 +18,24 @@ fn main() -> u8
 
     return 1 unless fibonacci(x) == 144;
     return 2 unless (q, r) == (5, 1);
+    // The largest Fibonacci number that fits in an `i32`.
+    return 3 unless fibonacci(46) == 1836311903;
     return 0;
 }
 
 fn fibonacci(i32 n) -> i32
 {
-    return n if n <= 1 else fibonacci(n - 1) + fibonacci(n - 2);
+    return 0 if n <= 0;
+    // Invariant: (a, b) = (fib(count - 1), fib(count)). Stopping once `b`
+    // holds fib(n) never computes fib(n + 1), which may overflow.
+    let i32 a, i32 b = 0, 1;
+    let i32 count = 1;
+    while count < n
+    {
+        a, b = b, a + b;
+        count++;
+    }
+    return b;
 }
 
 fn divmod(i32 n, i32 d) -> i32 q, i32 r
