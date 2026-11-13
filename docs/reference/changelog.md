@@ -22,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- The entry point returns `u8` (the exit code) or `()` (exit code 0) instead
+  of `i32`, whose high bits POSIX systems silently drop. A C `int main`
+  wrapper is now always emitted.
 - Named results start unassigned and must be assigned on every path before
   they are read; they were previously zero-initialized.
 - A bare `return;` with a shadowed named result is an error.

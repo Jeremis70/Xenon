@@ -125,8 +125,10 @@ pub enum SemanticError {
     MultipleEntryPoints { first_span: Span, span: Span },
     #[error("entry function must take no parameters")]
     EntryWithParams { span: Span },
-    #[error("entry function must return `i32`")]
-    EntryWrongReturn { span: Span },
+    #[error(
+        "entry function must return `u8` or `()`, found `{found}`: exit codes are 8 bits on POSIX systems"
+    )]
+    EntryWrongReturn { found: Type, span: Span },
     #[error("unknown attribute `{name}`")]
     UnknownAttribute { name: String, span: Span },
     #[error("invalid assignment target: expected an addressable location")]
@@ -213,7 +215,7 @@ impl SemanticError {
             | SemanticError::ContinueOutsideLoop { span }
             | SemanticError::MultipleEntryPoints { span, .. }
             | SemanticError::EntryWithParams { span }
-            | SemanticError::EntryWrongReturn { span }
+            | SemanticError::EntryWrongReturn { span, .. }
             | SemanticError::UnknownAttribute { span, .. }
             | SemanticError::NotAPlaceExpression { span }
             | SemanticError::CannotDereference { span, .. }

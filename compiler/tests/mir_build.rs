@@ -53,7 +53,7 @@ fn example_program_builds_and_verifies() {
     let src = include_str!("../../tests/main.xe");
     let program = build(src);
     assert_eq!(program.entry(), Some(DefId::new(0)));
-    assert_eq!(program.bodies().len(), 2);
+    assert_eq!(program.bodies().len(), 3);
     assert!(program.bodies().all(|body| body.phase() == MirPhase::Built));
 }
 

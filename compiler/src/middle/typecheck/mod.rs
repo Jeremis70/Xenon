@@ -52,7 +52,7 @@ use crate::middle::thir::{self, BindingKind, ThirProgram};
 use crate::source::Span;
 use crate::types::Type;
 
-pub use entry::validate_entry_point;
+pub use entry::{is_entry_return_type, validate_entry_point};
 use scope::Scopes;
 
 /// Type-checks `program` for `target` and returns its THIR.
