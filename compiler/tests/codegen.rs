@@ -54,7 +54,7 @@ fn llvm_backend_emits_runtime_mir() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("backend.ll");
     let mir = build_mir_for_source(
-        "#[entry]\nfn main() -> i32 { let i32 value = 20; value = value + 22; return value; }\n",
+        "#[entry]\nfn main() -> u8 { let u8 value = 20; value = value + 22; return value; }\n",
     );
 
     let llvm_ir = emit_ir(&mir, &path);
@@ -68,7 +68,7 @@ fn llvm_optimization_promotes_stack_slots_and_folds_constants() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("optimized.ll");
     let mir = build_mir_for_source(
-        "#[entry] fn main()->i32 { let i32 value = 40; value = value + 2; return value; }",
+        "#[entry] fn main()->u8 { let u8 value = 40; value = value + 2; return value; }",
     );
     let unoptimized = emit_ir(&mir, &path);
     assert!(unoptimized.contains("alloca"), "{unoptimized}");
@@ -99,7 +99,7 @@ fn llvm_optimization_promotes_stack_slots_and_folds_constants() {
 
 #[test]
 fn llvm_backend_rejects_built_mir() {
-    let source = "#[entry]\nfn main() -> i32 { return 0; }\n";
+    let source = "#[entry]\nfn main() {}\n";
     let tokens = lex(source).expect("source should lex");
     let mut parser = Parser::new(&tokens);
     let ast = parser.parse_program().expect("source should parse");
@@ -121,15 +121,15 @@ fn custom_entry_and_user_main_get_a_verified_mir_wrapper() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("entry.ll");
     let mir = build_mir_for_source(
-        "#[entry]\nfn start() -> i32 { return 9; }\nfn main() -> i32 { return 0; }\n",
+        "#[entry]\nfn start() -> u8 { return 9; }\nfn main() -> i32 { return 0; }\n",
     );
 
     let llvm_ir = emit_ir(&mir, &path);
 
     assert!(llvm_ir.contains("define i32 @main()"), "{llvm_ir}");
-    assert!(llvm_ir.contains("define i32 @start()"), "{llvm_ir}");
+    assert!(llvm_ir.contains("define i8 @start()"), "{llvm_ir}");
     assert!(llvm_ir.contains("define i32 @_xe.main()"), "{llvm_ir}");
-    assert!(llvm_ir.contains("call i32 @start()"), "{llvm_ir}");
+    assert!(llvm_ir.contains("call i8 @start()"), "{llvm_ir}");
 }
 
 /// Compiles `source` (without an entry point) to LLVM IR text.

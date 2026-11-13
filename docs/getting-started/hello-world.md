@@ -5,10 +5,13 @@ This page shows the smallest documented Xenon entry-point example.
 ## Minimal program
 
 ```xe
-entry fn main() {
-    // TODO
+#[entry]
+fn main() {
 }
 ```
+
+The entry returns nothing (exit code 0) or a `u8` exit code; see
+[Program Entry](../language/program-entry.md).
 
 ## Compile or check
 

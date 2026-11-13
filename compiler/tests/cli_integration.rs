@@ -21,7 +21,7 @@ fn check_emits_runtime_mir_without_codegen() {
     let path = dir.path().join("mir.xe");
     std::fs::write(
         &path,
-        "#[entry]\nfn main() -> i32 { let i32 value = 40 + 2; return value; }\n",
+        "#[entry]\nfn main() -> u8 { let u8 value = 40 + 2; return value; }\n",
     )
     .expect("write");
 
@@ -35,7 +35,7 @@ fn check_emits_runtime_mir_without_codegen() {
         .clone();
     let mir = String::from_utf8(output).expect("MIR output is UTF-8");
     assert!(mir.contains("phase: runtime"), "{mir}");
-    assert!(mir.contains("fn main() -> i32"), "{mir}");
+    assert!(mir.contains("fn main() -> u8"), "{mir}");
 }
 
 #[test]
@@ -44,7 +44,7 @@ fn compile_emits_mir_without_native_codegen() {
     let source = dir.path().join("mir.xe");
     let out_dir = dir.path().join("build");
     std::fs::create_dir_all(&out_dir).expect("create out dir");
-    std::fs::write(&source, "#[entry]\nfn main() -> i32 { return 7; }\n").expect("write");
+    std::fs::write(&source, "#[entry]\nfn main() -> u8 { return 7; }\n").expect("write");
 
     Command::cargo_bin("xenonc")
         .expect("cargo_bin xenonc")
@@ -69,7 +69,7 @@ fn compile_emits_mir_without_native_codegen() {
 fn native_codegen_requires_the_llvm_feature() {
     let dir = tempfile::tempdir().expect("tempdir");
     let source = dir.path().join("program.xe");
-    std::fs::write(&source, "#[entry]\nfn main() -> i32 { return 0; }\n").expect("write");
+    std::fs::write(&source, "#[entry]\nfn main() {}\n").expect("write");
 
     let output = Command::cargo_bin("xenonc")
         .expect("cargo_bin xenonc")
@@ -164,15 +164,15 @@ fn attribute_errors_precede_body_errors() {
 fn known_panics_are_compile_errors() {
     for (source, message) in [
         (
-            "#[entry] fn main() -> i32 { return 1 / 0; }",
+            "#[entry] fn main() -> u8 { return 1 / 0; }",
             "attempt to divide by zero",
         ),
         (
-            "#[entry] fn main() -> i32 { let u8 x = 200 + 100; return 0; }",
+            "#[entry] fn main() { let u8 x = 200 + 100; }",
             "attempt to add with overflow",
         ),
         (
-            "#[entry] fn main() -> i32 { let i32 z = 0; return 7 % z; }",
+            "#[entry] fn main() -> u8 { let u8 z = 0; return 7 % z; }",
             "attempt to calculate the remainder with a divisor of zero",
         ),
     ] {
@@ -243,7 +243,7 @@ fn compile_succeeds_on_pointers_and_references() {
             "    return value;\n",
             "}\n",
             "#[entry]\n",
-            "fn main() -> i32 {\n",
+            "fn main() {\n",
             "    let i32 x = 42;\n",
             "    let *i32 p = @x;\n",
             "    *p = 10;\n",
@@ -251,7 +251,7 @@ fn compile_succeeds_on_pointers_and_references() {
             "    r = r + 5;\n",
             "    let **i32 pp = @p;\n",
             "    **pp = **pp + 1;\n",
-            "    return increment(@x);\n",
+            "    increment(@x);\n",
             "}\n",
         ),
     )
@@ -278,7 +278,7 @@ fn compile_fails_on_oversized_address_literal() {
     std::fs::create_dir_all(&out_dir).expect("create out dir");
     std::fs::write(
         &path,
-        "#[entry]\nfn main() -> i32 { let *u32 dev = @0xFFFFFFFFFFFFFFFFFF; return 0; }\n",
+        "#[entry]\nfn main() { let *u32 dev = @0xFFFFFFFFFFFFFFFFFF; }\n",
     )
     .expect("write");
 
@@ -333,17 +333,17 @@ fn evaluation_order_program(assignment: &str) -> String {
     format!(
         concat!(
             "#[entry]\n",
-            "fn main() -> i32 {{\n",
-            "    let i32 log = 0;\n",
-            "    let i32 cell = 0;\n",
+            "fn main() -> u8 {{\n",
+            "    let u8 log = 0;\n",
+            "    let u8 cell = 0;\n",
             "    {assignment}\n",
             "    return log;\n",
             "}}\n",
-            "fn target(&i32 log, &i32 cell) -> *i32 {{\n",
+            "fn target(&u8 log, &u8 cell) -> *u8 {{\n",
             "    log = log * 10 + 1;\n",
             "    return @cell;\n",
             "}}\n",
-            "fn bump(&i32 log) -> i32 {{\n",
+            "fn bump(&u8 log) -> u8 {{\n",
             "    log = log * 10 + 2;\n",
             "    return 1;\n",
             "}}\n",
@@ -378,9 +378,9 @@ fn plain_assignment_evaluates_target_before_value() {
 fn backend_runs_wide_integer_shift_float_and_branch_operations() {
     let code = compile_and_run(concat!(
         "#[entry]\n",
-        "fn main() -> i32 {\n",
+        "fn main() -> u8 {\n",
         "    let i128 wide = 18446744073709551616;\n",
-        "    let i32 shifted = 1;\n",
+        "    let u8 shifted = 1;\n",
         "    shifted = shifted << 2;\n",
         "    let f64 fraction = 1.5;\n",
         "    if fraction > 1.0 and wide > 0 { return shifted + 1; }\n",
@@ -395,7 +395,7 @@ fn backend_runs_wide_integer_shift_float_and_branch_operations() {
 fn backend_runs_custom_entry_with_user_main_collision() {
     let code = compile_and_run(concat!(
         "#[entry]\n",
-        "fn start() -> i32 { return 9; }\n",
+        "fn start() -> u8 { return 9; }\n",
         "fn main() -> i32 { return 0; }\n",
     ));
     assert_eq!(code, 9);
@@ -406,7 +406,7 @@ fn backend_runs_custom_entry_with_user_main_collision() {
 fn backend_compares_pointer_values() {
     let code = compile_and_run(concat!(
         "#[entry]\n",
-        "fn main() -> i32 {\n",
+        "fn main() -> u8 {\n",
         "    let i32 value = 1;\n",
         "    let *i32 pointer = @value;\n",
         "    if pointer == @value { return 3; }\n",
@@ -422,10 +422,10 @@ fn backend_runs_conditional_forms() {
     // Each form adds a distinct digit when it takes the expected path.
     let code = compile_and_run(concat!(
         "#[entry]\n",
-        "fn main() -> i32 {\n",
+        "fn main() -> u8 {\n",
         "    let bool yes = true;\n",
         "    let bool no = false;\n",
-        "    let i32 total = 0;\n",
+        "    let u8 total = 0;\n",
         "    if no { total += 100; } else if yes { total += 1; } else { total += 100; }\n",
         "    unless no { total += 2; }\n",
         "    unless yes { total += 100; }\n",
@@ -448,7 +448,7 @@ fn backend_runs_zero_sized_integers() {
         "fn id(u0 x) -> u0 { return x; }\n",
         "fn mix(i0 x) -> i0 { return -x + x * x - ~x; }\n",
         "#[entry]\n",
-        "fn main() -> i32 {\n",
+        "fn main() -> u8 {\n",
         "    let u0 a = 0;\n",
         "    let i0 b = 0;\n",
         "    let u0 c = id(a);\n",
@@ -458,7 +458,7 @@ fn backend_runs_zero_sized_integers() {
         "    let i32 five = 5;\n",
         "    let i8 minus_three = -3;\n",
         "    let i32 x = 3;\n",
-        "    let i32 total = 0;\n",
+        "    let u8 total = 0;\n",
         "    total += 1 if c == a;\n",
         "    total += 2 if d >= b;\n",
         "    total += 4 unless d != b;\n",
@@ -478,7 +478,7 @@ fn zero_sized_division_is_a_known_panic() {
         "check",
         "fn div(u0 a, u0 b) -> u0 { return a / b; }\n\
          #[entry]\n\
-         fn main() -> i32 { let u0 z = div(0, 0); return 0; }\n",
+         fn main() { let u0 z = div(0, 0); }\n",
     );
     assert_eq!(diagnostic["code"], "known-panic");
 }
@@ -492,7 +492,7 @@ fn zero_sized_shifts_are_known_panics() {
             &format!(
                 "fn f() -> {ty} {{ return 0 {op} 0; }}\n\
                  #[entry]\n\
-                 fn main() -> i32 {{ let {ty} z = f(); return 0; }}\n",
+                 fn main() {{ let {ty} z = f(); }}\n",
             ),
         );
         assert_eq!(diagnostic["code"], "known-panic", "`0 {op} 0` as `{ty}`");
@@ -512,7 +512,7 @@ fn backend_complements_literal_zero_sized_integers() {
         let code = compile_and_run(&format!(
             "fn f() -> {ty} {{ return ~0; }}\n\
              #[entry]\n\
-             fn main() -> i32 {{ let {ty} z = f(); return 7; }}\n",
+             fn main() -> u8 {{ let {ty} z = f(); return 7; }}\n",
         ));
         assert_eq!(code, 7, "`~0` as `{ty}`");
     }
@@ -531,7 +531,7 @@ fn backend_runs_tuples_and_multiple_results() {
         "fn pair() -> i32, bool { return 7, true; }\n",
         "fn nothing() {}\n",
         "#[entry]\n",
-        "fn main() -> i32 {\n",
+        "fn main() -> u8 {\n",
         "    let i32 q, i32 r = divmod(17, 5);\n",
         "    q, r = r, q;\n",
         "    let (i32, i32) p = (12, 13);\n",
@@ -539,7 +539,7 @@ fn backend_runs_tuples_and_multiple_results() {
         "    let i32 a, (bool b, _) = 1, (true, 5);\n",
         "    let _, bool ok = pair();\n",
         "    nothing();\n",
-        "    let i32 total = 0;\n",
+        "    let u8 total = 0;\n",
         "    total += 1 if (q, r) == (2, 3);\n",
         "    total += 2 if p == (13, 12);\n",
         "    total += 4 if ok and b;\n",
@@ -561,10 +561,10 @@ fn backend_evaluates_tuple_comparisons_in_order() {
         "    return v;\n",
         "}\n",
         "#[entry]\n",
-        "fn main() -> i32 {\n",
+        "fn main() -> u8 {\n",
         "    let i32 trace = 0;\n",
         "    let *i32 p = @trace;\n",
-        "    let i32 total = 0;\n",
+        "    let u8 total = 0;\n",
         "    total += 1 unless (log(p, 1), log(p, 2)) == (log(p, 3), log(p, 4));\n",
         "    total += 2 if trace == 1234;\n",
         "    trace = 0;\n",
@@ -582,7 +582,7 @@ fn unassigned_named_result_is_a_flow_error() {
         "check",
         concat!(
             "fn f(bool c) -> i32 q, i32 r { q = 1; if c { r = 2; } return; }\n",
-            "#[entry] fn main() -> i32 { let i32 a, i32 b = f(true); return a; }\n",
+            "#[entry] fn main() { let i32 a, i32 b = f(true); }\n",
         ),
     );
     let message = diagnostic["message"].as_str().expect("message");

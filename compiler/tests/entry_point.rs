@@ -13,8 +13,14 @@ fn validate_entry(source: &str) -> Result<(), SemanticError> {
 }
 
 #[test]
-fn accepts_i32_entry_with_custom_name() {
-    validate_entry("#[entry] fn start() -> i32 { return 0; }").expect("valid entry");
+fn accepts_u8_entry_with_custom_name() {
+    validate_entry("#[entry] fn start() -> u8 { return 0; }").expect("valid entry");
+}
+
+#[test]
+fn accepts_unit_entry_with_or_without_return_type() {
+    validate_entry("#[entry] fn main() {}").expect("valid entry");
+    validate_entry("#[entry] fn main() -> () { return; }").expect("valid entry");
 }
 
 #[test]
@@ -38,7 +44,7 @@ fn rejects_multiple_entry_functions() {
 #[test]
 fn rejects_entry_parameters() {
     assert!(matches!(
-        validate_entry("#[entry] fn main(i32 value) -> i32 { return value; }"),
+        validate_entry("#[entry] fn main(u8 value) -> u8 { return value; }"),
         Err(SemanticError::EntryWithParams { .. })
     ));
 }
@@ -48,6 +54,11 @@ fn rejects_wrong_entry_return_type() {
     assert!(matches!(
         validate_entry("#[entry] fn main() -> u32 { return 0; }"),
         Err(SemanticError::EntryWrongReturn { .. })
+    ));
+    // Wider exit codes would be truncated to 8 bits by POSIX systems.
+    assert!(matches!(
+        validate_entry("#[entry] fn main() -> i32 { return 0; }"),
+        Err(SemanticError::EntryWrongReturn { ref found, .. }) if *found == xenonc::types::Type::Int(32)
     ));
 }
 

@@ -1,5 +1,7 @@
+// Exits with 0 when every check holds, or with the number of the first
+// check that fails.
 #[entry]
-fn main()->i32
+fn main() -> u8
 {
     let i32 x = 0;
     let *i32 y = @x;
@@ -8,10 +10,25 @@ fn main()->i32
         x++;
     }
     *y += 2;
-    return fibonacci(x);
+
+    // Multiple results, destructured into new variables: 12 = 1 * 7 + 5.
+    let i32 q, i32 r = divmod(x, 7);
+    // Parallel assignment: both values are read before either is stored.
+    q, r = r, q;
+
+    return 1 unless fibonacci(x) == 144;
+    return 2 unless (q, r) == (5, 1);
+    return 0;
 }
 
 fn fibonacci(i32 n) -> i32
 {
     return n if n <= 1 else fibonacci(n - 1) + fibonacci(n - 2);
+}
+
+fn divmod(i32 n, i32 d) -> i32 q, i32 r
+{
+    q = n / d;
+    r = n % d;
+    return;
 }

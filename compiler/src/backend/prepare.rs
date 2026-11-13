@@ -1,21 +1,28 @@
 //! Backend preparation shared by code generators.
 //!
-//! Function identity and symbol assignment belong at this boundary. Current
-//! source names are preserved except for the reserved C entry wrapper.
+//! Function identity and symbol assignment belong at this boundary. Source
+//! names are preserved, except that the C entry wrapper takes the `main`
+//! symbol and a Xenon function named `main` is renamed out of its way.
 
 use crate::backend::contract::BackendError;
 use crate::index::IndexVec;
 use crate::middle::ids::DefId;
 use crate::middle::mir::{
-    BodyBuilder, FnDecl, FnSig, MirPhase, MirProgram, Place, RETURN_PLACE, START_BLOCK, SourceInfo,
-    TerminatorKind,
+    BodyBuilder, CastKind, Constant, FnDecl, FnSig, LocalDecl, MirPhase, MirProgram, Operand,
+    Place, RETURN_PLACE, Rvalue, START_BLOCK, SourceInfo, TerminatorKind,
 };
+use crate::middle::typecheck::is_entry_return_type;
 use crate::types::Type;
 
 const ENTRY_WRAPPER_NAME: &str = ".xenon.entry.wrapper";
 
-/// Adds a MIR C entry wrapper when the language entry has another name.
-/// The original entry identity remains the call target.
+/// Adds the C entry wrapper `fn() -> i32` that calls the language entry.
+///
+/// The language entry returns `u8` or `()`; the wrapper turns its result
+/// into the C `int` exit status: the `u8` zero-extended, or `0` for `()`.
+/// The original entry identity remains the call target, and a Xenon
+/// function named `main` is renamed out of the C symbol's way (see
+/// [`Symbols`]).
 ///
 /// The wrapper is ordinary Runtime MIR, so callers verify the prepared
 /// program like any other.
@@ -28,26 +35,24 @@ pub fn prepare_program(program: &MirProgram) -> Result<MirProgram, BackendError>
     let entry_decl = program
         .decl(entry)
         .ok_or_else(|| invalid(format!("entry function {entry} has no declaration")))?;
-    if entry_decl.name == "main" {
-        return Ok(prepared);
-    }
-    let sig = FnSig {
-        inputs: Vec::new(),
-        output: Type::Int(32),
-    };
-    if entry_decl.sig != sig {
-        return Err(invalid(
-            "entry wrapper requires an `fn() -> i32` entry".to_owned(),
-        ));
+    let output = entry_decl.sig.output.clone();
+    if !entry_decl.sig.inputs.is_empty() || !is_entry_return_type(&output) {
+        return Err(invalid(format!(
+            "entry wrapper requires an `fn() -> u8` or `fn()` entry, found `fn() -> {output}`"
+        )));
     }
 
     let span = entry_decl.span;
     let wrapper = prepared.declare(FnDecl {
         name: ENTRY_WRAPPER_NAME.to_owned(),
-        sig,
+        sig: FnSig {
+            inputs: Vec::new(),
+            output: Type::Int(32),
+        },
         span,
     });
     let mut builder = BodyBuilder::new(wrapper, span, Type::Int(32), []);
+    let result = builder.new_local(LocalDecl::temp(output.clone(), span));
     let return_block = builder.new_block();
     let source_info = SourceInfo::outermost(span);
     builder.terminate(
@@ -56,10 +61,20 @@ pub fn prepare_program(program: &MirProgram) -> Result<MirProgram, BackendError>
         TerminatorKind::Call {
             func: entry,
             args: Vec::new(),
-            destination: Place::from(RETURN_PLACE),
+            destination: Place::from(result),
             target: Some(return_block),
         },
     );
+    let status = if output.is_unit() {
+        Rvalue::Use(Operand::constant(Constant::int(0, Type::Int(32))))
+    } else {
+        Rvalue::Cast(
+            CastKind::IntToInt,
+            Operand::Copy(Place::from(result)),
+            Type::Int(32),
+        )
+    };
+    builder.push_assign(return_block, source_info, Place::from(RETURN_PLACE), status);
     builder.terminate(return_block, source_info, TerminatorKind::Return);
     let mut body = builder
         .finish()

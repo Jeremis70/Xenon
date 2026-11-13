@@ -96,7 +96,7 @@ AST ──typecheck::check_program──▶ THIR ──mir::build_mir──▶ M
 - **Attributes and entry point.** Item collection rejects unknown attributes
   and a second `#[entry]` function before any body is checked.
   `validate_entry_point` then requires an entry taking no parameters and
-  returning `i32`.
+  returning `u8` or `()`.
 
 ## Migration from the AST validator
 
