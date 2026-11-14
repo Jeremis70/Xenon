@@ -222,6 +222,11 @@ pub enum ExprKind {
         name: String,
         name_span: Span,
     },
+    /// A call through a member name, `r.scale(2)` or `Rect.unit()`.
+    ///
+    /// Boxed to keep expression nodes small: the parser holds several on
+    /// every level of nesting.
+    MethodCall(Box<MethodCall>),
     /// `_`. Only valid as an assignment target, where it discards a value.
     Wildcard,
 
@@ -275,6 +280,22 @@ pub enum ExprKind {
 pub struct Expr {
     pub kind: ExprKind,
     pub span: Span,
+}
+
+/// `<receiver>.<name>(<args>)`. Whether `receiver` is a value or names a
+/// struct is for the type checker to say.
+#[derive(Debug, Clone)]
+pub struct MethodCall {
+    pub receiver: Expr,
+    pub name: String,
+    pub name_span: Span,
+    pub args: Vec<Expr>,
+}
+
+impl PartialEq for MethodCall {
+    fn eq(&self, other: &Self) -> bool {
+        self.receiver == other.receiver && self.name == other.name && self.args == other.args
+    }
 }
 
 /// One argument of a [`ExprKind::NamedCall`]: `<name> = <value>`.
@@ -431,7 +452,25 @@ pub struct Function {
     pub returns: Vec<Binding>,
     pub body: Vec<Stmt>,
     pub attributes: Vec<Attribute>,
+    /// How a method takes the value it is called on; `None` for a function
+    /// that is not a method. Not one of `params`.
+    pub receiver: Option<Receiver>,
     pub span: Span,
+}
+
+/// The receiver of a method, written as its first parameter.
+#[derive(Debug, Clone, Copy)]
+pub enum Receiver {
+    /// `self`: the method gets a copy of the value.
+    Value(Span),
+    /// `&self`: the method gets a reference to the value and can change it.
+    Reference(Span),
+}
+
+impl PartialEq for Receiver {
+    fn eq(&self, other: &Self) -> bool {
+        std::mem::discriminant(self) == std::mem::discriminant(other)
+    }
 }
 
 impl PartialEq for Function {
@@ -441,6 +480,7 @@ impl PartialEq for Function {
             && self.returns == other.returns
             && self.body == other.body
             && self.attributes == other.attributes
+            && self.receiver == other.receiver
     }
 }
 
@@ -480,9 +520,34 @@ impl PartialEq for StructDecl {
     }
 }
 
+/// `impl <target> { <members> }`: the methods and associated functions of
+/// a struct. A struct may have several such blocks.
+#[derive(Debug, Clone)]
+pub struct ImplBlock {
+    /// The name of the struct.
+    pub target: String,
+    pub target_span: Span,
+    pub members: Vec<ImplMember>,
+    pub span: Span,
+}
+
+impl PartialEq for ImplBlock {
+    fn eq(&self, other: &Self) -> bool {
+        self.target == other.target && self.members == other.members
+    }
+}
+
+/// One member of an [`ImplBlock`].
+#[derive(Debug, Clone, PartialEq)]
+pub enum ImplMember {
+    /// A method if it has a [`Receiver`], otherwise an associated function.
+    Function(Function),
+}
+
 /// Every item of a program, each kind in source order.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Program {
     pub functions: Vec<Function>,
     pub structs: Vec<StructDecl>,
+    pub impls: Vec<ImplBlock>,
 }

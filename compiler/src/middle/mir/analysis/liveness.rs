@@ -102,7 +102,9 @@ impl Visitor for UseDef {
             // Writing one element keeps the others: a use, not a kill.
             PlaceContext::NonMutatingUse(_)
             | PlaceContext::MutatingUse(
-                MutatingUseContext::AddressOf | MutatingUseContext::Projection,
+                MutatingUseContext::AddressOf
+                | MutatingUseContext::Borrow
+                | MutatingUseContext::Projection,
             ) => {
                 if !self.defs.contains(local) {
                     self.uses.insert(*local);

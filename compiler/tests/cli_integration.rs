@@ -819,3 +819,52 @@ fn backend_runs_structs() {
     ));
     assert_eq!(code, 63);
 }
+
+#[cfg(feature = "llvm-backend")]
+#[test]
+fn backend_runs_methods() {
+    // Each check adds a distinct bit when it holds.
+    let code = compile_and_run(concat!(
+        "struct Counter { i32 n; }\n",
+        "impl Counter {\n",
+        "    fn zero() -> Counter { return Counter(n = 0); }\n",
+        "    fn bump(&self) { self.n += 1; }\n",
+        "    fn add(&self, i32 by) { self.n += by; }\n",
+        "    fn bumped(self) -> Counter { self.n += 1; return self; }\n",
+        "    fn get(self) -> i32 { return self.n; }\n",
+        "    fn twice(&self) { self.bump(); self.bump(); }\n",
+        "}\n",
+        "impl Counter {\n",
+        "    fn area(self) -> i32 { return self.n * self.n; }\n",
+        "}\n",
+        "fn area(i32 n) -> i32 { return n + 1; }\n",
+        "fn bump_through(&Counter c) { c.bump(); }\n",
+        "#[entry]\n",
+        "fn main() -> u8 {\n",
+        "    let u8 total = 0;\n",
+        "    // A `&self` method changes the value it is called on.\n",
+        "    let Counter c = Counter.zero();\n",
+        "    c.bump();\n",
+        "    c.twice();\n",
+        "    total += 1 if c.get() == 3;\n",
+        "    // A `self` method works on a copy.\n",
+        "    let Counter d = c.bumped();\n",
+        "    total += 2 if c.n == 3 and d.n == 4;\n",
+        "    // The argument is read before the method changes the receiver.\n",
+        "    c.add(c.n);\n",
+        "    total += 4 if c.n == 6;\n",
+        "    // Through a reference and a pointer.\n",
+        "    bump_through(@c);\n",
+        "    let *Counter p = @c;\n",
+        "    (*p).bump();\n",
+        "    total += 8 if c.n == 8;\n",
+        "    // On a value that is no variable: the change is to a temporary.\n",
+        "    Counter.zero().bump();\n",
+        "    total += 16 if Counter.zero().bumped().bumped().get() == 2;\n",
+        "    // A method and a function may share a name.\n",
+        "    total += 32 if c.area() == 64 and area(8) == 9;\n",
+        "    return total;\n",
+        "}\n",
+    ));
+    assert_eq!(code, 63);
+}

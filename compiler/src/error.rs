@@ -194,6 +194,30 @@ pub enum SemanticError {
     PositionalStructArgs { ty: String, span: Span },
     #[error("`{name}` is a function: its arguments cannot be named")]
     NamedArgsOnFunction { name: String, span: Span },
+    #[error("cannot add an `impl` to `{name}`: no struct has that name")]
+    UnknownImplTarget { name: String, span: Span },
+    #[error("`self` is only available in a method")]
+    SelfOutsideMethod { span: Span },
+    #[error("`{name}` is a method: call it on a value of type `{ty}`")]
+    MethodNeedsReceiver {
+        name: String,
+        ty: String,
+        span: Span,
+    },
+    #[error("`{name}` is not a method of `{ty}`")]
+    NotAMethod {
+        name: String,
+        ty: String,
+        span: Span,
+    },
+    #[error("`{name}` is a function of `{ty}`: call it, as in `.{name}(..)`")]
+    MethodNotCalled {
+        name: String,
+        ty: String,
+        span: Span,
+    },
+    #[error("`{name}` is reserved and cannot name a struct")]
+    ReservedName { name: String, span: Span },
     #[error("function `{name}` is defined more than once")]
     DuplicateFunction {
         name: String,
@@ -282,6 +306,12 @@ impl SemanticError {
             | SemanticError::DuplicateFieldInit { span, .. }
             | SemanticError::PositionalStructArgs { span, .. }
             | SemanticError::NamedArgsOnFunction { span, .. }
+            | SemanticError::UnknownImplTarget { span, .. }
+            | SemanticError::SelfOutsideMethod { span }
+            | SemanticError::MethodNeedsReceiver { span, .. }
+            | SemanticError::NotAMethod { span, .. }
+            | SemanticError::MethodNotCalled { span, .. }
+            | SemanticError::ReservedName { span, .. }
             | SemanticError::DuplicateFunction { span, .. } => Some(*span),
             SemanticError::NoEntryPoint => None,
         }

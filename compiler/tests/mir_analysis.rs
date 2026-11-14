@@ -700,3 +700,31 @@ fn struct_loop_value_has_a_zero() {
     let dump = mir_program_to_string(&program);
     assert!(dump.contains("const Point(0, 0)"), "{dump}");
 }
+
+const COUNTER: &str = "struct Counter { i32 n; }\n\
+    impl Counter { fn bump(&self) { self.n += 1; } fn get(self) -> i32 { return self.n; } }\n";
+
+#[test]
+fn reference_receiver_on_uninitialized_local_is_an_error() {
+    // `c.bump()` passes `@c`: the method reads what it is given.
+    let kind = error(&format!(
+        "{COUNTER}fn f() -> Counter c {{ c.bump(); return; }}"
+    ));
+    assert!(kind.to_string().contains("`c`"), "{kind:?}");
+    let kind = error(&format!(
+        "{COUNTER}fn take(&i32 r) {{}}\nfn f() -> i32 x {{ take(@x); x = 1; return; }}"
+    ));
+    assert!(kind.to_string().contains("`x`"), "{kind:?}");
+    checked(&format!(
+        "{COUNTER}fn f() -> Counter c {{ c = Counter(n = 0); c.bump(); return; }}"
+    ));
+}
+
+#[test]
+fn pointer_to_uninitialized_local_still_allowed() {
+    // A `*T` is how a function fills in a variable of its caller.
+    checked(
+        "fn init(*i32 p) { *p = 1; }\n\
+         fn f() -> i32 x { init(@x); x = 2; return; }",
+    );
+}

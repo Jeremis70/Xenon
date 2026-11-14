@@ -49,8 +49,13 @@ pub enum MutatingUseContext {
     Store,
     /// Written with the result of a call.
     Call,
-    /// Its address is taken; it may be modified through the pointer.
+    /// Its address is taken as a `*T`; it may be modified through the
+    /// pointer.
     AddressOf,
+    /// A `&T` to it is taken; it may be modified through the reference.
+    /// Unlike a pointer, a reference always refers to a value, so the
+    /// local must already hold one.
+    Borrow,
     /// Part of it is written, as in `_1.0 = ..`: the rest keeps its value,
     /// so the local must already hold one.
     Projection,
@@ -326,8 +331,15 @@ macro_rules! make_mir_visitor {
                         self.visit_operand(lhs, location);
                         self.visit_operand(rhs, location);
                     }
-                    Rvalue::AddressOf(_, place) => {
-                        let context = PlaceContext::MutatingUse(MutatingUseContext::AddressOf);
+                    Rvalue::AddressOf(kind, place) => {
+                        let context = PlaceContext::MutatingUse(match kind {
+                            crate::middle::ops::IndirectionKind::Pointer => {
+                                MutatingUseContext::AddressOf
+                            }
+                            crate::middle::ops::IndirectionKind::Reference => {
+                                MutatingUseContext::Borrow
+                            }
+                        });
                         self.visit_place(place, context, location);
                     }
                     Rvalue::Aggregate(_, operands) => {
