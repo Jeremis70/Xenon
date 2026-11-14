@@ -135,6 +135,11 @@ pub fn rvalue_ty(rvalue: &Rvalue, decls: &impl HasLocalDecls) -> Result<Type, Ty
             check_cast(*kind, source, target)?;
             Ok(target.clone())
         }
+        Rvalue::CastLoses(kind, operand, target) => {
+            let source = operand_ty(operand, decls)?;
+            check_cast(*kind, source, target)?;
+            Ok(Type::Bool)
+        }
         Rvalue::AddressOf(kind, place) => Ok(kind.pointer_to(place_ty(place, decls)?.clone())),
         Rvalue::Aggregate(AggregateKind::Tuple, operands) => Ok(Type::Tuple(
             operands
@@ -157,7 +162,9 @@ pub fn computes_on_zero_sized(
 ) -> Result<bool, TypingError> {
     let (first, second) = match rvalue {
         Rvalue::Use(_) | Rvalue::AddressOf(..) | Rvalue::Aggregate(..) => return Ok(false),
-        Rvalue::UnaryOp(_, operand) | Rvalue::Cast(_, operand, _) => (operand, None),
+        Rvalue::UnaryOp(_, operand)
+        | Rvalue::Cast(_, operand, _)
+        | Rvalue::CastLoses(_, operand, _) => (operand, None),
         Rvalue::BinaryOp(_, operands) | Rvalue::Overflows(_, operands) => {
             (&operands.0, Some(&operands.1))
         }
@@ -244,6 +251,8 @@ pub fn check_cast(kind: CastKind, from: &Type, to: &Type) -> Result<(), TypingEr
         CastKind::IntToFloat => from.is_integer() && to.is_float(),
         CastKind::FloatToInt => from.is_float() && to.is_integer(),
         CastKind::PtrToPtr => from.is_indirect() && to.is_indirect(),
+        CastKind::PtrToInt => from.is_indirect() && *to == Type::USize,
+        CastKind::IntToPtr => *from == Type::USize && to.is_indirect(),
     };
     if valid {
         Ok(())

@@ -162,6 +162,12 @@ pub enum ExprKind {
         op: UnaryOp,
         operand: Box<Expr>,
     },
+    /// Conversion `<operand> as <ty>`. The value must survive the
+    /// conversion exactly: a cast that would change it panics at runtime.
+    Cast {
+        operand: Box<Expr>,
+        ty: Type,
+    },
 
     // Control flow
     IfElse {

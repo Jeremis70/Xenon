@@ -1,5 +1,5 @@
 use num_bigint::BigInt;
-use xenonc::frontend::ast::{BinOp, Expr, ExprKind, StmtKind, UnaryOp};
+use xenonc::frontend::ast::{BinOp, Expr, ExprKind, StmtKind, Type, UnaryOp};
 use xenonc::frontend::tokens::Span;
 
 fn ternary(then_branch: Expr, condition: Expr, else_branch: Expr) -> Expr {
@@ -542,5 +542,91 @@ fn double_deref_nests() {
             other => panic!("expected nested Deref, got {other:?}"),
         },
         other => panic!("expected Deref, got {other:?}"),
+    }
+}
+
+fn ident(name: &str) -> Expr {
+    Expr {
+        kind: ExprKind::Ident(name.to_owned()),
+        span: Span::ZERO,
+    }
+}
+
+fn cast(operand: Expr, ty: Type) -> Expr {
+    Expr {
+        kind: ExprKind::Cast {
+            operand: Box::new(operand),
+            ty,
+        },
+        span: Span::ZERO,
+    }
+}
+
+/// `as` binds looser than prefix operators: `-x as u8` is `(-x) as u8`.
+#[test]
+fn cast_binds_looser_than_prefix_operators() {
+    assert_eq!(
+        parse_expr("-x as u8"),
+        cast(unary(UnaryOp::Neg, ident("x")), Type::UInt(8))
+    );
+    match parse_expr("*p as usize").kind {
+        ExprKind::Cast { operand, ty } => {
+            assert_eq!(ty, Type::USize);
+            assert!(matches!(operand.kind, ExprKind::Deref(_)));
+        }
+        other => panic!("expected Cast, got {other:?}"),
+    }
+}
+
+/// `as` binds tighter than every binary operator.
+#[test]
+fn cast_binds_tighter_than_binary_operators() {
+    for (op_src, op) in [("+", BinOp::Add), ("*", BinOp::Mul), ("<<", BinOp::LShift)] {
+        assert_eq!(
+            parse_expr(&format!("a {op_src} b as u8")),
+            binop(ident("a"), op, cast(ident("b"), Type::UInt(8))),
+            "{op_src}"
+        );
+    }
+    assert_eq!(
+        parse_expr("a as u8 < b"),
+        binop(cast(ident("a"), Type::UInt(8)), BinOp::Lt, ident("b"))
+    );
+}
+
+/// Casts chain left to right, and `.N` binds tighter than `as`.
+#[test]
+fn casts_chain_left_to_right() {
+    assert_eq!(
+        parse_expr("x as u16 as u8"),
+        cast(cast(ident("x"), Type::UInt(16)), Type::UInt(8))
+    );
+    match parse_expr("t.0 as u8").kind {
+        ExprKind::Cast { operand, .. } => {
+            assert!(matches!(operand.kind, ExprKind::Field { index: 0, .. }));
+        }
+        other => panic!("expected Cast, got {other:?}"),
+    }
+}
+
+/// A cast spans its operand and its type.
+#[test]
+fn cast_span_covers_operand_and_type() {
+    let src = "fn x()->u32{return (a + b) as *u8;}";
+    let tokens = lex(src).expect("lexing should succeed");
+    let program = Parser::new(&tokens)
+        .parse_program()
+        .expect("parsing should succeed");
+    let StmtKind::Return(Some(expr)) = &program.functions[0].body[0].kind else {
+        panic!("expected return statement");
+    };
+    assert_eq!(&src[expr.span.start..expr.span.end], "(a + b) as *u8");
+}
+
+#[test]
+fn cast_requires_a_type() {
+    for src in ["fn x()->u32{return a as;}", "fn x()->u32{return a as 3;}"] {
+        let tokens = lex(src).expect("lexing should succeed");
+        assert!(Parser::new(&tokens).parse_program().is_err(), "{src}");
     }
 }

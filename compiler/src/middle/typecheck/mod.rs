@@ -14,8 +14,10 @@
 //! - Arithmetic and bitwise operators require operands of one type.
 //! - Comparisons widen integers of the same signedness to the wider type.
 //!   Mixed-sign operands widen to a signed type that holds both ranges:
-//!   at least one bit wider than the unsigned operand. Casts are explicit.
-//!   Floats compare at the wider width.
+//!   at least one bit wider than the unsigned operand. Floats compare at
+//!   the wider width.
+//! - Every other conversion is an explicit `x as T`, which is exact or
+//!   traps (see [`crate::middle::cast`]).
 //! - A variable of type `&T` denotes the `T` it refers to, both when read
 //!   and when assigned to.
 //! - `@place` builds a `&T` where a reference is expected, a `*T` otherwise.
@@ -23,6 +25,7 @@
 //! Module map:
 //! - this module: the driver, item collection (signatures, attributes, the
 //!   entry point), and the per-function context;
+//! - `cast`: explicit conversions `x as T`;
 //! - `entry`: validation of the executable entry point on THIR;
 //! - `scope`: lexical scopes and name resolution;
 //! - `literal`: classification of untyped literal expressions;
@@ -32,6 +35,7 @@
 //! - `tuple`: tuple expressions, element access, destructuring `let`,
 //!   parallel assignment, and bare `return`.
 
+mod cast;
 mod entry;
 mod expr;
 mod literal;

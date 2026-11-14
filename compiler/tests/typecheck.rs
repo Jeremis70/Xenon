@@ -779,3 +779,100 @@ fn discarded_elements_keep_the_other_expectations() {
         assert!(dump.contains("1_u8"), "{src}:\n{dump}");
     }
 }
+
+// ── Casts ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn casts_classify_their_conversion() {
+    for (from, to, kind) in [
+        ("i32", "u8", "IntToInt"),
+        ("u8", "usize", "IntToInt"),
+        ("i64", "f32", "IntToFloat"),
+        ("f64", "u16", "FloatToInt"),
+        ("f64", "f16", "FloatToFloat"),
+        ("f16", "bf16", "FloatToFloat"),
+        ("*u8", "*u32", "PtrToPtr"),
+        ("*u8", "usize", "PtrToInt"),
+        ("usize", "*u8", "IntToPtr"),
+    ] {
+        let dump = thir(&format!("fn f({from} a)->{to} {{ return a as {to}; }}"));
+        assert!(
+            dump.contains(&format!("return (a@b0 as {to} [{kind}]);")),
+            "{from} as {to}:\n{dump}"
+        );
+    }
+}
+
+#[test]
+fn cast_to_the_same_type_is_the_operand() {
+    let dump = thir("fn f(i32 a)->i32 { return a as i32; }");
+    assert!(dump.contains("return a@b0;"), "{dump}");
+}
+
+#[test]
+fn casts_without_a_conversion_are_errors() {
+    for (from, to, note) in [
+        ("bool", "u8", Some("`bool` has no casts")),
+        ("u8", "bool", Some("`bool` has no casts")),
+        ("*u8", "u64", Some("cast through `usize`")),
+        ("u64", "*u8", Some("cast through `usize`")),
+        ("*u8", "isize", Some("cast through `usize`")),
+        ("*u8", "f64", None),
+        ("(i32, i32)", "i64", None),
+        ("i32", "(i32,)", None),
+    ] {
+        let err = error(&format!("fn f({from} a) {{ let {to} b = a as {to}; }}"));
+        match err {
+            SemanticError::InvalidCast {
+                note: found_note, ..
+            } => match note {
+                Some(note) => {
+                    assert!(
+                        found_note.is_some_and(|n| n.contains(note)),
+                        "{from} as {to}"
+                    )
+                }
+                None => assert_eq!(found_note, None, "{from} as {to}"),
+            },
+            other => panic!("{from} as {to}: expected InvalidCast, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn references_cannot_be_cast_to() {
+    let err = error("fn f(i32 a) { let i32 x = 0; let &i32 r = a as &i32; }");
+    assert!(
+        matches!(err, SemanticError::InvalidCast { note: Some(note), .. } if note.contains("references")),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn untyped_literal_operand_takes_the_target_type() {
+    let dump = thir("fn f()->u8 { return 5 as u8; }");
+    assert!(dump.contains("return 5_u8;"), "{dump}");
+    let dump = thir("fn f()->f32 { return 1.5 as f32; }");
+    assert!(!dump.contains("FloatToFloat"), "{dump}");
+}
+
+#[test]
+fn untyped_literal_operand_is_range_checked_against_the_target() {
+    for src in [
+        "fn f()->u8 { return 300 as u8; }",
+        "fn f()->u32 { return -1 as u32; }",
+    ] {
+        assert!(
+            matches!(error(src), SemanticError::LiteralOutOfRange { .. }),
+            "{src}"
+        );
+    }
+}
+
+#[test]
+fn literal_of_another_kind_keeps_its_default_type() {
+    let dump = thir("fn f()->i32 { return 2.5 as i32; }");
+    assert!(dump.contains("as i32 [FloatToInt]"), "{dump}");
+    let dump = thir("fn f()->f32 { return 3 as f32; }");
+    assert!(dump.contains("as f32 [IntToFloat]"), "{dump}");
+}

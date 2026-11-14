@@ -164,7 +164,7 @@ fn unary_operations_follow_the_bit_width() {
 }
 
 #[test]
-fn comparisons_overflow_checks_and_casts() {
+fn comparisons_and_overflow_checks() {
     assert_eq!(
         binary(BinOp::Lt, -1, 0, Type::Int(8)),
         EvalResult::Value(Constant::bool(true))
@@ -177,22 +177,101 @@ fn comparisons_overflow_checks_and_casts() {
         )),
         EvalResult::Value(Constant::bool(true))
     );
+}
+
+/// Casts are exact or trap: they never wrap.
+#[test]
+fn integer_casts_are_exact_or_trap() {
+    let cast = |operand: i64, from: Type, to: Type| {
+        eval(Rvalue::Cast(CastKind::IntToInt, int(operand, from), to))
+    };
+    let lossy = EvalResult::Trap(AssertKind::LossyCast);
+    assert_eq!(cast(-1, Type::Int(32), Type::UInt(8)), lossy);
+    assert_eq!(cast(255, Type::UInt(8), Type::Int(8)), lossy);
+    assert_eq!(cast(300, Type::Int(32), Type::UInt(8)), lossy);
     assert_eq!(
-        eval(Rvalue::Cast(
-            CastKind::IntToInt,
-            int(-1, Type::Int(32)),
-            Type::UInt(8)
-        )),
+        cast(255, Type::Int(32), Type::UInt(8)),
         value(255, Type::UInt(8))
     );
     assert_eq!(
-        eval(Rvalue::Cast(
+        cast(-128, Type::Int(32), Type::Int(8)),
+        value(-128, Type::Int(8))
+    );
+    assert_eq!(
+        cast(0, Type::Int(32), Type::UInt(0)),
+        value(0, Type::UInt(0))
+    );
+    assert_eq!(cast(1, Type::Int(32), Type::UInt(0)), lossy);
+    assert_eq!(
+        eval(Rvalue::CastLoses(
+            CastKind::IntToInt,
+            int(256, Type::Int(32)),
+            Type::UInt(8)
+        )),
+        EvalResult::Value(Constant::bool(true))
+    );
+    assert_eq!(
+        eval(Rvalue::CastLoses(
             CastKind::IntToInt,
             Operand::constant(Constant::int(BigInt::from(255), Type::UInt(8))),
-            Type::Int(8)
+            Type::Int(16)
         )),
-        value(-1, Type::Int(8))
+        EvalResult::Value(Constant::bool(false))
     );
+}
+
+#[test]
+fn float_casts_are_exact_or_trap() {
+    let float = |value, ty| Operand::constant(Constant::float(value, ty));
+    let lossy = EvalResult::Trap(AssertKind::LossyCast);
+    let to_int = |value: f64| {
+        eval(Rvalue::Cast(
+            CastKind::FloatToInt,
+            float(value, Type::Float64),
+            Type::Int(32),
+        ))
+    };
+    assert_eq!(to_int(2.0), value(2, Type::Int(32)));
+    assert_eq!(to_int(-2147483648.0), value(-2147483648, Type::Int(32)));
+    assert_eq!(to_int(2.5), lossy);
+    assert_eq!(to_int(2147483648.0), lossy);
+    assert_eq!(to_int(f64::NAN), lossy);
+    assert_eq!(to_int(f64::INFINITY), lossy);
+
+    let to_float = |operand: i64, to: Type| {
+        eval(Rvalue::Cast(
+            CastKind::IntToFloat,
+            int(operand, Type::Int(64)),
+            to,
+        ))
+    };
+    // 2^24 + 1 needs 25 significand bits; `f32` has 24.
+    assert_eq!(to_float(16_777_217, Type::Float32), lossy);
+    assert_eq!(
+        to_float(16_777_216, Type::Float32),
+        EvalResult::Value(Constant::float(16_777_216.0, Type::Float32))
+    );
+    // 65504 is the largest finite `f16`; 65536 overflows it.
+    assert!(matches!(
+        to_float(65504, Type::Float16),
+        EvalResult::Value(_)
+    ));
+    assert_eq!(to_float(65536, Type::Float16), lossy);
+
+    let narrow = |value: f64| {
+        eval(Rvalue::Cast(
+            CastKind::FloatToFloat,
+            float(value, Type::Float64),
+            Type::Float32,
+        ))
+    };
+    assert_eq!(narrow(0.1), lossy);
+    assert_eq!(narrow(1e300), lossy);
+    assert_eq!(
+        narrow(0.5),
+        EvalResult::Value(Constant::float(0.5, Type::Float32))
+    );
+    assert!(matches!(narrow(f64::NAN), EvalResult::Value(_)));
 }
 
 #[test]

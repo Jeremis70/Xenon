@@ -4,10 +4,12 @@
 //! the backend sees them. Operands are snapshotted before guards so neither
 //! the checks nor the operation can observe a different value. The overflow
 //! mode is supplied explicitly and is independent of optimization level.
+//! Casts that may lose information are always guarded, whatever the mode.
 
 use num_bigint::BigInt;
 use thiserror::Error;
 
+use crate::middle::cast;
 use crate::middle::mir::analysis::zero_sized::erase_zero_sized_computation;
 use crate::middle::mir::body::{BasicBlock, BasicBlockData, Body, MirPhase, SourceInfo};
 use crate::middle::mir::program::MirProgram;
@@ -70,7 +72,8 @@ pub enum RuntimeCheckError {
 /// The transformation is transactional: a failed normalization leaves
 /// `program` unchanged.
 ///
-/// Integer division/remainder by zero and invalid shifts always trap.
+/// Integer division/remainder by zero, invalid shifts, and casts that do
+/// not represent their value exactly always trap.
 /// Signed minimum divided or remaindered by `-1` also traps, rather than
 /// relying on backend-specific poison or undefined behavior. Checked
 /// overflow guards are added only when `policy.overflow` is `Checked`.
@@ -185,10 +188,22 @@ impl Guards<'_> {
                 }
                 Ok(())
             }
+            Rvalue::Cast(kind, operand, to) => {
+                let from = typing::operand_ty(operand, &*self.body)?.clone();
+                if !cast::is_lossless(*kind, &from, to, self.target) {
+                    self.snapshot(operand, &from);
+                    let loses = self.temp(
+                        Type::Bool,
+                        Rvalue::CastLoses(*kind, operand.clone(), to.clone()),
+                    );
+                    self.trap_if(loses, AssertKind::LossyCast);
+                }
+                Ok(())
+            }
             Rvalue::Use(_)
             | Rvalue::UnaryOp(..)
             | Rvalue::Overflows(..)
-            | Rvalue::Cast(..)
+            | Rvalue::CastLoses(..)
             | Rvalue::AddressOf(..)
             | Rvalue::Aggregate(..) => Ok(()),
         }

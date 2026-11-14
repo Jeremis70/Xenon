@@ -149,6 +149,32 @@ impl Type {
             _ => None,
         }
     }
+
+    /// Significand precision of a floating-point type in bits, counting the
+    /// implicit leading bit; `None` for non-floats. Every integer of at most
+    /// this many bits is exactly representable.
+    pub fn float_precision(&self) -> Option<u32> {
+        match self {
+            Type::Float16 => Some(11),
+            Type::BFloat16 => Some(8),
+            Type::Float32 => Some(24),
+            Type::Float64 => Some(53),
+            Type::Float128 => Some(113),
+            _ => None,
+        }
+    }
+
+    /// Largest finite exponent of a floating-point type: every finite value
+    /// is below `2^(max_exponent + 1)`. `None` for non-floats.
+    pub fn float_max_exponent(&self) -> Option<i32> {
+        match self {
+            Type::Float16 => Some(15),
+            Type::BFloat16 | Type::Float32 => Some(127),
+            Type::Float64 => Some(1023),
+            Type::Float128 => Some(16383),
+            _ => None,
+        }
+    }
 }
 
 /// Inclusive value range of an unsigned integer of `width` bits.

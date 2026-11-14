@@ -58,6 +58,7 @@ impl FnCtxt<'_, '_> {
                 })
             }
             Ast::UnaryOp { op, operand } => self.check_unary(op, operand, expected, span),
+            Ast::Cast { operand, ty } => self.check_cast(operand, ty, span),
             Ast::BinOp { lhs, op, rhs } => self.check_binary(op, lhs, rhs, expected, span),
             Ast::Call { name, args } => self.check_call(name, args, span),
             Ast::IfElse {

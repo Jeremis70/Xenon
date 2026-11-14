@@ -240,3 +240,25 @@ fn zero_sized_tuples_keep_their_elements() {
     let ir = ir_for("fn f((i0, i0) t)->i0 { return t.1; }\n");
     assert!(ir.contains("{ {}, {} }"), "{ir}");
 }
+
+#[test]
+fn pointer_casts_copy_the_bits() {
+    let ir = ir_for(
+        "fn to_int(*u8 p)->usize { return p as usize; } \
+         fn to_ptr(usize n)->*u8 { return n as *u8; }",
+    );
+    assert!(ir.contains("ptrtoint ptr"), "{ir}");
+    assert!(ir.contains("inttoptr i"), "{ir}");
+    assert!(
+        !ir.contains("assert.fail"),
+        "pointer casts need no check:\n{ir}"
+    );
+}
+
+#[test]
+fn f16_and_bf16_convert_through_f32() {
+    let ir = ir_for("fn f(f16 x)->bf16 { return x as bf16; }");
+    assert!(ir.contains("fpext half"), "{ir}");
+    assert!(ir.contains("fptrunc float"), "{ir}");
+    assert!(ir.contains("to bfloat"), "{ir}");
+}

@@ -3,9 +3,17 @@ use crate::frontend::tokens::TokenKind;
 
 /// Binding power of prefix operators (`-`, `not`, `~`, `*`, `@`).
 ///
-/// Higher than every infix binding power, so `*p + 1` parses as `(*p) + 1`
-/// and `@x & mask` parses as `(@x) & mask`.
-pub(crate) const UNARY_BP: u8 = 23;
+/// Higher than every infix binding power and than `as`, so `*p + 1` parses
+/// as `(*p) + 1`, `@x & mask` as `(@x) & mask`, and `-x as u8` as
+/// `(-x) as u8`.
+pub(crate) const UNARY_BP: u8 = 25;
+
+/// Left binding power of the postfix cast `expr as Type`.
+///
+/// Higher than every binary operator, so `a + b as u8` parses as
+/// `a + (b as u8)`, and lower than prefix operators. Casts chain left to
+/// right: `x as u16 as u8` is `(x as u16) as u8`.
+pub(crate) const AS_BP: u8 = 23;
 
 /// Binding powers and operator for a binary infix token.
 pub(crate) struct OpInfo {
