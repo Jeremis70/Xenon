@@ -96,6 +96,11 @@ pub fn walk_expr<'thir, V: Visitor<'thir>>(visitor: &mut V, expr: &'thir Expr) {
                 visitor.visit_expr(arg);
             }
         }
+        ExprKind::Struct { fields } => {
+            for (_, value) in fields {
+                visitor.visit_expr(value);
+            }
+        }
         ExprKind::If {
             condition,
             then_expr,

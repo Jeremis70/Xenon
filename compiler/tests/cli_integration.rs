@@ -770,3 +770,52 @@ fn wide_float_int_casts_compile_and_run() {
         assert_eq!(status.code(), Some(0), "-O{opt}: failed check (exit code)");
     }
 }
+
+#[cfg(feature = "llvm-backend")]
+#[test]
+fn backend_runs_structs() {
+    // Each check adds a distinct bit when it holds.
+    let code = compile_and_run(concat!(
+        "struct Point { i32 x; i32 y; }\n",
+        "struct Line { Point from; (Point, i32) to; }\n",
+        "struct Node { i32 value; *Node next; }\n",
+        "struct Empty {}\n",
+        "fn flip(Point p) -> Point { return Point(y = p.x, x = p.y); }\n",
+        "fn bump(&Point p) { p.x += 10; }\n",
+        "fn log(*i32 trace, i32 v) -> i32 {\n",
+        "    *trace = *trace * 10 + v;\n",
+        "    return v;\n",
+        "}\n",
+        "#[entry]\n",
+        "fn main() -> u8 {\n",
+        "    let u8 total = 0;\n",
+        "    // Fields may be given in any order.\n",
+        "    let Point p = Point(y = 2, x = 1);\n",
+        "    total += 1 if p.x == 1 and p.y == 2;\n",
+        "    // A struct is copied when passed and returned.\n",
+        "    let Point q = flip(p);\n",
+        "    total += 2 if q == Point(x = 2, y = 1) and p != q and p == Point(x = 1, y = 2);\n",
+        "    // Fields are places, also nested and through a reference.\n",
+        "    let Line l = Line(from = p, to = (q, 7));\n",
+        "    l.from.x = 5;\n",
+        "    l.to.0.y += 4;\n",
+        "    l.to.1++;\n",
+        "    bump(@l.from);\n",
+        "    total += 4 if l.from.x == 15 and l.to.0.y == 5 and l.to.1 == 8 and p.x == 1;\n",
+        "    // A struct may point to its own type.\n",
+        "    let Node last = Node(value = 30, next = @0x0);\n",
+        "    let Node first = Node(value = 12, next = @last);\n",
+        "    total += 8 if (*first.next).value + first.value == 42;\n",
+        "    // Values are computed in the order they are written.\n",
+        "    let i32 trace = 0;\n",
+        "    let Point t = Point(y = log(@trace, 1), x = log(@trace, 2));\n",
+        "    total += 16 if trace == 12 and t.x == 2 and t.y == 1;\n",
+        "    // Fields swap in parallel, and empty structs are all equal.\n",
+        "    t.x, t.y = t.y, t.x;\n",
+        "    let Empty e = Empty();\n",
+        "    total += 32 if t == Point(x = 1, y = 2) and e == Empty();\n",
+        "    return total;\n",
+        "}\n",
+    ));
+    assert_eq!(code, 63);
+}

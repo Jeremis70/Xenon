@@ -545,12 +545,12 @@ fn write_const_value(f: &mut fmt::Formatter<'_>, value: &ConstValue, ty: &Type) 
         ConstValue::Float(value) => write!(f, "{value:?}_{ty}"),
         ConstValue::Address(value) => write!(f, "@{value:#x}: {ty}"),
         ConstValue::Tuple(values) => {
-            f.write_str("(")?;
             // A struct's field types are not at hand here: its name and the
             // bare values have to do.
             if let Type::Struct(struct_ty) = ty {
                 f.write_str(&struct_ty.name)?;
             }
+            f.write_str("(")?;
             let tys = ty.tuple_elems().unwrap_or_default();
             for (index, value) in values.iter().enumerate() {
                 if index > 0 {
@@ -558,11 +558,31 @@ fn write_const_value(f: &mut fmt::Formatter<'_>, value: &ConstValue, ty: &Type) 
                 }
                 match tys.get(index) {
                     Some(ty) => write_const_value(f, value, ty)?,
-                    None => write!(f, "{value:?}")?,
+                    None => write_untyped_value(f, value)?,
                 }
             }
             let one_tuple = values.len() == 1 && !matches!(ty, Type::Struct(_));
             f.write_str(if one_tuple { ",)" } else { ")" })
+        }
+    }
+}
+
+/// Writes `value` without its type, which is not known.
+fn write_untyped_value(f: &mut fmt::Formatter<'_>, value: &ConstValue) -> fmt::Result {
+    match value {
+        ConstValue::Bool(value) => write!(f, "{value}"),
+        ConstValue::Int(value) => write!(f, "{value}"),
+        ConstValue::Float(value) => write!(f, "{value:?}"),
+        ConstValue::Address(value) => write!(f, "@{value:#x}"),
+        ConstValue::Tuple(values) => {
+            f.write_str("(")?;
+            for (index, value) in values.iter().enumerate() {
+                if index > 0 {
+                    f.write_str(", ")?;
+                }
+                write_untyped_value(f, value)?;
+            }
+            f.write_str(")")
         }
     }
 }

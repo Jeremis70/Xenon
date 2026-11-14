@@ -498,3 +498,59 @@ fn tuple_equality_snapshots_a_place_before_side_effects() {
     let f = &dump[dump.find("fn f()").expect("f is dumped")..];
     assert_in_order(f, &["_2 = copy _1;", "= g(", "Eq(copy _2.0,"]);
 }
+
+// ── Structs ───────────────────────────────────────────────────────────────────
+
+#[test]
+fn struct_arguments_evaluate_in_source_order() {
+    let dump = mir("struct P { i32 a; i32 b; }\n\
+         fn first() -> i32 { return 1; }\n\
+         fn second() -> i32 { return 2; }\n\
+         fn f() -> P { return P(b = first(), a = second()); }");
+    // `b` is written first, so its value is computed first; the struct
+    // still stores `a` first.
+    assert_in_order(&dump, &["fn f()", "= first()", "= second()", "= P(copy _"]);
+    let aggregate = dump
+        .lines()
+        .find(|line| line.contains("= P(copy"))
+        .expect("an aggregate assignment");
+    let (first_call, second_call) = (
+        call_destination(&dump, "first()"),
+        call_destination(&dump, "second()"),
+    );
+    assert!(
+        aggregate.contains(&format!("P(copy {second_call}, copy {first_call})")),
+        "{dump}"
+    );
+}
+
+/// The local that receives the result of the call written `call`.
+fn call_destination(dump: &str, call: &str) -> String {
+    let line = dump
+        .lines()
+        .find(|line| line.contains(&format!("= {call}")))
+        .unwrap_or_else(|| panic!("no call `{call}` in:\n{dump}"));
+    line.trim()
+        .split(' ')
+        .next()
+        .expect("a destination")
+        .to_owned()
+}
+
+#[test]
+fn struct_fields_lower_to_field_projections() {
+    let dump = mir("struct P { i32 a; i32 b; }\n\
+         fn f(P p) -> i32 { p.b = 3; return p.b; }\n\
+         fn g(P x, P y) -> bool { return x == y; }");
+    assert!(dump.contains("_1.1 = const 3_i32"), "{dump}");
+    // Equality compares field by field.
+    assert_in_order(
+        &dump,
+        &[
+            "fn g(",
+            "Eq(copy _1.0, copy _2.0)",
+            "Eq(copy _1.1, copy _2.1)",
+            "BitAnd(",
+        ],
+    );
+}

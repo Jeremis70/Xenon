@@ -876,3 +876,348 @@ fn literal_of_another_kind_keeps_its_default_type() {
     let dump = thir("fn f()->f32 { return 3 as f32; }");
     assert!(dump.contains("as f32 [IntToFloat]"), "{dump}");
 }
+
+// ── Structs ───────────────────────────────────────────────────────────────────
+
+const RECT: &str = "struct Rect { f64 width; f64 height; }\n";
+
+/// A source and what its type error must look like.
+type ErrorCase = (&'static str, fn(&SemanticError) -> bool);
+
+/// The error of `src` checked after the declaration of `Rect`.
+fn rect_error(src: &str) -> SemanticError {
+    error(&format!("{RECT}{src}"))
+}
+
+#[test]
+fn struct_construction_any_field_order() {
+    let dump = thir(&format!(
+        "{RECT}fn f()->Rect {{ return Rect(height = 4.0, width = 3.0); }}"
+    ));
+    // Arguments stay in source order; each takes the type of its field.
+    assert!(
+        dump.contains("Rect(height = 4.0_f64, width = 3.0_f64)"),
+        "{dump}"
+    );
+    assert!(dump.contains("-> Rect"), "{dump}");
+    // No fields, no arguments.
+    check("struct Empty {}\nfn f()->Empty { return Empty(); }").expect("should check");
+}
+
+#[test]
+fn field_read_and_write() {
+    let dump = thir(&format!(
+        "{RECT}fn f(Rect r)->f64 {{ r.height = 2.0; r.width += 1.0; return r.height; }}"
+    ));
+    assert!(dump.contains("r@b0.1 = 2.0_f64"), "{dump}");
+    assert!(dump.contains("return r@b0.1"), "{dump}");
+    // A field of a value that is no place can be read, not written.
+    check(&format!(
+        "{RECT}fn g()->Rect {{ return Rect(width = 1.0, height = 2.0); }}\n\
+         fn f()->f64 {{ return g().width; }}"
+    ))
+    .expect("should check");
+}
+
+#[test]
+fn nested_field_places() {
+    let src = "struct Point { i32 x; i32 y; }\n\
+               struct Line { Point from; (Point, i32) to; }\n\
+               fn f(Line l, (Point, bool) t)->i32 {\n\
+                   l.from.x = 1; l.to.0.y += 2; l.to.1++; t.0.x = 3;\n\
+                   return l.from.x + l.to.0.y + t.0.x;\n\
+               }";
+    let dump = thir(src);
+    assert!(dump.contains("l@b0.0.0 = 1_i32"), "{dump}");
+    assert!(dump.contains("t@b1.0.0 = 3_i32"), "{dump}");
+}
+
+#[test]
+fn overlapping_struct_targets_rejected() {
+    for body in [
+        "r, r.width = r, 1.0;",
+        "r.width, r.width = 1.0, 2.0;",
+        "r.width, r = 1.0, r;",
+    ] {
+        let error = rect_error(&format!("fn f(Rect r) {{ {body} }}"));
+        assert!(
+            matches!(error, SemanticError::DuplicateAssignTarget { .. }),
+            "{body}: {error}"
+        );
+    }
+    // The target is named as written, by field name and tuple index.
+    let error = error("struct P { (i32, i32) pair; }\nfn f(P p) { p.pair.1, p.pair = 1, (2, 3); }");
+    assert_eq!(
+        error.to_string(),
+        "`p.pair` is assigned more than once in this assignment"
+    );
+    let error = rect_error("fn f(Rect r) { r.width, r.width = 1.0, 2.0; }");
+    assert_eq!(
+        error.to_string(),
+        "`r.width` is assigned more than once in this assignment"
+    );
+    // Distinct fields do not overlap.
+    check(&format!(
+        "{RECT}fn f(Rect r) {{ r.width, r.height = r.height, r.width; }}"
+    ))
+    .expect("should check");
+}
+
+#[test]
+fn struct_equality() {
+    check(&format!(
+        "{RECT}fn f(Rect a, Rect b)->bool {{ return a == b and a != Rect(width = 1.0, height = 2.0); }}"
+    ))
+    .expect("should check");
+    let error = rect_error("fn f(Rect a, Rect b)->bool { return a < b; }");
+    assert!(
+        error
+            .to_string()
+            .contains("structs only support `==` and `!=`"),
+        "{error}"
+    );
+    // Same fields, different structs: different types.
+    let error = self::error(
+        "struct A { i32 x; }\nstruct B { i32 x; }\nfn f(A a, B b)->bool { return a == b; }",
+    );
+    assert!(
+        matches!(error, SemanticError::InvalidOperands { .. }),
+        "{error}"
+    );
+    let error = rect_error("fn f(Rect a)->u8 { return a as u8; }");
+    assert!(
+        matches!(error, SemanticError::InvalidCast { .. }),
+        "{error}"
+    );
+}
+
+#[test]
+fn struct_through_reference_auto_derefs() {
+    let dump = thir(&format!(
+        "{RECT}fn f(&Rect r)->f64 {{ r.width = 2.0; return r.width; }}"
+    ));
+    assert!(dump.contains("(*r@b0).0 = 2.0_f64"), "{dump}");
+}
+
+#[test]
+fn field_on_pointer_is_rejected() {
+    let error = rect_error("fn f(*Rect p)->f64 { return p.width; }");
+    assert!(
+        matches!(&error, SemanticError::NoSuchMember { name, found, .. }
+            if name == "width" && found == "*Rect"),
+        "{error}"
+    );
+    assert_eq!(error.to_string(), "`*Rect` has no member `width`");
+    check(&format!(
+        "{RECT}fn f(*Rect p)->f64 {{ return (*p).width; }}"
+    ))
+    .expect("should check");
+}
+
+#[test]
+fn member_errors() {
+    let error = rect_error("fn f(Rect r)->f64 { return r.depth; }");
+    assert!(
+        matches!(&error, SemanticError::NoSuchMember { name, found, .. }
+            if name == "depth" && found == "Rect"),
+        "{error}"
+    );
+    let error = rect_error("fn f(i32 x)->i32 { return x.width; }");
+    assert!(
+        matches!(error, SemanticError::NoSuchMember { .. }),
+        "{error}"
+    );
+    // A tuple index on a struct, and a name on a tuple.
+    let error = rect_error("fn f(Rect r)->f64 { return r.0; }");
+    assert!(matches!(error, SemanticError::NotATuple { .. }), "{error}");
+    let error = rect_error("fn f((i32, i32) t)->i32 { return t.width; }");
+    assert!(
+        matches!(error, SemanticError::NoSuchMember { .. }),
+        "{error}"
+    );
+}
+
+#[test]
+fn construction_errors() {
+    let cases: [ErrorCase; 8] = [
+        (
+            "return Rect(width = 1.0);",
+            |e| matches!(e, SemanticError::MissingField { name, .. } if name == "height"),
+        ),
+        (
+            "return Rect();",
+            |e| matches!(e, SemanticError::MissingField { name, .. } if name == "width"),
+        ),
+        (
+            "return Rect(width = 1.0, height = 2.0, depth = 3.0);",
+            |e| matches!(e, SemanticError::UnknownField { name, .. } if name == "depth"),
+        ),
+        (
+            "return Rect(width = 1.0, width = 2.0, height = 3.0);",
+            |e| matches!(e, SemanticError::DuplicateFieldInit { name, .. } if name == "width"),
+        ),
+        ("return Rect(1.0, 2.0);", |e| {
+            matches!(e, SemanticError::PositionalStructArgs { .. })
+        }),
+        ("return Rect(width = true, height = 2.0);", |e| {
+            matches!(e, SemanticError::TypeMismatch { .. })
+        }),
+        (
+            "return g(x = 1);",
+            |e| matches!(e, SemanticError::NamedArgsOnFunction { name, .. } if name == "g"),
+        ),
+        (
+            "return Nope(x = 1);",
+            |e| matches!(e, SemanticError::UndefinedFunction { name, .. } if name == "Nope"),
+        ),
+    ];
+    for (body, expected) in cases {
+        let error = rect_error(&format!("fn g(i32 x)->Rect {{ {body} }}"));
+        assert!(expected(&error), "{body}: {error:?}");
+    }
+    assert_eq!(
+        rect_error("fn f()->Rect { return Rect(1.0, 2.0); }").to_string(),
+        "`Rect` is a struct: name its fields, as in `Rect(field = value)`"
+    );
+}
+
+#[test]
+fn struct_declaration_errors() {
+    let cases: [ErrorCase; 9] = [
+        (
+            "struct A {}\nstruct A {}",
+            |e| matches!(e, SemanticError::DuplicateStruct { name, .. } if name == "A"),
+        ),
+        (
+            "struct A {}\nfn A() {}",
+            |e| matches!(e, SemanticError::NameConflict { name, .. } if name == "A"),
+        ),
+        (
+            "fn A() {}\nstruct A {}",
+            |e| matches!(e, SemanticError::NameConflict { name, .. } if name == "A"),
+        ),
+        (
+            "struct i32 {}",
+            |e| matches!(e, SemanticError::BuiltinTypeName { name, .. } if name == "i32"),
+        ),
+        (
+            "struct bool {}",
+            |e| matches!(e, SemanticError::BuiltinTypeName { name, .. } if name == "bool"),
+        ),
+        (
+            "struct A { i32 x; bool x; }",
+            |e| matches!(e, SemanticError::DuplicateMember { name, .. } if name == "x"),
+        ),
+        (
+            "struct A { &i32 r; }",
+            |e| matches!(e, SemanticError::ReferenceField { name, .. } if name == "r"),
+        ),
+        (
+            "struct A { (i32, &bool) t; }",
+            |e| matches!(e, SemanticError::ReferenceField { name, .. } if name == "t"),
+        ),
+        (
+            "struct A { Missing m; }",
+            |e| matches!(e, SemanticError::UnknownType { name, .. } if name == "Missing"),
+        ),
+    ];
+    for (src, expected) in cases {
+        let error = error(src);
+        assert!(expected(&error), "{src}: {error:?}");
+    }
+}
+
+#[test]
+fn unknown_type_is_a_semantic_error() {
+    let src = "fn f() { let foo x = 1; }";
+    let error = self::error(src);
+    assert_eq!(error.to_string(), "unknown type `foo`");
+    let span = error.span().expect("span");
+    assert_eq!(&src[span.start..span.end], "foo");
+    for src in [
+        "fn f(Missing m) {}",
+        "fn f() -> *Missing { return @0x0; }",
+        "fn f(i32 x) -> i32 { return x as Missing; }",
+        "fn f((i32, Missing) t) {}",
+        "fn f() { let i32 a, Missing b = 1, 2; }",
+    ] {
+        let error = self::error(src);
+        assert!(
+            matches!(&error, SemanticError::UnknownType { name, .. } if name == "Missing"),
+            "{src}: {error:?}"
+        );
+    }
+}
+
+#[test]
+fn mutually_recursive_structs_rejected() {
+    for src in [
+        "struct A { A a; }",
+        "struct A { B b; }\nstruct B { A a; }",
+        "struct A { (i32, B) t; }\nstruct B { i32 x; A a; }",
+    ] {
+        let error = self::error(src);
+        assert!(
+            matches!(error, SemanticError::RecursiveStruct { .. }),
+            "{src}: {error:?}"
+        );
+    }
+    assert_eq!(
+        error("struct A { A a; }").to_string(),
+        "struct `A` contains itself; use a pointer `*A` to refer to another `A`"
+    );
+}
+
+#[test]
+fn struct_via_pointer_may_be_recursive() {
+    check(
+        "struct Node { i32 value; *Node next; }\n\
+         struct A { *B b; }\nstruct B { *A a; (i32, *B) t; }\n\
+         fn f(*Node n)->i32 { return (*(*n).next).value; }",
+    )
+    .expect("should check");
+}
+
+#[test]
+fn structs_may_be_declared_in_any_order() {
+    check(
+        "fn f(Outer o)->i32 { return o.inner.x; }\n\
+         struct Outer { Inner inner; }\n\
+         struct Inner { i32 x; }",
+    )
+    .expect("should check");
+}
+
+#[test]
+fn local_named_like_struct_wins() {
+    // `Rect` here is the parameter, a tuple, not the struct.
+    let dump = thir(&format!(
+        "{RECT}fn f((i32, i32) Rect)->i32 {{ return Rect.0; }}"
+    ));
+    assert!(dump.contains("return Rect@b0.0"), "{dump}");
+}
+
+#[test]
+fn identifiers_starting_with_i_or_u_name_structs() {
+    check(
+        "struct user { i32 id; }\nstruct item { user owner; }\nstruct u { i32 index; }\n\
+         struct index { u inner; }\n\
+         fn f(item item, index i, u8 u)->i32 { let user user = item.owner; return user.id + i.inner.index; }",
+    )
+    .expect("should check");
+    // Built-in integer names are still `i` or `u` followed by digits only.
+    assert_eq!("i32".parse::<Type>().ok(), Some(Type::Int(32)));
+    assert!("i3x".parse::<Type>().is_err() && "u".parse::<Type>().is_err());
+}
+
+#[test]
+fn zero_sized_fields_and_empty_struct_equality() {
+    check(
+        "struct Empty {}\nstruct Unit { () nothing; u0 zero; Empty e; }\n\
+         fn f(Unit a, Empty x, Empty y)->bool {\n\
+             let Unit b = Unit(nothing = (), zero = 0, e = Empty());\n\
+             return a == b and x == y;\n\
+         }",
+    )
+    .expect("should check");
+}

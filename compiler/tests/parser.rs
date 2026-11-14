@@ -62,18 +62,16 @@ fn parse_var_decl_accepts_signed_integer_type() {
 }
 
 #[test]
-fn parse_var_decl_rejects_unknown_type() {
+fn unknown_identifier_is_a_named_type() {
+    // Only the type checker knows which names are types.
     let src = "fn f()->u32{let foo x = 1;}";
-    let tokens = lex(src).expect("lexing should succeed");
-    let mut parser = Parser::new(&tokens);
-    let err = parser
-        .parse_program()
-        .expect_err("parsing should fail on unknown type");
-    assert!(
-        err.message.contains("unknown type"),
-        "unexpected error: {}",
-        err.message
-    );
+    let ty = match &parse_body(src)[0].kind {
+        StmtKind::VarDecl(binding) => binding.ty.clone(),
+        other => panic!("expected VarDecl, got {other:?}"),
+    };
+    assert_eq!(ty.kind, TypeExprKind::Named("foo".to_owned()));
+    assert_eq!(&src[ty.span.start..ty.span.end], "foo");
+    assert_eq!(ty.to_string(), "foo");
 }
 
 // Plain assignment
@@ -1112,7 +1110,7 @@ fn parse_destructuring_let() {
 fn parse_pattern_backtracking_reports_one_error() {
     // Neither a type nor a pattern: the pattern's error is reported.
     let (message, span) = parse_error("fn f(){ let (a) = 1; }");
-    assert_eq!(message, "unknown type: `a`");
+    assert_eq!(message, "expected a type before `a`");
     assert_eq!(span, Span { start: 13, end: 14 });
     // A type without a name.
     let (message, span) = parse_error("fn f(){ let (i32, i32) = p; }");
@@ -1123,7 +1121,7 @@ fn parse_pattern_backtracking_reports_one_error() {
     assert_eq!(span, Span { start: 23, end: 24 });
     // A pattern element without a type.
     let (message, span) = parse_error("fn f(){ let (i32 a, b) = p; }");
-    assert_eq!(message, "unknown type: `b`");
+    assert_eq!(message, "expected a type before `b`");
     assert_eq!(span, Span { start: 20, end: 21 });
 }
 
@@ -1271,4 +1269,172 @@ fn type_expressions_carry_spans() {
     let ty = &f.params[0].ty;
     assert_eq!(*ty, Type::Pointer(Box::new(Type::Int(32))));
     assert_eq!(&src[ty.span.start..ty.span.end], "*i32");
+}
+
+// Structs
+
+#[test]
+fn let_without_type_has_a_targeted_message() {
+    let (message, span) = parse_error("fn f(){ let x = 5; }");
+    assert_eq!(message, "expected a type before `x`");
+    assert_eq!(span, Span { start: 12, end: 13 });
+    let (message, _) = parse_error("fn f(x) {}");
+    assert_eq!(message, "expected a type before `x`");
+    let (message, _) = parse_error("fn f(){ let *i32 = p; }");
+    assert_eq!(message, "expected a variable name after the type `*i32`");
+}
+
+#[test]
+fn struct_declaration_parses() {
+    let src = "struct Rect { f64 width; *Rect next; }\nstruct Empty {}\nfn f() {}";
+    let tokens = lex(src).expect("lexing should succeed");
+    let program = Parser::new(&tokens)
+        .parse_program()
+        .expect("parsing should succeed");
+    assert_eq!(program.functions.len(), 1);
+    assert_eq!(program.structs.len(), 2);
+    let rect = &program.structs[0];
+    assert_eq!(rect.name, "Rect");
+    assert_eq!(&src[rect.name_span.start..rect.name_span.end], "Rect");
+    assert_eq!(
+        &src[rect.span.start..rect.span.end],
+        "struct Rect { f64 width; *Rect next; }"
+    );
+    let fields: Vec<_> = rect.fields.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(fields, ["width", "next"]);
+    assert_eq!(rect.fields[0].ty, Type::Float64);
+    assert_eq!(rect.fields[1].ty.to_string(), "*Rect");
+    assert_eq!(
+        &src[rect.fields[1].span.start..rect.fields[1].span.end],
+        "*Rect next"
+    );
+    assert!(program.structs[1].fields.is_empty());
+}
+
+#[test]
+fn malformed_struct_declarations_are_rejected() {
+    for src in [
+        "struct { f64 x; }",
+        "struct Rect { f64 x }",
+        "struct Rect { f64 x, f64 y }",
+        "struct Rect { x; }",
+        "struct Rect { f64 x = 1.0; }",
+        "struct Rect",
+        "#[entry] struct Rect {}",
+        "fn f() { struct Rect {} }",
+    ] {
+        let tokens = lex(src).expect("lexing should succeed");
+        assert!(Parser::new(&tokens).parse_program().is_err(), "{src}");
+    }
+}
+
+#[test]
+fn member_access_parses_as_place() {
+    let expr = returned("fn f(){ return r.size.width; }");
+    let ExprKind::Member { base, name, .. } = &expr else {
+        panic!("expected Member, got {expr:?}");
+    };
+    assert_eq!(name, "width");
+    assert!(matches!(&base.kind, ExprKind::Member { name, .. } if name == "size"));
+
+    // A member of a place is a place, so it can be assigned and stepped.
+    let body =
+        parse_body("fn f(){ r.width = 1; r.size.width += 2; r.count++; a, r.width = 1, 2; }");
+    assert!(matches!(&body[0].kind, StmtKind::Assign { target, .. }
+        if matches!(&target.kind, ExprKind::Member { .. })));
+    assert!(matches!(&body[1].kind, StmtKind::CompoundAssign { .. }));
+    assert!(matches!(&body[2].kind, StmtKind::IncDec { .. }));
+    assert!(matches!(&body[3].kind, StmtKind::Assign { .. }));
+    // A member of a value is not a place.
+    let (message, _) = parse_error("fn f(){ g().width = 1; }");
+    assert!(message.contains("assign"), "{message}");
+}
+
+#[test]
+fn member_name_span_covers_the_name() {
+    let src = "fn f(){ return r.width; }";
+    let tokens = lex(src).expect("lexing should succeed");
+    let program = Parser::new(&tokens)
+        .parse_program()
+        .expect("parsing should succeed");
+    let StmtKind::Return(Some(expr)) = &program.functions[0].body[0].kind else {
+        panic!("expected return");
+    };
+    let ExprKind::Member { name_span, .. } = &expr.kind else {
+        panic!("expected Member");
+    };
+    assert_eq!(&src[name_span.start..name_span.end], "width");
+    assert_eq!(&src[expr.span.start..expr.span.end], "r.width");
+}
+
+#[test]
+fn tuple_index_then_member() {
+    // The lexer reads `0.` as a float; the member name follows it.
+    let expr = returned("fn f(){ return t.0.width; }");
+    let ExprKind::Member { base, name, .. } = &expr else {
+        panic!("expected Member, got {expr:?}");
+    };
+    assert_eq!(name, "width");
+    assert!(matches!(&base.kind, ExprKind::Field { index: 0, .. }));
+
+    let expr = returned("fn f(){ return r.pair.1; }");
+    assert!(matches!(&expr, ExprKind::Field { index: 1, base }
+        if matches!(&base.kind, ExprKind::Member { name, .. } if name == "pair")));
+}
+
+#[test]
+fn member_needs_a_name_or_an_index() {
+    for src in [
+        "fn f(){ return r.; }",
+        "fn f(){ return r.(x); }",
+        "fn f(){ return r.if; }",
+    ] {
+        let (message, _) = parse_error(src);
+        assert_eq!(
+            message, "expected a member name or a tuple index after `.`",
+            "{src}"
+        );
+    }
+}
+
+#[test]
+fn named_call_parses() {
+    let src = "fn f(){ return Rect(width = 1 + 2, height = g(x)); }";
+    let expr = returned(src);
+    let ExprKind::NamedCall { name, args } = &expr else {
+        panic!("expected NamedCall, got {expr:?}");
+    };
+    assert_eq!(name, "Rect");
+    let names: Vec<_> = args.iter().map(|arg| arg.name.as_str()).collect();
+    assert_eq!(names, ["width", "height"]);
+    assert!(matches!(&args[0].value.kind, ExprKind::BinOp { .. }));
+    assert!(matches!(&args[1].value.kind, ExprKind::Call { .. }));
+    assert_eq!(
+        &src[args[1].name_span.start..args[1].name_span.end],
+        "height"
+    );
+
+    // `==` does not name an argument, and no arguments is a plain call.
+    assert!(matches!(
+        returned("fn f(){ return g(a == b); }"),
+        ExprKind::Call { .. }
+    ));
+    assert!(matches!(
+        returned("fn f(){ return Empty(); }"),
+        ExprKind::Call { .. }
+    ));
+}
+
+#[test]
+fn mixed_named_and_positional_args_rejected() {
+    for src in [
+        "fn f(){ return Rect(width = 1, 2); }",
+        "fn f(){ return Rect(1, height = 2); }",
+    ] {
+        let (message, _) = parse_error(src);
+        assert_eq!(
+            message, "named and positional arguments cannot be mixed",
+            "{src}"
+        );
+    }
 }

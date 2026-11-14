@@ -674,3 +674,29 @@ fn pointer_sized_casts_depend_on_the_target() {
     assert!(!cast_is_guarded("usize", "u32", &narrow));
     assert!(cast_is_guarded("usize", "u32", &TARGET));
 }
+
+// ── Structs ───────────────────────────────────────────────────────────────────
+
+const POINT: &str = "struct Point { i32 x; i32 y; }\n";
+
+#[test]
+fn named_struct_result_needs_whole_assignment() {
+    // Writing one field keeps the other, which must already hold a value.
+    let kind = error(&format!(
+        "{POINT}fn f() -> Point p {{ p.x = 1; p.y = 2; return; }}"
+    ));
+    assert!(kind.to_string().contains("`p`"), "{kind:?}");
+    checked(&format!(
+        "{POINT}fn f() -> Point p {{ p = Point(x = 1, y = 2); p.x = 3; return; }}"
+    ));
+}
+
+#[test]
+fn struct_loop_value_has_a_zero() {
+    // A loop that exits through its condition yields the zero value.
+    let program = checked(&format!(
+        "{POINT}fn f(bool c) {{ while c {{ break Point(x = 1, y = 2); }} }}"
+    ));
+    let dump = mir_program_to_string(&program);
+    assert!(dump.contains("const Point(0, 0)"), "{dump}");
+}

@@ -173,3 +173,23 @@ fn lex_as_keyword() {
         ]
     );
 }
+
+#[test]
+fn lex_struct_keywords() {
+    let tokens =
+        lex("struct impl self structure simple selfish Self").expect("lexing should succeed");
+
+    let kinds: Vec<TokenKind> = tokens.iter().map(|t| t.kind).collect();
+    assert_eq!(
+        kinds,
+        vec![
+            TokenKind::Struct,
+            TokenKind::Impl,
+            TokenKind::SelfValue,
+            TokenKind::Ident,
+            TokenKind::Ident,
+            TokenKind::Ident,
+            TokenKind::Ident,
+        ]
+    );
+}

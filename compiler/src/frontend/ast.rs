@@ -214,6 +214,14 @@ pub enum ExprKind {
         base: Box<Expr>,
         index: u32,
     },
+    /// Member access by name, `r.width`. A place when `base` is one.
+    ///
+    /// The span of the expression runs from `base` to the name.
+    Member {
+        base: Box<Expr>,
+        name: String,
+        name_span: Span,
+    },
     /// `_`. Only valid as an assignment target, where it discards a value.
     Wildcard,
 
@@ -221,6 +229,12 @@ pub enum ExprKind {
     Call {
         name: String,
         args: Vec<Expr>,
+    },
+    /// A call whose arguments are all named, `Rect(width = 1, height = 2)`,
+    /// which builds a struct from its fields.
+    NamedCall {
+        name: String,
+        args: Vec<NamedArg>,
     },
 
     // Arithmetic / logic
@@ -263,6 +277,20 @@ pub struct Expr {
     pub span: Span,
 }
 
+/// One argument of a [`ExprKind::NamedCall`]: `<name> = <value>`.
+#[derive(Debug, Clone)]
+pub struct NamedArg {
+    pub name: String,
+    pub name_span: Span,
+    pub value: Expr,
+}
+
+impl PartialEq for NamedArg {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name && self.value == other.value
+    }
+}
+
 impl PartialEq for Expr {
     fn eq(&self, other: &Self) -> bool {
         self.kind == other.kind
@@ -271,11 +299,14 @@ impl PartialEq for Expr {
 
 impl Expr {
     /// Returns `true` when this expression denotes an assignable location:
-    /// a variable, a dereference, or an element of a place.
+    /// a variable, a dereference, or an element or member of a place.
+    ///
+    /// This is syntax only: whether a member is a stored field is for the
+    /// type checker to say.
     pub fn is_place(&self) -> bool {
         match &self.kind {
             ExprKind::Ident(_) | ExprKind::Deref(_) => true,
-            ExprKind::Field { base, .. } => base.is_place(),
+            ExprKind::Field { base, .. } | ExprKind::Member { base, .. } => base.is_place(),
             _ => false,
         }
     }
@@ -420,7 +451,38 @@ impl Function {
     }
 }
 
+/// One field of a struct declaration: `<type> <name>;`.
+#[derive(Debug, Clone)]
+pub struct FieldDecl {
+    pub ty: TypeExpr,
+    pub name: String,
+    pub span: Span,
+}
+
+impl PartialEq for FieldDecl {
+    fn eq(&self, other: &Self) -> bool {
+        self.ty == other.ty && self.name == other.name
+    }
+}
+
+/// `struct <name> { <fields> }`. The fields are stored in this order.
+#[derive(Debug, Clone)]
+pub struct StructDecl {
+    pub name: String,
+    pub name_span: Span,
+    pub fields: Vec<FieldDecl>,
+    pub span: Span,
+}
+
+impl PartialEq for StructDecl {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name && self.fields == other.fields
+    }
+}
+
+/// Every item of a program, each kind in source order.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Program {
     pub functions: Vec<Function>,
+    pub structs: Vec<StructDecl>,
 }

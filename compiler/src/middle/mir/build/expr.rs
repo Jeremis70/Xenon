@@ -10,7 +10,7 @@ use crate::types::Type;
 use super::super::{
     AggregateKind, BasicBlock, Constant, Local, Operand, Place, Rvalue, TerminatorKind,
 };
-use super::{Builder, Flow, LowerResult};
+use super::{Builder, Flow, LowerErrorKind, LowerResult};
 
 impl Builder<'_> {
     /// Lowers `expr` to the place it denotes.
@@ -134,7 +134,30 @@ impl Builder<'_> {
                 let (block, operands) = unpack!(self.as_operands(block, elems));
                 (block, Rvalue::Aggregate(AggregateKind::Tuple, operands))
             }
-            ExprKind::Binary { op, lhs, rhs } if lhs.ty.tuple_elems().is_some() => {
+            ExprKind::Struct { fields } => {
+                // Evaluated as written, stored as declared.
+                let values = fields.iter().map(|(_, value)| value);
+                let (block, operands) = unpack!(self.as_operands(block, values));
+                let mut ordered: Vec<Option<Operand>> = vec![None; operands.len()];
+                for ((index, _), operand) in fields.iter().zip(operands) {
+                    let slot = ordered
+                        .get_mut(*index as usize)
+                        .ok_or_else(|| LowerErrorKind::MalformedStruct(expr.ty.clone()))?;
+                    *slot = Some(operand);
+                }
+                let operands = ordered
+                    .into_iter()
+                    .collect::<Option<Vec<_>>>()
+                    .ok_or_else(|| LowerErrorKind::MalformedStruct(expr.ty.clone()))?;
+                let Type::Struct(struct_ty) = &expr.ty else {
+                    return Err(LowerErrorKind::MalformedStruct(expr.ty.clone()));
+                };
+                (
+                    block,
+                    Rvalue::Aggregate(AggregateKind::Struct(struct_ty.clone()), operands),
+                )
+            }
+            ExprKind::Binary { op, lhs, rhs } if lhs.ty.is_aggregate() => {
                 unpack!(self.tuple_comparison(block, *op, lhs, rhs, expr.span))
             }
             ExprKind::Unary { op, operand } => {

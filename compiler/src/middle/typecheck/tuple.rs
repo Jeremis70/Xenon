@@ -272,10 +272,8 @@ impl FnCtxt<'_, '_> {
                         && (other_path.starts_with(&path) || path.starts_with(other_path))
                 });
                 if overlaps {
-                    let name = self.bindings[binding].name.as_deref().unwrap_or("_");
-                    let path: String = path.iter().map(|index| format!(".{index}")).collect();
                     return Err(SemanticError::DuplicateAssignTarget {
-                        target: format!("{name}{path}"),
+                        target: self.path_text(binding, &path),
                         span: place.span,
                     });
                 }
@@ -283,6 +281,40 @@ impl FnCtxt<'_, '_> {
                 Ok(())
             }
         }
+    }
+
+    /// The source spelling of the element `path` of `binding`: a field of
+    /// a struct by its name, an element of a tuple by its index.
+    fn path_text(&self, binding: BindingId, path: &[u32]) -> String {
+        let structs = &self.globals.structs.table;
+        let mut text = self.bindings[binding]
+            .name
+            .as_deref()
+            .unwrap_or("_")
+            .to_owned();
+        // A path never crosses a pointer, but a reference binding denotes
+        // what it refers to.
+        let mut ty = &self.bindings[binding].ty;
+        if let Type::Reference(pointee) = ty {
+            ty = pointee;
+        }
+        for &index in path {
+            let field = match ty {
+                Type::Struct(struct_ty) => structs
+                    .get(struct_ty.id)
+                    .and_then(|def| def.fields.get(index as usize)),
+                _ => None,
+            };
+            match field {
+                Some(field) => text.push_str(&format!(".{}", field.name)),
+                None => text.push_str(&format!(".{index}")),
+            }
+            match structs.field_ty(ty, index) {
+                Some(next) => ty = next,
+                None => break,
+            }
+        }
+        text
     }
 
     /// Evaluates the unchecked `value` for `target` into temporaries,

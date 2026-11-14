@@ -198,12 +198,19 @@ pub enum ExprKind {
     Binding(BindingId),
     /// The location a pointer or reference points to.
     Deref(Box<Expr>),
-    /// Element `index` of a tuple. A place if `base` is one; otherwise the
-    /// element of a tuple value.
+    /// Element `index` of a tuple, or field `index` of a struct in
+    /// declaration order. A place if `base` is one; otherwise the element
+    /// of a value.
     Field { base: Box<Expr>, index: u32 },
     /// Builds a tuple from its elements, evaluated left to right. `()` is
     /// the empty tuple.
     Tuple(Vec<Expr>),
+    /// Builds a struct, the expression's type, from all of its fields.
+    ///
+    /// Each value is paired with the index of its field. The values are in
+    /// source order, which is their evaluation order and need not be the
+    /// order of the fields.
+    Struct { fields: Vec<(u32, Expr)> },
     /// The address of a place, as a `*T` or `&T`.
     AddressOf {
         kind: IndirectionKind,
