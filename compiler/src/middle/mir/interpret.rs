@@ -133,8 +133,8 @@ enum Cast {
 
 /// Evaluates the cast of `constant` to `to` (see [`crate::middle::cast`]).
 ///
-/// Floats are modelled for `f32`, `f64`, and `f128`: constants hold an
-/// `f64`, which is exact in `f128`. Pointer casts are not modelled.
+/// Float constants hold an `f64`, rounded to their type as the backend
+/// does; `f64` is exact in `f128`. Pointer casts are not modelled.
 fn eval_cast(kind: CastKind, constant: &Constant, to: &Type, target: &TargetSpec) -> Cast {
     let from = &constant.ty;
     match (kind, &constant.value) {
@@ -195,13 +195,42 @@ fn eval_cast(kind: CastKind, constant: &Constant, to: &Type, target: &TargetSpec
 }
 
 /// The value an `f64` constant holds once rounded to the float type `ty`,
-/// `None` for types the evaluator does not round (`f16`, `bf16`).
+/// `None` for non-floats.
 fn float_value(value: f64, ty: &Type) -> Option<f64> {
     match ty {
         Type::Float64 | Type::Float128 => Some(value),
         // Round to nearest, ties to even, as the backend does.
         Type::Float32 => Some(f64::from(value as f32)),
+        Type::Float16 | Type::BFloat16 => Some(round_to_format(
+            value,
+            ty.float_precision()?,
+            ty.float_max_exponent()?,
+        )),
         _ => None,
+    }
+}
+
+/// Rounds `value` to nearest, ties to even, in a binary format narrower
+/// than `f64` with `precision` significand bits and exponents up to
+/// `max_exponent` (the minimum normal exponent is `1 - max_exponent`).
+/// Subnormals keep the minimum exponent's quantum; overflow gives infinity.
+fn round_to_format(value: f64, precision: u32, max_exponent: i32) -> f64 {
+    if !value.is_finite() || value == 0.0 {
+        return value;
+    }
+    let biased = i32::try_from((value.to_bits() >> 52) & 0x7ff).unwrap_or(0);
+    // f64 subnormals are far below every narrower format's minimum.
+    let exponent = biased - 1023;
+    let min_exponent = 1 - max_exponent;
+    let quantum = exponent.max(min_exponent) - (precision as i32 - 1);
+    // Scaling by a power of two is exact here: the quotient stays below
+    // `2^precision` and above f64's subnormal range.
+    let scale = 2f64.powi(quantum);
+    let rounded = (value / scale).round_ties_even() * scale;
+    if rounded.abs() >= 2f64.powi(max_exponent + 1) {
+        f64::INFINITY.copysign(value)
+    } else {
+        rounded
     }
 }
 
