@@ -41,13 +41,12 @@ let *u32 p = @x;
 Compound assignment (`+=`, `-=`, …) and `++` / `--` behave as `place = place op
 value` would, but the place is evaluated only once.
 
-`@name` always takes the address of the variable named `name`. If an integer
-variable contains a numeric address, it must be converted explicitly. The `as`
-operator is not implemented yet:
+`@name` always takes the address of the variable named `name`. If a `usize`
+variable contains a numeric address, it must be converted explicitly:
 
 ```xe
 let usize address = 0xFFFFFFFF;
-let *u32 p = address as *u32; // planned, not yet available
+let *u32 p = address as *u32;
 ```
 
 References use `&T` in a declaration and are created with `@`:
@@ -69,6 +68,25 @@ operator is defined on pointers; pointer arithmetic is not specified yet.
 References are non-owning and are intended to follow Rust-like borrowing
 rules, but Xenon's lifetime and aliasing rules are not finalized.
 
+
+## Casts
+
+`value as Type` converts a value to another type. A cast is exact or it
+panics; see [Conversions](types.md#conversions) for the rules.
+
+`as` binds tighter than every binary operator and looser than the prefix
+operators, and casts chain left to right:
+
+| Expression | Parses as |
+| --- | --- |
+| `a + b as u8` | `a + (b as u8)` |
+| `-x as i64` | `(-x) as i64` |
+| `*p as usize` | `(*p) as usize` |
+| `x as u16 as u8` | `(x as u16) as u8` |
+| `t.0 as u8` | `(t.0) as u8` |
+
+Note that `-x as i64` negates before casting: for an unsigned `x`, write
+`-(x as i64)`.
 
 ## Bitwise
 

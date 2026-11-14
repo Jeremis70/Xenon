@@ -71,17 +71,23 @@ responsibility.
 The only operators defined on pointers are `==` and `!=` between two values of
 the same pointer type. Pointer arithmetic is not specified yet.
 
-### Converting an integer to a pointer (planned)
+### Converting between integers and pointers
 
 Converting an integer *value* into a pointer requires an explicit cast, which
-is different from taking the address of the variable holding it. The `as`
-operator is **not implemented yet**; only `@` is available today.
+is different from taking the address of the variable holding it. Pointers
+convert only to and from `usize`, which has the same width:
 
 ```xe
 let usize address = 0xFFFFFFFF;
-let *u32 p = address as *u32; // planned: address stored in `address`
-let *usize q = @address;      // available: address of the variable `address`
+let *u32 p = address as *u32; // the address stored in `address`
+let *usize q = @address;      // the address of the variable `address`
+let usize back = p as usize;
+let *u8 bytes = p as *u8;     // pointer to pointer
 ```
+
+To convert a pointer to another integer type, go through `usize`:
+`p as usize as u32`. The second cast is checked like any integer cast (see
+[Conversions](#conversions)).
 
 ## References
 
@@ -169,3 +175,43 @@ multiple results.
 - [Operators](operators.md)
 - [Syntax Basics](syntax-basics.md)
 - [Memory Model](../semantics/memory-model.md)
+
+## Conversions
+
+Values change type only through an explicit cast, `value as Type`. **A cast
+never changes a value silently: it is exact or it panics.**
+
+- A cast that can represent every value of the source type, such as
+  `u8 as i32` or `f32 as f64`, always succeeds and costs nothing.
+- Any other cast checks the value when the program runs and panics if the
+  target type cannot represent it exactly.
+- If the value is known at compile time, a cast that would panic is a
+  compile error instead.
+
+| Cast | Never panics when | Otherwise panics unless |
+| --- | --- | --- |
+| integer to integer | the target range contains the source range | the value is in the target's range |
+| integer to float | the integer fits the float's significand: `iN` needs N - 1 bits, `uN` N bits; `f16` has 11, `bf16` 8, `f32` 24, `f64` 53, `f128` 113 | the float holds the value exactly |
+| float to integer | never | the value is finite, a whole number, and in range |
+| float to float | widening: `f16`/`bf16` to `f32`, `f64`, `f128`; `f32` to `f64`, `f128`; `f64` to `f128` | the narrower float holds the value exactly; NaN stays NaN |
+| pointer to pointer, `usize` to/from pointer | always | — |
+
+```xe
+let i32 total = 200;
+let u8 code = total as u8;    // checked: panics unless 0 <= total <= 255
+let i64 wide = total as i64;  // lossless: no check
+let f64 x = 2.5;
+let i32 n = x as i32;         // panics: 2.5 is not a whole number
+let u8 bad = 300 as u8;       // compile error: 300 is out of range for `u8`
+```
+
+Whether a cast between `usize`/`isize` and another integer type needs a check
+depends on the target's pointer width: `u32 as usize` is lossless on 64-bit
+targets and checked on 16-bit ones.
+
+An untyped literal takes the target type of the cast when it can, so
+`5 as u8` is the `u8` literal `5`. `bool`, tuples, and references have no
+casts.
+
+Casts that deliberately wrap, truncate, or saturate are planned as separate,
+explicitly named operations.

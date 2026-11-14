@@ -9,7 +9,8 @@ question the AST leaves open has an answer:
 - **Every expression has a concrete `Type`.** Each literal has the type its
   context gave it and has been range-checked.
 - **Implicit conversions are explicit.** Integer and float widening becomes
-  an `ExprKind::Cast`. Reading through a `&T` becomes an `ExprKind::Deref`.
+  an `ExprKind::Cast`, like a source cast `x as T`. Every cast is exact or
+  traps; a cast to the operand's own type is dropped. Reading through a `&T` becomes an `ExprKind::Deref`.
   `@x` records whether it builds a `*T` or a `&T`.
 
 Code that consumes THIR never infers types again and never looks at the AST.
@@ -27,6 +28,7 @@ AST ──typecheck::check_program──▶ THIR ──mir::build_mir──▶ M
 | `middle/thir/visit.rs` | A read-only `Visitor` that walks nodes in evaluation order. |
 | `middle/thir/pretty.rs` | Deterministic dumps (`x@b0`, `5_i32`, `(a as i64 [IntToInt])`). |
 | `middle/typecheck/mod.rs` | `check_program`, item collection (signatures, attributes, the entry point), and the per-function context. |
+| `middle/typecheck/cast.rs` | Explicit casts `x as T`: the literal hint and the allowed conversions (`middle/cast.rs`). |
 | `middle/typecheck/entry.rs` | `validate_entry_point`: the executable entry contract, checked on THIR. |
 | `middle/typecheck/scope.rs` | Lexical scopes that map names to bindings. |
 | `middle/typecheck/literal.rs` | Classifies untyped literal expressions. |
@@ -51,6 +53,12 @@ AST ──typecheck::check_program──▶ THIR ──mir::build_mir──▶ M
   supported maximum of 8,388,608 bits are rejected. Two floats of
   different types widen to the wider one. Pointers compare only with `==`
   and `!=`, and only to the same pointer type.
+- **Casts.** `x as T` converts integers and floats into each other,
+  pointers into pointers, and pointers to and from `usize`; any other pair
+  is `InvalidCast`. An untyped literal operand takes `T` when its kind
+  allows, so `300 as u8` is a range error; other operands get no
+  expectation. Whether a cast needs a runtime check is decided later, on
+  MIR, with the target's widths.
 - **Logical operators** `and`, `or`, and `xor` take `bool` operands and
   evaluate both sides. MIR lowers them to `BitAnd`, `BitOr`, and `BitXor`.
 - **Places** are bindings, dereferences, and elements (`.N`) of places. A
