@@ -25,11 +25,29 @@ pub struct OutputRequest {
     pub path: PathBuf,
 }
 
+/// How generated code may address itself and its data, which decides what
+/// kind of executable it can be linked into.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RelocationModel {
+    /// Absolute addresses; only for executables loaded at a fixed address.
+    Static,
+    /// Position-independent code, usable in any executable or library.
+    Pic,
+    /// Position-independent code for an executable (PIE); may assume its
+    /// own symbols are not preempted.
+    Pie,
+    /// Absolute addresses for local data, indirect access to external
+    /// symbols.
+    DynamicNoPic,
+}
+
 /// Options shared by backends.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CodegenOptions {
     /// Requested optimization level, interpreted by the selected backend.
     pub optimization: u8,
+    /// Relocation model of the emitted code.
+    pub relocation_model: RelocationModel,
 }
 
 /// A successfully produced backend artifact.

@@ -58,6 +58,13 @@ explicit `--target` selection is rejected. `compile --stage` supports only
 `mir` (with `--emit=mir`) and `link`; unsupported stage/emit combinations fail
 with a diagnostic rather than silently continuing.
 
+`--relocation-model` (default `pic`) selects how code generation addresses
+code and data, and the linker is invoked to match: `pie` links a
+position-independent executable (`-pie`), `static` and `dynamic-no-pic` link
+a fixed-address one (`-no-pie`), and `pic` keeps the toolchain's default,
+which position-independent code fits either way. `--code-model`, `-C`,
+`--linker`, and `--link-arg` are accepted but not applied yet.
+
 `-o` selects the linked executable when linking. With exactly one non-link
 artifact (`mir`, `ir`, or `obj`), it selects that artifact's file path; use
 `--out-dir` for multiple outputs.

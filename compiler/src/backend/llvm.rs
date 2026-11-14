@@ -6,7 +6,7 @@ use std::num::NonZero;
 use inkwell::basic_block::BasicBlock as LlvmBlock;
 use inkwell::builder::{Builder, BuilderError};
 use inkwell::context::Context;
-use inkwell::module::Module;
+use inkwell::module::{FlagBehavior, Module};
 use inkwell::passes::PassBuilderOptions;
 use inkwell::targets::{
     CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine,
@@ -20,7 +20,7 @@ use inkwell::{AddressSpace, FloatPredicate, IntPredicate, OptimizationLevel};
 use num_bigint::{BigInt, Sign};
 
 use crate::backend::contract::{
-    Artifact, ArtifactKind, Backend, BackendError, CodegenOptions, OutputRequest,
+    Artifact, ArtifactKind, Backend, BackendError, CodegenOptions, OutputRequest, RelocationModel,
 };
 use crate::backend::prepare::{Symbols, prepare_program};
 use crate::index::Idx;
@@ -76,7 +76,7 @@ impl Backend for LlvmBackend {
                 &TargetMachine::get_host_cpu_name().to_string(),
                 &TargetMachine::get_host_cpu_features().to_string(),
                 optimization_level(options.optimization),
-                RelocMode::Default,
+                reloc_mode(options.relocation_model),
                 CodeModel::Default,
             )
             .ok_or_else(|| initialization("could not create host target machine".to_owned()))?;
@@ -92,6 +92,7 @@ impl Backend for LlvmBackend {
         let module = context.create_module("xenon");
         module.set_triple(&triple);
         module.set_data_layout(&machine.get_target_data().get_data_layout());
+        set_pic_flags(&context, &module, options.relocation_model);
         let mut generator = MirCodegen::new(&context, module, target, &prepared)?;
         for body in prepared.bodies() {
             generator.compile_body(body)?;
@@ -123,6 +124,33 @@ impl Backend for LlvmBackend {
                 })
             })
             .collect()
+    }
+}
+
+/// The LLVM relocation mode of `model`. PIE code is PIC code; the module
+/// flags set by [`set_pic_flags`] tell LLVM it is for an executable.
+fn reloc_mode(model: RelocationModel) -> RelocMode {
+    match model {
+        RelocationModel::Static => RelocMode::Static,
+        RelocationModel::Pic | RelocationModel::Pie => RelocMode::PIC,
+        RelocationModel::DynamicNoPic => RelocMode::DynamicNoPic,
+    }
+}
+
+/// Records position independence in the module, as clang does: `PIC Level`
+/// for PIC and PIE code, and `PIE Level` for PIE code, which lets LLVM
+/// access the module's own symbols directly.
+///
+/// clang merges these flags with `Min`/`Max`, which inkwell does not expose.
+/// Xenon emits a single module, so the merge behavior never applies; `Error`
+/// keeps any future mismatch loud.
+fn set_pic_flags<'ctx>(context: &'ctx Context, module: &Module<'ctx>, model: RelocationModel) {
+    let level = context.i32_type().const_int(2, false);
+    if matches!(model, RelocationModel::Pic | RelocationModel::Pie) {
+        module.add_basic_value_flag("PIC Level", FlagBehavior::Error, level);
+    }
+    if model == RelocationModel::Pie {
+        module.add_basic_value_flag("PIE Level", FlagBehavior::Error, level);
     }
 }
 

@@ -3,7 +3,9 @@
 
 use std::path::Path;
 
-use xenonc::backend::contract::{ArtifactKind, Backend, CodegenOptions, OutputRequest};
+use xenonc::backend::contract::{
+    ArtifactKind, Backend, CodegenOptions, OutputRequest, RelocationModel,
+};
 use xenonc::backend::llvm::LlvmBackend;
 use xenonc::frontend::lexer::lex;
 use xenonc::frontend::parser::Parser;
@@ -39,7 +41,10 @@ fn emit_ir(program: &MirProgram, path: &Path) -> String {
         .emit(
             program,
             &TargetSpec::host(),
-            CodegenOptions { optimization: 0 },
+            CodegenOptions {
+                optimization: 0,
+                relocation_model: RelocationModel::Pic,
+            },
             &[OutputRequest {
                 kind: ArtifactKind::LlvmIr,
                 path: path.to_path_buf(),
@@ -78,7 +83,10 @@ fn llvm_optimization_promotes_stack_slots_and_folds_constants() {
             .emit(
                 &mir,
                 &TargetSpec::host(),
-                CodegenOptions { optimization },
+                CodegenOptions {
+                    optimization,
+                    relocation_model: RelocationModel::Pic,
+                },
                 &[OutputRequest {
                     kind: ArtifactKind::LlvmIr,
                     path: path.clone(),
@@ -109,7 +117,10 @@ fn llvm_backend_rejects_built_mir() {
     let result = LlvmBackend.emit(
         &mir,
         &TargetSpec::host(),
-        CodegenOptions { optimization: 0 },
+        CodegenOptions {
+            optimization: 0,
+            relocation_model: RelocationModel::Pic,
+        },
         &[],
     );
 
@@ -261,4 +272,40 @@ fn f16_and_bf16_convert_through_f32() {
     assert!(ir.contains("fpext half"), "{ir}");
     assert!(ir.contains("fptrunc float"), "{ir}");
     assert!(ir.contains("to bfloat"), "{ir}");
+}
+
+/// The relocation model reaches LLVM: PIC and PIE code record their level
+/// in the module, as clang does.
+#[test]
+fn relocation_model_sets_module_pic_flags() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mir = build_mir_for_source("#[entry]\nfn main() {}\n");
+    let ir_with = |relocation_model| {
+        let path = dir.path().join("flags.ll");
+        LlvmBackend
+            .emit(
+                &mir,
+                &TargetSpec::host(),
+                CodegenOptions {
+                    optimization: 0,
+                    relocation_model,
+                },
+                &[OutputRequest {
+                    kind: ArtifactKind::LlvmIr,
+                    path: path.clone(),
+                }],
+            )
+            .expect("MIR should emit successfully");
+        std::fs::read_to_string(&path).expect("LLVM IR should be written")
+    };
+    let pic = ir_with(RelocationModel::Pic);
+    assert!(pic.contains(r#"!"PIC Level", i32 2"#), "{pic}");
+    assert!(!pic.contains("PIE Level"), "{pic}");
+    let pie = ir_with(RelocationModel::Pie);
+    assert!(pie.contains(r#"!"PIC Level", i32 2"#), "{pie}");
+    assert!(pie.contains(r#"!"PIE Level", i32 2"#), "{pie}");
+    for model in [RelocationModel::Static, RelocationModel::DynamicNoPic] {
+        let ir = ir_with(model);
+        assert!(!ir.contains("PIC Level"), "{model:?}: {ir}");
+    }
 }
