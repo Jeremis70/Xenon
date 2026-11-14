@@ -605,3 +605,72 @@ fn discarding_every_element_of_an_unassigned_result_is_an_error() {
     }
     checked("fn f()->(i32, i32) r { r = (1, 2); let _, _ = r; return; }");
 }
+
+/// Whether `from as to` gets a lossy-cast guard on `target`, whatever the
+/// overflow mode.
+fn cast_is_guarded(from: &str, to: &str, target: &TargetSpec) -> bool {
+    let mut program = checked(&format!("fn f({from} a)->{to} {{ return a as {to}; }}"));
+    normalize_runtime_checks(&mut program, target, wrapping())
+        .expect("runtime normalization should work");
+    let dump = mir_program_to_string(&program);
+    let guarded = dump.contains("CastLoses(");
+    assert_eq!(
+        guarded,
+        dump.contains(AssertKind::LossyCast.description()),
+        "{dump}"
+    );
+    guarded
+}
+
+#[test]
+fn casts_that_may_lose_information_are_guarded() {
+    for (from, to) in [
+        ("i32", "u8"),
+        ("u8", "i8"),
+        ("i8", "u64"),
+        ("isize", "i32"),
+        ("i32", "u0"),
+        ("i32", "f32"),
+        ("u64", "f64"),
+        ("u16", "f16"),
+        ("f32", "i64"),
+        ("f64", "f32"),
+        ("f16", "bf16"),
+        ("bf16", "f16"),
+    ] {
+        assert!(cast_is_guarded(from, to, &TARGET), "{from} as {to}");
+    }
+}
+
+#[test]
+fn lossless_casts_have_no_guard() {
+    for (from, to) in [
+        ("u8", "i32"),
+        ("i8", "i64"),
+        ("u32", "usize"),
+        ("u63", "isize"),
+        ("u0", "i8"),
+        ("i32", "f64"),
+        ("u24", "f32"),
+        ("i25", "f32"),
+        ("u8", "f16"),
+        ("f16", "f32"),
+        ("bf16", "f64"),
+        ("f64", "f128"),
+        ("*u8", "*u64"),
+        ("*u8", "usize"),
+        ("usize", "*u8"),
+    ] {
+        assert!(!cast_is_guarded(from, to, &TARGET), "{from} as {to}");
+    }
+}
+
+/// Losslessness uses the actual width of `usize` and `isize`.
+#[test]
+fn pointer_sized_casts_depend_on_the_target() {
+    let narrow = TargetSpec::new(16);
+    assert!(cast_is_guarded("u32", "usize", &narrow));
+    assert!(!cast_is_guarded("u32", "usize", &TARGET));
+    assert!(!cast_is_guarded("usize", "u32", &narrow));
+    assert!(cast_is_guarded("usize", "u32", &TARGET));
+}

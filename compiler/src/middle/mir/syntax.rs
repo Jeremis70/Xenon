@@ -220,6 +220,8 @@ pub enum AssertKind {
     SignedRemainderOverflow,
     /// Shift amount is negative or not smaller than the bit width.
     ShiftOutOfRange,
+    /// A cast whose target type cannot represent the value exactly.
+    LossyCast,
 }
 
 impl AssertKind {
@@ -237,6 +239,9 @@ impl AssertKind {
             AssertKind::SignedDivisionOverflow => "attempt to divide with overflow",
             AssertKind::SignedRemainderOverflow => "attempt to calculate remainder with overflow",
             AssertKind::ShiftOutOfRange => "attempt to shift out of range",
+            AssertKind::LossyCast => {
+                "attempt to cast a value the target type cannot represent exactly"
+            }
         }
     }
 }
@@ -462,7 +467,15 @@ pub enum Rvalue {
     /// with an [`TerminatorKind::Assert`] to implement checked arithmetic.
     Overflows(BinOp, Box<(Operand, Operand)>),
     /// Converts the operand to the given type.
+    ///
+    /// In Checked MIR the conversion is exact or traps with
+    /// [`AssertKind::LossyCast`]; runtime lowering makes the check an
+    /// explicit [`Rvalue::CastLoses`] guard, after which the cast is the raw
+    /// conversion its [`CastKind`] describes.
     Cast(CastKind, Operand, Type),
+    /// `true` if the cast of the operand to the given type would not
+    /// represent its value exactly. Never traps, whatever the value.
+    CastLoses(CastKind, Operand, Type),
     /// Takes the address of a place, producing a `*T` or `&T`.
     AddressOf(IndirectionKind, Place),
     /// Builds a compound value from its elements, in one step. Its type is
@@ -559,6 +572,9 @@ impl fmt::Display for Rvalue {
                 write!(f, "Overflows{}({}, {})", op.name(), operands.0, operands.1)
             }
             Rvalue::Cast(kind, operand, ty) => write!(f, "{operand} as {ty} ({kind:?})"),
+            Rvalue::CastLoses(kind, operand, ty) => {
+                write!(f, "CastLoses({operand} as {ty} ({kind:?}))")
+            }
             Rvalue::AddressOf(IndirectionKind::Pointer, place) => write!(f, "@raw {place}"),
             Rvalue::AddressOf(IndirectionKind::Reference, place) => write!(f, "@ref {place}"),
             Rvalue::Aggregate(AggregateKind::Tuple, operands) => {

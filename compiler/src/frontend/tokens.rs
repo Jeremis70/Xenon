@@ -54,6 +54,7 @@ pub enum TokenKind {
     Or,
     Xor,
     Not,
+    As,
     True,
     False,
     // Delimiters
@@ -218,6 +219,8 @@ enum RawKind {
     Xor,
     #[token("not")]
     Not,
+    #[token("as")]
+    As,
 
     // ---------- Float literals (before plain integer regex) ----------
     // A float needs digits before its `.`: `.5` is not a float, so that
@@ -394,6 +397,7 @@ fn into_token_parts(raw: RawKind) -> (TokenKind, Option<TokenValue>) {
         RawKind::Or => (TokenKind::Or, None),
         RawKind::Xor => (TokenKind::Xor, None),
         RawKind::Not => (TokenKind::Not, None),
+        RawKind::As => (TokenKind::As, None),
         RawKind::True => (TokenKind::True, None),
         RawKind::False => (TokenKind::False, None),
         RawKind::FloatLit((value, text)) => {

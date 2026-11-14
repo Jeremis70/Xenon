@@ -11,10 +11,10 @@ use inkwell::passes::PassBuilderOptions;
 use inkwell::targets::{
     CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine,
 };
-use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum, IntType};
+use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FloatType, IntType};
 use inkwell::values::{
-    AggregateValueEnum, BasicMetadataValueEnum, BasicValueEnum, FunctionValue, IntValue,
-    PointerValue,
+    AggregateValueEnum, BasicMetadataValueEnum, BasicValueEnum, FloatValue, FunctionValue,
+    IntValue, PointerValue,
 };
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate, OptimizationLevel};
 use num_bigint::{BigInt, Sign};
@@ -394,6 +394,11 @@ impl<'ctx, 'a> MirCodegen<'ctx, 'a> {
                 let value = self.operand(operand, body)?;
                 self.cast(*kind, value, operand_type(operand, body)?, target)
             }
+            Rvalue::CastLoses(kind, operand, target) => {
+                let value = self.operand(operand, body)?;
+                self.cast_loses(*kind, value, operand_type(operand, body)?, target)
+                    .map(Into::into)
+            }
             Rvalue::AddressOf(_, place) => Ok(self.place_ptr(place, body)?.into()),
             Rvalue::Aggregate(_, operands) => {
                 let ty = typing::rvalue_ty(rvalue, body)
@@ -584,6 +589,8 @@ impl<'ctx, 'a> MirCodegen<'ctx, 'a> {
             .map_err(llvm_error("overflow comparison"))
     }
 
+    /// The raw conversion of `value` from `source` to `target`; the
+    /// runtime guard has already ruled out values it would change.
     fn cast(
         &self,
         kind: CastKind,
@@ -613,36 +620,275 @@ impl<'ctx, 'a> MirCodegen<'ctx, 'a> {
                 .map(Into::into)
             }
             CastKind::IntToFloat => {
-                let (value, target_type) = (value.into_int_value(), target_type.into_float_type());
-                if source.is_signed_integer() {
-                    builder.build_signed_int_to_float(value, target_type, "sitofp")
-                } else {
-                    builder.build_unsigned_int_to_float(value, target_type, "uitofp")
-                }
-                .map(Into::into)
+                let value = value.into_int_value();
+                return Ok(self
+                    .int_to_float(value, source, target_type.into_float_type())?
+                    .into());
             }
             CastKind::FloatToInt => {
-                let (value, target_type) = (value.into_float_value(), target_type.into_int_type());
-                if target.is_signed_integer() {
-                    builder.build_float_to_signed_int(value, target_type, "fptosi")
-                } else {
-                    builder.build_float_to_unsigned_int(value, target_type, "fptoui")
-                }
-                .map(Into::into)
+                let value = value.into_float_value();
+                return Ok(self
+                    .float_to_int(value, target, target_type.into_int_type())?
+                    .into());
             }
             CastKind::FloatToFloat => {
-                let (value, target_type) =
-                    (value.into_float_value(), target_type.into_float_type());
-                if value.get_type() == target_type {
-                    return Ok(value.into());
-                }
-                builder
-                    .build_float_cast(value, target_type, "fpcast")
-                    .map(Into::into)
+                let value = value.into_float_value();
+                return Ok(self.convert_float(value, source, target)?.into());
             }
             CastKind::PtrToPtr => return Ok(value),
+            CastKind::PtrToInt => builder
+                .build_ptr_to_int(
+                    value.into_pointer_value(),
+                    target_type.into_int_type(),
+                    "ptrtoint",
+                )
+                .map(Into::into),
+            CastKind::IntToPtr => builder
+                .build_int_to_ptr(
+                    value.into_int_value(),
+                    target_type.into_pointer_type(),
+                    "inttoptr",
+                )
+                .map(Into::into),
         };
         value.map_err(llvm_error("cast"))
+    }
+
+    /// Whether the cast of `value` from `source` to `target` would not
+    /// represent it exactly. Never poison, whatever `value` holds: raw
+    /// conversions that may be poison for out-of-range values are only
+    /// selected when the value is in range.
+    fn cast_loses(
+        &self,
+        kind: CastKind,
+        value: BasicValueEnum<'ctx>,
+        source: &Type,
+        target: &Type,
+    ) -> Result<IntValue<'ctx>, BackendError> {
+        let builder = &self.builder;
+        let bool_type = self.context.bool_type();
+        let error = || llvm_error("cast check");
+        match kind {
+            CastKind::PtrToPtr | CastKind::PtrToInt | CastKind::IntToPtr => {
+                Ok(bool_type.const_zero())
+            }
+            // Compare in a signed type one bit wider than both, which holds
+            // every value of either.
+            CastKind::IntToInt => {
+                let value = value.into_int_value();
+                let (min, max) = self.int_bounds(target)?;
+                let width = value
+                    .get_type()
+                    .get_bit_width()
+                    .max(self.int_width(target)?)
+                    + 1;
+                let wide_type = self.int_type(width)?;
+                let wide = if source.is_signed_integer() {
+                    builder.build_int_s_extend(value, wide_type, "cast.wide")
+                } else {
+                    builder.build_int_z_extend(value, wide_type, "cast.wide")
+                }
+                .map_err(error())?;
+                let below = builder
+                    .build_int_compare(
+                        IntPredicate::SLT,
+                        wide,
+                        bigint_constant(wide_type, &min),
+                        "cast.below",
+                    )
+                    .map_err(error())?;
+                let above = builder
+                    .build_int_compare(
+                        IntPredicate::SGT,
+                        wide,
+                        bigint_constant(wide_type, &max),
+                        "cast.above",
+                    )
+                    .map_err(error())?;
+                builder
+                    .build_or(below, above, "cast.loses")
+                    .map_err(error())
+            }
+            // Lossy unless `min <= x < max + 1` and `x` is integral; NaN
+            // fails the ordered comparisons.
+            CastKind::FloatToInt => {
+                let value = value.into_float_value();
+                let float_type = value.get_type();
+                let width = self.int_width(target)?;
+                if width == 0 {
+                    return builder
+                        .build_float_compare(
+                            FloatPredicate::UNE,
+                            value,
+                            float_type.const_zero(),
+                            "cast.loses",
+                        )
+                        .map_err(error());
+                }
+                let (min, max) = self.int_bounds(target)?;
+                let low = self.float_constant(float_type, &min)?;
+                let high = self.float_constant(float_type, &(max + 1))?;
+                let above_low = builder
+                    .build_float_compare(FloatPredicate::OGE, value, low, "cast.above_low")
+                    .map_err(error())?;
+                let below_high = builder
+                    .build_float_compare(FloatPredicate::OLT, value, high, "cast.below_high")
+                    .map_err(error())?;
+                let in_range = builder
+                    .build_and(above_low, below_high, "cast.in_range")
+                    .map_err(error())?;
+                let truncated = self.float_to_int(value, target, self.int_type(width)?)?;
+                let back = self.int_to_float(truncated, target, float_type)?;
+                let fractional = builder
+                    .build_float_compare(FloatPredicate::UNE, back, value, "cast.fractional")
+                    .map_err(error())?;
+                self.select_loss(in_range, fractional)
+            }
+            // Lossy unless the rounded float is below `max + 1` (so it
+            // converts back without poison) and converts back to `value`.
+            CastKind::IntToFloat => {
+                let value = value.into_int_value();
+                let float_type = self.llvm_type(target)?.into_float_type();
+                let converted = self.int_to_float(value, source, float_type)?;
+                let (_, max) = self.int_bounds(source)?;
+                let high = self.float_constant(float_type, &(max + 1))?;
+                let in_range = builder
+                    .build_float_compare(FloatPredicate::OLT, converted, high, "cast.in_range")
+                    .map_err(error())?;
+                let back = self.float_to_int(converted, source, value.get_type())?;
+                let rounded = builder
+                    .build_int_compare(IntPredicate::NE, back, value, "cast.rounded")
+                    .map_err(error())?;
+                self.select_loss(in_range, rounded)
+            }
+            // Lossy if converting back changes a number; NaN stays NaN.
+            CastKind::FloatToFloat => {
+                let value = value.into_float_value();
+                let converted = self.convert_float(value, source, target)?;
+                let back = self.convert_float(converted, target, source)?;
+                let changed = builder
+                    .build_float_compare(FloatPredicate::UNE, back, value, "cast.changed")
+                    .map_err(error())?;
+                let is_number = builder
+                    .build_float_compare(FloatPredicate::ORD, value, value, "cast.is_number")
+                    .map_err(error())?;
+                builder
+                    .build_and(changed, is_number, "cast.loses")
+                    .map_err(error())
+            }
+        }
+    }
+
+    /// `in_range ? loses : true`. A `select` ignores the arm it does not
+    /// pick, so `loses` may be poison when `in_range` is false.
+    fn select_loss(
+        &self,
+        in_range: IntValue<'ctx>,
+        loses: IntValue<'ctx>,
+    ) -> Result<IntValue<'ctx>, BackendError> {
+        let always = self.context.bool_type().const_all_ones();
+        self.builder
+            .build_select(in_range, loses, always, "cast.loses")
+            .map(BasicValueEnum::into_int_value)
+            .map_err(llvm_error("cast check"))
+    }
+
+    /// Converts an integer of type `source` to a float, rounding to nearest.
+    fn int_to_float(
+        &self,
+        value: IntValue<'ctx>,
+        source: &Type,
+        float_type: FloatType<'ctx>,
+    ) -> Result<FloatValue<'ctx>, BackendError> {
+        if source.is_signed_integer() {
+            self.builder
+                .build_signed_int_to_float(value, float_type, "sitofp")
+        } else {
+            self.builder
+                .build_unsigned_int_to_float(value, float_type, "uitofp")
+        }
+        .map_err(llvm_error("int to float conversion"))
+    }
+
+    /// Converts a float to an integer of type `target`, rounding toward
+    /// zero; poison if the result does not fit.
+    fn float_to_int(
+        &self,
+        value: FloatValue<'ctx>,
+        target: &Type,
+        int_type: IntType<'ctx>,
+    ) -> Result<IntValue<'ctx>, BackendError> {
+        if target.is_signed_integer() {
+            self.builder
+                .build_float_to_signed_int(value, int_type, "fptosi")
+        } else {
+            self.builder
+                .build_float_to_unsigned_int(value, int_type, "fptoui")
+        }
+        .map_err(llvm_error("float to int conversion"))
+    }
+
+    /// Converts a float between float types, rounding to nearest. LLVM only
+    /// extends to wider and truncates to narrower types, so `f16` and
+    /// `bf16` convert through `f32`.
+    fn convert_float(
+        &self,
+        value: FloatValue<'ctx>,
+        source: &Type,
+        target: &Type,
+    ) -> Result<FloatValue<'ctx>, BackendError> {
+        if source == target {
+            return Ok(value);
+        }
+        let target_type = self.llvm_type(target)?.into_float_type();
+        let width = |ty: &Type| {
+            ty.float_width()
+                .ok_or_else(|| invalid_mir(format!("float conversion of `{ty}`")))
+        };
+        let builder = &self.builder;
+        match width(source)?.cmp(&width(target)?) {
+            std::cmp::Ordering::Less => builder.build_float_ext(value, target_type, "fpext"),
+            std::cmp::Ordering::Greater => builder.build_float_trunc(value, target_type, "fptrunc"),
+            std::cmp::Ordering::Equal => {
+                let wide = builder
+                    .build_float_ext(value, self.context.f32_type(), "fpext")
+                    .map_err(llvm_error("float conversion"))?;
+                builder.build_float_trunc(wide, target_type, "fptrunc")
+            }
+        }
+        .map_err(llvm_error("float conversion"))
+    }
+
+    /// The float nearest to the integer `value`, infinite beyond the
+    /// range of `float_type`. Exact for the powers of two and zero that
+    /// bound cast checks.
+    fn float_constant(
+        &self,
+        float_type: FloatType<'ctx>,
+        value: &BigInt,
+    ) -> Result<FloatValue<'ctx>, BackendError> {
+        let width = u32::try_from(value.bits())
+            .ok()
+            .and_then(|bits| bits.checked_add(1))
+            .ok_or_else(|| unsupported("integer bound is too wide".to_owned()))?;
+        let int_type = self.int_type(width)?;
+        self.builder
+            .build_signed_int_to_float(bigint_constant(int_type, value), float_type, "bound")
+            .map_err(llvm_error("float bound"))
+    }
+
+    /// The bit width of the integer type `ty` on the target.
+    fn int_width(&self, ty: &Type) -> Result<u32, BackendError> {
+        self.target
+            .int_width(ty)
+            .ok_or_else(|| invalid_mir(format!("`{ty}` is not an integer type")))
+    }
+
+    /// The inclusive range of the integer type `ty` on the target.
+    fn int_bounds(&self, ty: &Type) -> Result<(BigInt, BigInt), BackendError> {
+        self.target
+            .int_bounds(ty)
+            .ok_or_else(|| invalid_mir(format!("`{ty}` is not an integer type")))
     }
 
     fn operand(

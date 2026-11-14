@@ -3,7 +3,7 @@ use crate::frontend::ast::{
     Attribute, BinOp, Binding, Expr, ExprKind, Function, IncDecOp, Pattern, Program, Stmt,
     StmtKind, Type, UnaryOp,
 };
-use crate::frontend::precedence::{OpInfo, UNARY_BP, infix_info};
+use crate::frontend::precedence::{AS_BP, OpInfo, UNARY_BP, infix_info};
 use crate::frontend::tokens::{Span, Token, TokenKind};
 
 /// A simple statement's trailing `if c` or `unless c`.
@@ -828,6 +828,21 @@ impl<'a> Parser<'a> {
             if t.kind == TokenKind::Period {
                 self.advance();
                 left = self.parse_field(left)?;
+                continue;
+            }
+            if t.kind == TokenKind::As {
+                if AS_BP < min_bp {
+                    break;
+                }
+                self.advance();
+                let ty = self.parse_type()?;
+                left = Expr {
+                    span: self.span_since(left.span.start),
+                    kind: ExprKind::Cast {
+                        operand: Box::new(left),
+                        ty,
+                    },
+                };
                 continue;
             }
             let Some(info) = infix_info(&t.kind) else {

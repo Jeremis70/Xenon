@@ -319,7 +319,8 @@ macro_rules! make_mir_visitor {
                 match rvalue {
                     Rvalue::Use(operand)
                     | Rvalue::UnaryOp(_, operand)
-                    | Rvalue::Cast(_, operand, _) => self.visit_operand(operand, location),
+                    | Rvalue::Cast(_, operand, _)
+                    | Rvalue::CastLoses(_, operand, _) => self.visit_operand(operand, location),
                     Rvalue::BinaryOp(_, operands) | Rvalue::Overflows(_, operands) => {
                         let (lhs, rhs) = &$($mutability)? **operands;
                         self.visit_operand(lhs, location);

@@ -157,3 +157,19 @@ fn underscore_is_its_own_token() {
     use TokenKind::*;
     assert_eq!(kinds("_ _x x_ __"), vec![Underscore, Ident, Ident, Ident]);
 }
+
+#[test]
+fn lex_as_keyword() {
+    let tokens = lex("x as u8 ask").expect("lexing should succeed");
+
+    let kinds: Vec<TokenKind> = tokens.iter().map(|t| t.kind).collect();
+    assert_eq!(
+        kinds,
+        vec![
+            TokenKind::Ident,
+            TokenKind::As,
+            TokenKind::Ident,
+            TokenKind::Ident
+        ]
+    );
+}

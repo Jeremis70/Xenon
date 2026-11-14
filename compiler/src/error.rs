@@ -63,6 +63,13 @@ pub enum SemanticError {
         detail: String,
         span: Span,
     },
+    #[error("cannot cast `{from}` to `{to}`{}", note.map(|n| format!(": {n}")).unwrap_or_default())]
+    InvalidCast {
+        from: Type,
+        to: Type,
+        note: Option<&'static str>,
+        span: Span,
+    },
     #[error("undefined variable `{name}`")]
     UndefinedVariable { name: String, span: Span },
     #[error("undefined function `{name}`")]
@@ -186,6 +193,7 @@ impl SemanticError {
             | SemanticError::ConditionNotBool { span, .. }
             | SemanticError::ReturnTypeMismatch { span, .. }
             | SemanticError::InvalidOperands { span, .. }
+            | SemanticError::InvalidCast { span, .. }
             | SemanticError::UndefinedVariable { span, .. }
             | SemanticError::UndefinedFunction { span, .. }
             | SemanticError::ArgumentCountMismatch { span, .. }

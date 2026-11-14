@@ -175,6 +175,18 @@ fn known_panics_are_compile_errors() {
             "#[entry] fn main() -> u8 { let u8 z = 0; return 7 % z; }",
             "attempt to calculate the remainder with a divisor of zero",
         ),
+        (
+            "#[entry] fn main() -> u8 { let i32 n = 300; return n as u8; }",
+            "attempt to cast a value the target type cannot represent exactly",
+        ),
+        (
+            "#[entry] fn main() { let f64 x = 2.5; let i32 n = x as i32; }",
+            "attempt to cast a value the target type cannot represent exactly",
+        ),
+        (
+            "#[entry] fn main() { let i64 big = 16777217; let f32 x = big as f32; }",
+            "attempt to cast a value the target type cannot represent exactly",
+        ),
     ] {
         for command in ["check", "compile"] {
             let diagnostic = single_json_diagnostic(command, source);
@@ -590,4 +602,75 @@ fn unassigned_named_result_is_a_flow_error() {
         message.contains("named result `r` is not assigned on every path"),
         "{diagnostic}"
     );
+}
+
+#[cfg(feature = "llvm-backend")]
+#[test]
+fn backend_runs_exact_casts() {
+    let code = compile_and_run(concat!(
+        "#[entry]\n",
+        "fn main() -> u8 {\n",
+        "    return 1 unless to_u8(255) == 255;\n",
+        "    return 2 unless widen(-1) == -1;\n",
+        "    return 3 unless to_int(-7.0) == -7;\n",
+        "    return 4 unless to_f32(16777216) == 16777216.0;\n",
+        "    return 5 unless narrow(0.5) == 0.5;\n",
+        "    let u64 x = 12;\n",
+        "    let *u8 p = (@x as usize) as *u8;\n",
+        "    return 6 unless *(p as *u64) == 12;\n",
+        "    let i32 total = 300;\n",
+        "    return (total - 100) as u8;\n",
+        "}\n",
+        "fn to_u8(i32 n) -> u8 { return n as u8; }\n",
+        "fn widen(i8 n) -> i64 { return n as i64; }\n",
+        "fn to_int(f64 x) -> i32 { return x as i32; }\n",
+        "fn to_f32(i64 n) -> f32 { return n as f32; }\n",
+        "fn narrow(f64 x) -> f32 { return x as f32; }\n",
+    ));
+    assert_eq!(code, 200);
+}
+
+/// A cast the target type cannot represent exactly traps at runtime, also
+/// when its operand is unknown at compile time.
+#[cfg(all(feature = "llvm-backend", unix))]
+#[test]
+fn lossy_casts_trap_at_runtime() {
+    let helpers = concat!(
+        "fn to_u8(i32 n) -> u8 { return n as u8; }\n",
+        "fn to_int(f64 x) -> i32 { return x as i32; }\n",
+        "fn to_uint(f64 x) -> u32 { return x as u32; }\n",
+        "fn to_f32(i64 n) -> f32 { return n as f32; }\n",
+        "fn to_f64(u64 n) -> f64 { return n as f64; }\n",
+        "fn narrow(f64 x) -> f32 { return x as f32; }\n",
+        "fn nan() -> f64 { let f64 zero = 0.0; return zero / zero; }\n",
+    );
+    for call in [
+        "to_u8(-1)",
+        "to_u8(256)",
+        "to_int(2.5)",
+        "to_int(nan())",
+        "to_int(2147483648.0)",
+        "to_int(-2147483649.0)",
+        "to_uint(-1.0)",
+        "to_f32(16777217)",
+        "to_f64(18446744073709551615)",
+        "narrow(0.1)",
+        "narrow(1.0e300)",
+    ] {
+        let status = run_status(&format!(
+            "#[entry] fn main() -> u8 {{ {call}; return 0; }}\n{helpers}"
+        ));
+        assert!(status.code().is_none(), "`{call}` should trap: {status:?}");
+    }
+    for call in [
+        "to_int(-2147483648.0)",
+        "to_uint(-0.0)",
+        "to_uint(4294967295.0)",
+        "narrow(nan())",
+    ] {
+        let status = run_status(&format!(
+            "#[entry] fn main() -> u8 {{ {call}; return 0; }}\n{helpers}"
+        ));
+        assert_eq!(status.code(), Some(0), "`{call}` should not trap");
+    }
 }

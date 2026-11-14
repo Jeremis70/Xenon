@@ -1,5 +1,6 @@
 //! The middle end: semantic analysis and target-independent IRs.
 
+pub mod cast;
 pub mod ids;
 pub mod mir;
 pub mod ops;

@@ -11,8 +11,9 @@
 //! would fail with; those guards are the symbolic counterpart of the
 //! concrete rules here, and the two must stay in sync.
 //!
-//! Evaluation is partial: floats, addresses, and pointer operations are
-//! [`EvalResult::Unknown`], as is anything depending on an unknown operand.
+//! Evaluation is partial: float arithmetic, addresses, and pointer
+//! operations are [`EvalResult::Unknown`] (casts of float constants are
+//! modelled), as is anything depending on an unknown operand.
 //! An operation that traps whatever its unknown operand holds, such as a
 //! division by a known `0`, is still reported as a trap.
 
@@ -95,15 +96,162 @@ pub fn eval_rvalue(
             }
             _ => EvalResult::Unknown,
         },
-        Rvalue::Cast(CastKind::IntToInt, operand, to) => {
-            match value_of(operand).map(|operand| operand.value) {
-                Some(ConstValue::Int(value)) => int_value(wrap(value, to, target), to),
-                _ => EvalResult::Unknown,
-            }
-        }
-        Rvalue::Cast(..) | Rvalue::AddressOf(..) | Rvalue::Aggregate(..) => EvalResult::Unknown,
+        Rvalue::Cast(kind, operand, to) => match value_of(operand) {
+            Some(constant) => match eval_cast(*kind, &constant, to, target) {
+                Cast::Exact(Some(value)) => EvalResult::Value(Constant {
+                    value,
+                    ty: to.clone(),
+                }),
+                Cast::Exact(None) | Cast::Unknown => EvalResult::Unknown,
+                Cast::Lossy => EvalResult::Trap(AssertKind::LossyCast),
+            },
+            None => EvalResult::Unknown,
+        },
+        Rvalue::CastLoses(kind, operand, to) => match value_of(operand) {
+            Some(constant) => match eval_cast(*kind, &constant, to, target) {
+                Cast::Exact(_) => EvalResult::Value(Constant::bool(false)),
+                Cast::Lossy => EvalResult::Value(Constant::bool(true)),
+                Cast::Unknown => EvalResult::Unknown,
+            },
+            None => EvalResult::Unknown,
+        },
+        Rvalue::AddressOf(..) | Rvalue::Aggregate(..) => EvalResult::Unknown,
     };
     Ok(result)
+}
+
+/// Whether a constant survives a cast.
+enum Cast {
+    /// The target type represents the value exactly; the converted value,
+    /// if the evaluator can express it.
+    Exact(Option<ConstValue>),
+    /// The cast would change the value.
+    Lossy,
+    /// The evaluator does not model this conversion.
+    Unknown,
+}
+
+/// Evaluates the cast of `constant` to `to` (see [`crate::middle::cast`]).
+///
+/// Floats are modelled for `f32`, `f64`, and `f128`: constants hold an
+/// `f64`, which is exact in `f128`. Pointer casts are not modelled.
+fn eval_cast(kind: CastKind, constant: &Constant, to: &Type, target: &TargetSpec) -> Cast {
+    let from = &constant.ty;
+    match (kind, &constant.value) {
+        (CastKind::IntToInt, ConstValue::Int(value)) => match target.int_bounds(to) {
+            Some((min, max)) if min <= *value && *value <= max => {
+                Cast::Exact(Some(ConstValue::Int(value.clone())))
+            }
+            Some(_) => Cast::Lossy,
+            None => Cast::Unknown,
+        },
+        (CastKind::IntToFloat, ConstValue::Int(value)) => {
+            let (Some(precision), Some(max_exponent)) =
+                (to.float_precision(), to.float_max_exponent())
+            else {
+                return Cast::Unknown;
+            };
+            if !int_fits_float(value, precision, max_exponent) {
+                return Cast::Lossy;
+            }
+            // Exact in `to`; constants can only spell it if `f64` holds it.
+            let in_f64 = int_fits_float(value, 53, 1023);
+            Cast::Exact(in_f64.then(|| ConstValue::Float(int_to_f64(value))))
+        }
+        (CastKind::FloatToInt, ConstValue::Float(value)) => {
+            let Some(value) = float_value(*value, from) else {
+                return Cast::Unknown;
+            };
+            if !value.is_finite() || value.fract() != 0.0 {
+                return Cast::Lossy;
+            }
+            let Some(value) = f64_to_int(value) else {
+                return Cast::Unknown;
+            };
+            match target.int_bounds(to) {
+                Some((min, max)) if min <= value && value <= max => {
+                    Cast::Exact(Some(ConstValue::Int(value)))
+                }
+                Some(_) => Cast::Lossy,
+                None => Cast::Unknown,
+            }
+        }
+        (CastKind::FloatToFloat, ConstValue::Float(value)) => {
+            let (Some(value), Some(rounded)) = (
+                float_value(*value, from),
+                float_value(*value, from).and_then(|value| float_value(value, to)),
+            ) else {
+                return Cast::Unknown;
+            };
+            // NaN stays NaN; a finite value must not round.
+            if value.is_nan() || rounded == value {
+                Cast::Exact(Some(ConstValue::Float(value)))
+            } else {
+                Cast::Lossy
+            }
+        }
+        _ => Cast::Unknown,
+    }
+}
+
+/// The value an `f64` constant holds once rounded to the float type `ty`,
+/// `None` for types the evaluator does not round (`f16`, `bf16`).
+fn float_value(value: f64, ty: &Type) -> Option<f64> {
+    match ty {
+        Type::Float64 | Type::Float128 => Some(value),
+        // Round to nearest, ties to even, as the backend does.
+        Type::Float32 => Some(f64::from(value as f32)),
+        _ => None,
+    }
+}
+
+/// Returns `true` if a float with `precision` significand bits and the
+/// given largest exponent holds `value` exactly.
+fn int_fits_float(value: &BigInt, precision: u32, max_exponent: i32) -> bool {
+    let magnitude = value.magnitude();
+    let Some(trailing_zeros) = magnitude.trailing_zeros() else {
+        return true; // zero
+    };
+    let bits = magnitude.bits();
+    bits - trailing_zeros <= u64::from(precision)
+        && i64::try_from(bits).is_ok_and(|bits| bits - 1 <= i64::from(max_exponent))
+}
+
+/// `value` as an `f64`; exact for values [`int_fits_float`] accepts for
+/// `f64`.
+fn int_to_f64(value: &BigInt) -> f64 {
+    let magnitude = value.magnitude();
+    let shift = magnitude.trailing_zeros().unwrap_or(0);
+    let significand = u64::try_from(magnitude >> shift).unwrap_or(0) as f64;
+    let magnitude = significand * 2f64.powi(i32::try_from(shift).unwrap_or(0));
+    if value.sign() == Sign::Minus {
+        -magnitude
+    } else {
+        magnitude
+    }
+}
+
+/// The integer an integral, finite `f64` holds.
+fn f64_to_int(value: f64) -> Option<BigInt> {
+    let bits = value.to_bits();
+    let exponent = i32::try_from((bits >> 52) & 0x7ff).ok()?;
+    let fraction = bits & ((1 << 52) - 1);
+    let (significand, exponent) = if exponent == 0 {
+        (fraction, -1074)
+    } else {
+        (fraction | (1 << 52), exponent - 1075)
+    };
+    let magnitude = BigInt::from(significand);
+    let magnitude = if exponent >= 0 {
+        magnitude << usize::try_from(exponent).ok()?
+    } else {
+        magnitude >> usize::try_from(-exponent).ok()?
+    };
+    Some(if value.is_sign_negative() {
+        -magnitude
+    } else {
+        magnitude
+    })
 }
 
 fn eval_unary(op: UnOp, operand: &ConstValue, ty: &Type, target: &TargetSpec) -> EvalResult {

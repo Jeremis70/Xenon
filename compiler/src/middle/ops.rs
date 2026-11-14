@@ -108,19 +108,30 @@ impl UnOp {
 
 /// The conversion performed by an [`Rvalue::Cast`](crate::middle::mir::Rvalue::Cast) or a THIR
 /// [`ExprKind::Cast`](crate::middle::thir::ExprKind::Cast).
+///
+/// In THIR and in Checked MIR every cast is *exact or traps*: a value the
+/// target type cannot represent exactly fails the cast at runtime (see
+/// [`crate::middle::cast`]). Runtime MIR makes that check an explicit
+/// [`Rvalue::CastLoses`](crate::middle::mir::Rvalue::CastLoses) guard, and
+/// its casts are the raw machine conversions documented on each variant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CastKind {
-    /// Integer to integer: truncates, zero-extends, or sign-extends
+    /// Integer to integer. Raw: truncates, zero-extends, or sign-extends
     /// according to the widths and the source signedness.
     IntToInt,
-    /// Float to float: rounds or extends.
+    /// Float to float. Raw: rounds to nearest or extends.
     FloatToFloat,
-    /// Integer to float.
+    /// Integer to float. Raw: rounds to nearest.
     IntToFloat,
-    /// Float to integer.
+    /// Float to integer. Raw: rounds toward zero; only defined for values
+    /// in range, which the guard guarantees.
     FloatToInt,
     /// Pointer or reference to pointer or reference; the bits are unchanged.
     PtrToPtr,
+    /// Pointer to `usize`; the bits are unchanged.
+    PtrToInt,
+    /// `usize` to pointer; the bits are unchanged.
+    IntToPtr,
 }
 
 /// Whether an address is a raw pointer (`*T`) or a reference (`&T`).

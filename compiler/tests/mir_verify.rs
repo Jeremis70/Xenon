@@ -638,3 +638,69 @@ fn malformed_tuple_constant() {
     });
     assert_eq!(errors, vec![VerifyErrorKind::ConstantKindMismatch(pair())]);
 }
+
+#[test]
+fn cast_checks_produce_bool_and_pointer_casts_go_through_usize() {
+    let errors = verify_stmts(|b| {
+        let p = b.new_temp(ptr(Type::UInt(8)), Span::ZERO);
+        let n = b.new_temp(Type::USize, Span::ZERO);
+        let byte = b.new_temp(Type::UInt(8), Span::ZERO);
+        assign(b, n, Rvalue::Cast(CastKind::PtrToInt, copy(p), Type::USize));
+        assign(
+            b,
+            p,
+            Rvalue::Cast(CastKind::IntToPtr, copy(n), ptr(Type::UInt(8))),
+        );
+        assign(
+            b,
+            RETURN_PLACE,
+            Rvalue::CastLoses(CastKind::IntToInt, copy(n), Type::UInt(8)),
+        );
+        // Pointers only convert to and from `usize`.
+        assign(
+            b,
+            byte,
+            Rvalue::Cast(CastKind::PtrToInt, copy(p), Type::UInt(8)),
+        );
+        assign(
+            b,
+            p,
+            Rvalue::Cast(CastKind::IntToPtr, copy(byte), ptr(Type::UInt(8))),
+        );
+        // A cast check is a `bool`, and checks a valid cast.
+        assign(
+            b,
+            byte,
+            Rvalue::CastLoses(CastKind::IntToInt, copy(n), Type::UInt(8)),
+        );
+        assign(
+            b,
+            RETURN_PLACE,
+            Rvalue::CastLoses(CastKind::FloatToInt, copy(n), Type::UInt(8)),
+        );
+    });
+    assert_eq!(
+        errors,
+        vec![
+            VerifyErrorKind::Typing(TypingError::InvalidCast {
+                kind: CastKind::PtrToInt,
+                from: ptr(Type::UInt(8)),
+                to: Type::UInt(8),
+            }),
+            VerifyErrorKind::Typing(TypingError::InvalidCast {
+                kind: CastKind::IntToPtr,
+                from: Type::UInt(8),
+                to: ptr(Type::UInt(8)),
+            }),
+            VerifyErrorKind::AssignTypeMismatch {
+                place: Type::UInt(8),
+                rvalue: Type::Bool,
+            },
+            VerifyErrorKind::Typing(TypingError::InvalidCast {
+                kind: CastKind::FloatToInt,
+                from: Type::USize,
+                to: Type::UInt(8),
+            }),
+        ]
+    );
+}
