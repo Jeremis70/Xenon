@@ -22,7 +22,46 @@ fn main() -> u8
     return 2 unless (q, r) == (5, 1);
     // The largest Fibonacci number that fits in an `i32`.
     return 3 unless fibonacci(46) == 1836311903;
+
+    // A struct, built from its fields in any order.
+    let Rect rect = Rect(height = r, width = q);
+    return 4 unless rect.area == 5;
+    // A `&self` method changes the value it is called on.
+    rect.scale(3);
+    return 5 unless rect == Rect(width = 15, height = 3) and rect.area == 45;
+    return 6 unless Rect.square(4).scaled(2).area == 64;
     return 0;
+}
+
+struct Rect
+{
+    i32 width;
+    i32 height;
+}
+
+impl Rect
+{
+    // Computed on every read; it takes no room in the struct.
+    i32 area
+    {
+        return self.width * self.height;
+    }
+
+    fn scaled(self, i32 factor) -> Rect
+    {
+        return Rect(width = self.width * factor, height = self.height * factor);
+    }
+
+    fn scale(&self, i32 factor)
+    {
+        self.width *= factor;
+        self.height *= factor;
+    }
+
+    fn square(i32 side) -> Rect
+    {
+        return Rect(width = side, height = side);
+    }
 }
 
 fn fibonacci(i32 n) -> i32
