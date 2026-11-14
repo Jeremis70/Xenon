@@ -115,6 +115,22 @@ expression inside a list must therefore be parenthesized:
 `return a, (b if c else d);`. Writing it without the parentheses is an
 error, since it would read as a guard.
 
+## Members
+
+A `.` followed by a name reads a member of a struct, and a `.` followed by
+a number reads an element of a tuple. They chain freely:
+
+```xe
+let f64 w = rect.width;         // a field
+let f64 a = rect.area;          // a computed property
+rect.scale(2.0);                // a method call
+let Rect u = Rect.unit();       // an associated function
+line.to.0.y += 4;               // a field of a tuple element of a field
+```
+
+A field or element of a variable can be assigned; the result of a call or
+a property cannot. See [Structs and Enums](structs-and-enums.md).
+
 ## Statement punctuation
 
 - Examples consistently use semicolons for statements.
