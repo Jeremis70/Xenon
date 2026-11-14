@@ -721,3 +721,52 @@ fn every_relocation_model_links_and_runs() {
     }
     assert_eq!(run_status(src).code(), Some(7), "default relocation model");
 }
+
+/// Casts between floats and integers wider than 128 bits compile and run on
+/// every platform. LLVM 22 could not lower them on AArch64 (macOS) and
+/// aborted; LLVM 23 expands them on every target. The values are exact, so
+/// no cast traps, and they pass through parameters so `-O0` keeps every
+/// conversion.
+#[cfg(feature = "llvm-backend")]
+#[test]
+fn wide_float_int_casts_compile_and_run() {
+    let src = concat!(
+        "#[entry]\n",
+        "fn main() -> u8\n",
+        "{\n",
+        "    let f64 big = pow2(200);\n",
+        "    let i256 one = 1;\n",
+        "    let i256 n = f64_to_i256(-big);\n",
+        "    return 1 unless n == -(one << 200);\n",
+        "    return 2 unless i256_to_f64(n) == -big;\n",
+        "    let u256 unsigned_one = 1;\n",
+        "    return 3 unless f64_to_u256(big) == unsigned_one << 200;\n",
+        "    return 4 unless u256_to_f64(f64_to_u256(big)) == big;\n",
+        "    return 5 unless f32_to_i256(-3.0) == -3;\n",
+        "    return 6 unless i256_to_f32(-3) == -3.0;\n",
+        "    let i129 small_one = 1;\n",
+        "    return 7 unless f64_to_i129(pow2(127)) == small_one << 127;\n",
+        "    return 8 unless i129_to_f64(small_one << 127) == pow2(127);\n",
+        "    return 0;\n",
+        "}\n",
+        "fn pow2(i32 k) -> f64\n",
+        "{\n",
+        "    let f64 r = 1.0;\n",
+        "    let i32 i = 0;\n",
+        "    while i < k { r *= 2.0; i++; }\n",
+        "    return r;\n",
+        "}\n",
+        "fn f64_to_i256(f64 x) -> i256 { return x as i256; }\n",
+        "fn i256_to_f64(i256 n) -> f64 { return n as f64; }\n",
+        "fn f64_to_u256(f64 x) -> u256 { return x as u256; }\n",
+        "fn u256_to_f64(u256 n) -> f64 { return n as f64; }\n",
+        "fn f32_to_i256(f32 x) -> i256 { return x as i256; }\n",
+        "fn i256_to_f32(i256 n) -> f32 { return n as f32; }\n",
+        "fn f64_to_i129(f64 x) -> i129 { return x as i129; }\n",
+        "fn i129_to_f64(i129 n) -> f64 { return n as f64; }\n",
+    );
+    for opt in ["0", "3"] {
+        let status = run_status_with(src, &["-O", opt]);
+        assert_eq!(status.code(), Some(0), "-O{opt}: failed check (exit code)");
+    }
+}
