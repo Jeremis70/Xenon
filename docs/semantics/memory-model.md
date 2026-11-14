@@ -88,14 +88,15 @@ default address space. What is implemented today:
   the target pointer width),
 - `*p` dereference, both as a value and as an assignment target,
 - reference auto-deref on read and on assignment,
-- `==` / `!=` between two pointers of the same type.
+- `==` / `!=` between two pointers of the same type,
+- `as` casts between pointers (`*T as *U`) and between pointers and `usize`
+  (`*T as usize`, `usize as *T`), which copy the bits.
 
 What is **not** implemented and must not be relied upon:
 
 - lifetime, aliasing, exclusivity, or validity checking of any kind,
 - `&mut T`,
-- pointer arithmetic, indexing, or `null`,
-- `as` casts between integers and pointers.
+- pointer arithmetic, indexing, or `null`.
 
 Nothing in the list above introduces a safety guarantee: `@` produces an
 address, and the compiler does not verify that the address is still valid when

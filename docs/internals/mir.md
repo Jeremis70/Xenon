@@ -34,8 +34,13 @@ A `Body` is one function:
 - **Operands**: `copy place` or `const value`. Constants include tuples,
   such as `const (0_i32, false)` and the unit value `const ()`.
 - **Rvalues**: `Use`, `UnaryOp`, `BinaryOp`, `Overflows`, `Cast`,
-  `AddressOf`, and `Aggregate`, which builds a whole tuple at once:
-  `_2 = (copy _1, const true)`. Its type is derived from its operands.
+  `CastLoses`, `AddressOf`, and `Aggregate`, which builds a whole tuple at
+  once: `_2 = (copy _1, const true)`. Its type is derived from its operands.
+- **Casts are exact or trap.** In `Built` and `Checked` MIR, a `Cast` whose
+  target type cannot represent the value exactly traps (`LossyCast`). Runtime
+  normalization makes that check an explicit `CastLoses` guard, a `bool`
+  that never traps, after which the `Cast` is the raw conversion: truncate
+  or extend, round to nearest, or copy the bits.
 - **Tuples have no operators.** `BinaryOp` is only defined on scalars;
   MIR construction expands tuple `==` and `!=` (see below).
 
@@ -105,6 +110,7 @@ A verification error is a compiler bug, never a user error.
 | `program.rs` | `MirProgram`: function declarations (`FnDecl`) and bodies, in `DefId` order. |
 | `typing.rs` | `place_ty`, `operand_ty`, `rvalue_ty`: the only typing rules. |
 | `interpret.rs` | `eval_rvalue`: the only evaluation rules for operations on constants. |
+| `../cast.rs` | `cast_kind` and `is_lossless`: which casts exist and which need a runtime check. |
 | `builder.rs` | `BodyBuilder`, the only way to create a `Body`. |
 | `visit.rs` | `Visitor` and `MutVisitor`, generated from a single macro, with `PlaceContext`. |
 | `traversal.rs` | `preorder`, `postorder`, `reverse_postorder`, `reachable_set`. |
@@ -168,7 +174,8 @@ pointer width.
 
 `analysis::check_known_panics` reads Checked MIR and reports every reachable
 operation that traps whenever it executes: division or remainder by zero,
-signed `MIN / -1`, integer overflow, and out-of-range shifts. These are
+signed `MIN / -1`, integer overflow, out-of-range shifts, and casts that
+cannot represent their value exactly (`300_i32 as u8`, `2.5_f64 as i32`). These are
 errors, whatever the overflow mode, so diagnostics do not depend on the
 optimization level. Constants propagate through locals defined exactly once
 and never address-taken, and zero-sized integers are always `0`. Branches on
@@ -197,6 +204,13 @@ terminators:
   optimization level.
 - Floating-point division follows IEEE behavior and is not guarded as integer
   division.
+- A `Cast` that `cast::is_lossless` cannot prove lossless on the target gets
+  a `CastLoses` guard and traps with `LossyCast`, whatever the overflow mode.
+  Losslessness uses the target's real `usize`/`isize` width, so `u32 as
+  usize` is unguarded on 64-bit targets. Backends must compute `CastLoses`
+  without poison for any input; the LLVM backend range-checks before any
+  conversion that is undefined out of range and picks the result with
+  `select`.
 
 Zero-sized integers (`i0`, `u0`) only hold `0`. Once the checks are inserted,
 `analysis::zero_sized` replaces every operation reading or producing one by
@@ -242,8 +256,8 @@ Lowering rules:
 - **Falling off the end** of a body ends with `EndOfBody`, which flow
   checking reports as a missing `return`, except in a function returning
   `()`, where it becomes `_0 = const ()` and `return`.
-- **No runtime checks.** Built MIR has no overflow, division, or shift
-  checks. A later pass inserts them.
+- **No runtime checks.** Built MIR has no overflow, division, shift, or
+  cast checks. A later pass inserts them.
 
 ## Extending MIR
 

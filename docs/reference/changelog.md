@@ -19,6 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   assignment `a, b = b, a;`, which evaluates every value before storing.
 - `_` as a discard pattern and assignment target.
 - The return type may be omitted: `fn f() {}` returns `()`.
+- Explicit casts `value as Type` between integers, floats, and pointers.
+  A cast is exact or it panics: lossless casts such as `u8 as i32` cost
+  nothing, any other cast checks at runtime that the target type represents
+  the value exactly, and a constant that would fail is a compile error.
+  Pointers convert to other pointers and to and from `usize`.
 
 ### Changed
 

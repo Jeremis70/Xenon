@@ -45,9 +45,9 @@ r = 10; // modifies x directly, no `*` needed
 decides which is produced. `@0xFFFFFFFF` means the address represented by the
 literal, and is only valid where a pointer or reference type is expected.
 
-A plain integer remains an integer. Converting an integer *variable* to a
-pointer requires an explicit cast such as `address as *u32`, which is planned
-but not implemented yet.
+A plain integer remains an integer. Converting a `usize` variable to a
+pointer requires an explicit cast such as `address as *u32` (see
+[Conversions](types.md#conversions)).
 
 ## Conditionals
 
