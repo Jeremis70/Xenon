@@ -139,6 +139,61 @@ pub enum SemanticError {
     ReferenceLoop { ty: Type, span: Span },
     #[error("unknown type `{name}`")]
     UnknownType { name: String, span: Span },
+    #[error("struct `{name}` is defined more than once")]
+    DuplicateStruct {
+        name: String,
+        first_span: Span,
+        span: Span,
+    },
+    #[error("`{name}` is defined as both a struct and a function")]
+    NameConflict {
+        name: String,
+        first_span: Span,
+        span: Span,
+    },
+    #[error("`{name}` is a built-in type and cannot name a struct")]
+    BuiltinTypeName { name: String, span: Span },
+    #[error("struct `{ty}` has more than one member named `{name}`")]
+    DuplicateMember {
+        name: String,
+        ty: String,
+        first_span: Span,
+        span: Span,
+    },
+    #[error(
+        "struct `{name}` contains itself; use a pointer `*{name}` to refer to another `{name}`"
+    )]
+    RecursiveStruct { name: String, span: Span },
+    #[error("field `{name}` cannot have reference type `{ty}`")]
+    ReferenceField { name: String, ty: Type, span: Span },
+    #[error("`{found}` has no member `{name}`")]
+    NoSuchMember {
+        name: String,
+        found: String,
+        span: Span,
+    },
+    #[error("missing field `{name}` in `{ty}(..)`")]
+    MissingField {
+        name: String,
+        ty: String,
+        span: Span,
+    },
+    #[error("struct `{ty}` has no field `{name}`")]
+    UnknownField {
+        name: String,
+        ty: String,
+        span: Span,
+    },
+    #[error("field `{name}` is given more than once")]
+    DuplicateFieldInit {
+        name: String,
+        first_span: Span,
+        span: Span,
+    },
+    #[error("`{ty}` is a struct: name its fields, as in `{ty}(field = value)`")]
+    PositionalStructArgs { ty: String, span: Span },
+    #[error("`{name}` is a function: its arguments cannot be named")]
+    NamedArgsOnFunction { name: String, span: Span },
     #[error("function `{name}` is defined more than once")]
     DuplicateFunction {
         name: String,
@@ -215,6 +270,18 @@ impl SemanticError {
             | SemanticError::ReferenceNamedReturn { span, .. }
             | SemanticError::ReferenceLoop { span, .. }
             | SemanticError::UnknownType { span, .. }
+            | SemanticError::DuplicateStruct { span, .. }
+            | SemanticError::NameConflict { span, .. }
+            | SemanticError::BuiltinTypeName { span, .. }
+            | SemanticError::DuplicateMember { span, .. }
+            | SemanticError::RecursiveStruct { span, .. }
+            | SemanticError::ReferenceField { span, .. }
+            | SemanticError::NoSuchMember { span, .. }
+            | SemanticError::MissingField { span, .. }
+            | SemanticError::UnknownField { span, .. }
+            | SemanticError::DuplicateFieldInit { span, .. }
+            | SemanticError::PositionalStructArgs { span, .. }
+            | SemanticError::NamedArgsOnFunction { span, .. }
             | SemanticError::DuplicateFunction { span, .. } => Some(*span),
             SemanticError::NoEntryPoint => None,
         }

@@ -9,6 +9,7 @@ use std::fmt::{self, Write};
 
 use crate::middle::ids::{BindingId, DefId};
 use crate::middle::ops::IndirectionKind;
+use crate::types::Type;
 
 use super::{
     Block, ConditionPlacement, Expr, ExprKind, Function, Literal, LoopCondition, Stmt, StmtKind,
@@ -169,6 +170,24 @@ impl Printer<'_> {
             ExprKind::Field { base, index } => {
                 self.expr(base)?;
                 write!(self.out, ".{index}")
+            }
+            ExprKind::Struct { fields } => {
+                let def = match &expr.ty {
+                    Type::Struct(struct_ty) => self.program.structs.get(struct_ty.id),
+                    _ => None,
+                };
+                write!(self.out, "{}(", expr.ty)?;
+                for (position, (index, value)) in fields.iter().enumerate() {
+                    if position > 0 {
+                        self.out.write_str(", ")?;
+                    }
+                    match def.and_then(|def| def.fields.get(*index as usize)) {
+                        Some(field) => write!(self.out, "{} = ", field.name)?,
+                        None => write!(self.out, ".{index} = ")?,
+                    }
+                    self.expr(value)?;
+                }
+                self.out.write_str(")")
             }
             ExprKind::Tuple(elems) => {
                 self.out.write_str("(")?;

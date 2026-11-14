@@ -55,6 +55,10 @@ pub enum TokenKind {
     Xor,
     Not,
     As,
+    Struct,
+    Impl,
+    /// The keyword `self`.
+    SelfValue,
     True,
     False,
     // Delimiters
@@ -221,6 +225,12 @@ enum RawKind {
     Not,
     #[token("as")]
     As,
+    #[token("struct")]
+    Struct,
+    #[token("impl")]
+    Impl,
+    #[token("self")]
+    SelfValue,
 
     // ---------- Float literals (before plain integer regex) ----------
     // A float needs digits before its `.`: `.5` is not a float, so that
@@ -398,6 +408,9 @@ fn into_token_parts(raw: RawKind) -> (TokenKind, Option<TokenValue>) {
         RawKind::Xor => (TokenKind::Xor, None),
         RawKind::Not => (TokenKind::Not, None),
         RawKind::As => (TokenKind::As, None),
+        RawKind::Struct => (TokenKind::Struct, None),
+        RawKind::Impl => (TokenKind::Impl, None),
+        RawKind::SelfValue => (TokenKind::SelfValue, None),
         RawKind::True => (TokenKind::True, None),
         RawKind::False => (TokenKind::False, None),
         RawKind::FloatLit((value, text)) => {

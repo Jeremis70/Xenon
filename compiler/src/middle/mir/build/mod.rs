@@ -106,6 +106,9 @@ pub enum LowerErrorKind {
     #[error("left more loops than were entered")]
     UnbalancedLoops,
 
+    #[error("struct expression of type `{0}` does not give each field once")]
+    MalformedStruct(Type),
+
     #[error("type `{0}` has no zero value")]
     NoZeroValue(Type),
 }

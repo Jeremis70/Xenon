@@ -409,3 +409,24 @@ fn structs_lower_to_named_llvm_types() {
     assert!(ir.contains("define double @width(%Rect %0)"), "{ir}");
     assert!(ir.contains("getelementptr inbounds"), "{ir}");
 }
+
+#[test]
+fn struct_field_access_uses_struct_gep() {
+    let ir = ir_for(
+        "struct Rect { f64 width; f64 height; }\n\
+         struct Node { i32 value; *Node next; }\n\
+         fn area(Rect r) -> f64 { return r.width * r.height; }\n\
+         fn make(f64 w) -> Rect { return Rect(height = 1.0, width = w); }\n\
+         fn next(Node n) -> *Node { return n.next; }\n",
+    );
+    assert!(ir.contains("%Rect = type { double, double }"), "{ir}");
+    assert!(ir.contains("%Node = type { i32, ptr }"), "{ir}");
+    assert!(ir.contains("define double @area(%Rect %0)"), "{ir}");
+    assert!(ir.contains("define %Rect @make(double %0)"), "{ir}");
+    assert!(
+        ir.contains("getelementptr inbounds nuw %Rect")
+            || ir.contains("getelementptr inbounds %Rect"),
+        "{ir}"
+    );
+    assert!(ir.contains("insertvalue %Rect"), "{ir}");
+}

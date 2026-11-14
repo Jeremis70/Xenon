@@ -156,16 +156,21 @@ impl FnCtxt<'_, '_> {
         };
         let (l, r) = (&lhs.ty, &rhs.ty);
 
-        // Tuples compare element-wise with `==` and `!=` only, and without
-        // widening: both sides must have the same type. MIR construction
-        // evaluates both sides fully before comparing any element.
-        if l.tuple_elems().is_some() || r.tuple_elems().is_some() {
+        // Tuples and structs compare element-wise with `==` and `!=` only,
+        // and without widening: both sides must have the same type. MIR
+        // construction evaluates both sides fully before comparing any
+        // element.
+        if l.is_aggregate() || r.is_aggregate() {
             if l != r {
                 return Err(invalid(format!("incompatible types `{l}` and `{r}`")));
             }
             if !matches!(bin_op, BinOp::Eq | BinOp::Ne) {
+                let kinds = match l {
+                    Type::Struct(_) => "structs",
+                    _ => "tuples",
+                };
                 return Err(invalid(format!(
-                    "tuples only support `==` and `!=`, not `{op:?}`"
+                    "{kinds} only support `==` and `!=`, not `{op:?}`"
                 )));
             }
             if l.contains_reference() {

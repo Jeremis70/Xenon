@@ -347,7 +347,8 @@ impl FromStr for Type {
             _ => {}
         }
 
-        // Parameterised integer types: (i|u)<width>
+        // Parameterised integer types: (i|u)<width>. Any other name, such
+        // as `item` or `u`, is no built-in type.
         let (signed, digits) = if let Some(rest) = s.strip_prefix('i') {
             (true, rest)
         } else if let Some(rest) = s.strip_prefix('u') {
@@ -355,12 +356,8 @@ impl FromStr for Type {
         } else {
             return Err(TypeError::Unknown(s.to_owned()));
         };
-
-        if digits.is_empty() {
-            return Err(TypeError::InvalidBitWidth {
-                raw: s.to_owned(),
-                reason: "missing bit width",
-            });
+        if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(TypeError::Unknown(s.to_owned()));
         }
 
         let width = digits

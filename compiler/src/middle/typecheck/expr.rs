@@ -38,6 +38,23 @@ impl FnCtxt<'_, '_> {
             Ast::Address(value) => self.address_literal(value, expected, span),
             Ast::Ident(_) | Ast::Deref(_) => self.check_place(expr),
             Ast::Field { base, index } => self.check_field(base, *index, span),
+            Ast::Member { base, name, .. } => self.check_member(base, name, span),
+            Ast::NamedCall { name, args } => {
+                if let Some(ty) = self.globals.struct_named(name) {
+                    return self.check_construct(ty, args, span);
+                }
+                Err(if self.globals.by_name.contains_key(name.as_str()) {
+                    SemanticError::NamedArgsOnFunction {
+                        name: name.clone(),
+                        span,
+                    }
+                } else {
+                    SemanticError::UndefinedFunction {
+                        name: name.clone(),
+                        span,
+                    }
+                })
+            }
             Ast::Tuple(elems) => self.check_tuple(elems, expected, span),
             Ast::Wildcard => Err(SemanticError::WildcardAsValue { span }),
             Ast::AddressOf(operand) => {
@@ -268,6 +285,9 @@ impl FnCtxt<'_, '_> {
                 })
             }
             Ast::Field { base, index } if base.is_place() => self.check_field(base, *index, span),
+            Ast::Member { base, name, .. } if base.is_place() => {
+                self.check_member(base, name, span)
+            }
             _ => Err(SemanticError::NotAPlaceExpression { span }),
         }
     }
@@ -362,6 +382,17 @@ impl FnCtxt<'_, '_> {
 
     fn check_call(&mut self, name: &str, args: &[ast::Expr], span: Span) -> SemanticResult<Expr> {
         let globals = self.globals;
+        // A struct is built from named fields; without arguments there is
+        // nothing to name, so `Empty()` builds a struct without fields.
+        if let Some(ty) = globals.struct_named(name) {
+            if args.is_empty() {
+                return self.check_construct(ty, &[], span);
+            }
+            return Err(SemanticError::PositionalStructArgs {
+                ty: name.to_owned(),
+                span,
+            });
+        }
         let callee =
             *globals
                 .by_name

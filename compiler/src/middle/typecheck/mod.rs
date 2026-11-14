@@ -38,10 +38,12 @@
 mod cast;
 mod entry;
 mod expr;
+mod items;
 mod literal;
 mod operator;
 mod scope;
 mod stmt;
+mod structs;
 mod tuple;
 
 use std::collections::HashMap;
@@ -58,6 +60,7 @@ use crate::source::Span;
 use crate::types::Type;
 
 pub use entry::{is_entry_return_type, validate_entry_point};
+use items::StructItems;
 use scope::Scopes;
 
 /// Type-checks `program` for `target` and returns its THIR.
@@ -74,7 +77,7 @@ pub fn check_program(program: &ast::Program, target: &TargetSpec) -> SemanticRes
     Ok(ThirProgram {
         functions,
         entry: globals.entry,
-        structs: Arc::default(),
+        structs: Arc::new(globals.structs.table),
     })
 }
 
@@ -100,6 +103,7 @@ struct GlobalCtxt<'a> {
     by_name: HashMap<&'a str, DefId>,
     /// The function marked `#[entry]`, if any.
     entry: Option<DefId>,
+    structs: StructItems<'a>,
 }
 
 impl<'a> GlobalCtxt<'a> {
@@ -110,9 +114,24 @@ impl<'a> GlobalCtxt<'a> {
             IndexVec::with_capacity(program.functions.len());
         let mut by_name = HashMap::with_capacity(program.functions.len());
         let mut entry: Option<DefId> = None;
+        let structs = StructItems::collect(program)?;
         for function in &program.functions {
+            // A call `Name(..)` must mean one thing.
+            if let Some(id) = structs.ids.get(function.name.as_str()) {
+                let decl = &program.structs[id.as_u32() as usize];
+                let (first, second) = if decl.span.start < function.span.start {
+                    (decl.name_span, function.span)
+                } else {
+                    (function.span, decl.name_span)
+                };
+                return Err(SemanticError::NameConflict {
+                    name: function.name.clone(),
+                    first_span: first,
+                    span: second,
+                });
+            }
             let resolve_all = |bindings: &[ast::Binding]| -> SemanticResult<Vec<Type>> {
-                bindings.iter().map(|b| resolve(&b.ty)).collect()
+                bindings.iter().map(|b| structs.resolve(&b.ty)).collect()
             };
             let results = resolve_all(&function.returns)?;
             let def_id = signatures.push(Signature {
@@ -160,30 +179,14 @@ impl<'a> GlobalCtxt<'a> {
             signatures,
             by_name,
             entry,
+            structs,
         })
     }
 
     /// Resolves a type written in the source to the type it names.
     fn resolve(&self, ty: &ast::TypeExpr) -> SemanticResult<Type> {
-        resolve(ty)
+        self.structs.resolve(ty)
     }
-}
-
-/// Resolves `ty` knowing only the built-in types.
-fn resolve(ty: &ast::TypeExpr) -> SemanticResult<Type> {
-    use ast::TypeExprKind as Kind;
-    Ok(match &ty.kind {
-        Kind::Primitive(ty) => ty.clone(),
-        Kind::Pointer(inner) => Type::Pointer(Box::new(resolve(inner)?)),
-        Kind::Reference(inner) => Type::Reference(Box::new(resolve(inner)?)),
-        Kind::Tuple(elems) => Type::Tuple(elems.iter().map(resolve).collect::<Result<_, _>>()?),
-        Kind::Named(name) => {
-            return Err(SemanticError::UnknownType {
-                name: name.clone(),
-                span: ty.span,
-            });
-        }
-    })
 }
 
 /// What a context knows about the type of an expression it checks.
