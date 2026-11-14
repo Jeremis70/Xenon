@@ -29,7 +29,8 @@ use crate::index::IndexVec;
 use crate::middle::ids::{BindingId, DefId};
 use crate::middle::ops::{BinOp, CastKind, IndirectionKind, UnOp};
 use crate::source::Span;
-use crate::types::Type;
+use crate::types::{StructTable, Type};
+use std::sync::Arc;
 
 /// A whole type-checked program.
 #[derive(Debug, Clone, PartialEq)]
@@ -39,6 +40,8 @@ pub struct ThirProgram {
     /// The function marked `#[entry]`, if any. Item collection rejects
     /// programs with more than one.
     pub entry: Option<DefId>,
+    /// The definition of every struct the program's types refer to.
+    pub structs: Arc<StructTable>,
 }
 
 /// A type-checked function.

@@ -12,7 +12,7 @@ use xenonc::middle::mir::{
 use xenonc::middle::target::TargetSpec;
 use xenonc::middle::typecheck::check_program;
 use xenonc::source::Span;
-use xenonc::types::Type;
+use xenonc::types::{StructTable, Type};
 
 const TARGET: TargetSpec = TargetSpec::new(64);
 
@@ -30,7 +30,8 @@ fn eval(rvalue: Rvalue) -> EvalResult {
         Operand::Constant(constant) => Some((**constant).clone()),
         Operand::Copy(_) => None,
     };
-    eval_rvalue(&rvalue, &decls, &TARGET, value_of).expect("rvalue should type")
+    eval_rvalue(&rvalue, &decls, &StructTable::default(), &TARGET, value_of)
+        .expect("rvalue should type")
 }
 
 fn value(value: i64, ty: Type) -> EvalResult {
@@ -105,7 +106,8 @@ fn zero_divisor_traps_with_unknown_dividend() {
         Operand::Copy(_) => None,
     };
     assert_eq!(
-        eval_rvalue(&rvalue, &decls, &TARGET, value_of).expect("rvalue should type"),
+        eval_rvalue(&rvalue, &decls, &StructTable::default(), &TARGET, value_of)
+            .expect("rvalue should type"),
         EvalResult::Trap(AssertKind::DivisionByZero)
     );
 }

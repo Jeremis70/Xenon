@@ -20,7 +20,7 @@ use crate::middle::mir::syntax::{
 use crate::middle::mir::typing::{self, TypingError};
 use crate::middle::mir::verify::{VerifyErrors, verify_program};
 use crate::middle::target::TargetSpec;
-use crate::types::Type;
+use crate::types::{StructTable, Type};
 
 /// Overflow behavior for integer addition, subtraction, and multiplication.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -99,9 +99,10 @@ pub fn normalize_runtime_checks(
     }
 
     let mut normalized = program.clone();
+    let structs = normalized.structs().clone();
     for body in normalized.bodies_mut() {
-        normalize_body(body, target, policy)?;
-        erase_zero_sized_computation(body, target)?;
+        normalize_body(body, &structs, target, policy)?;
+        erase_zero_sized_computation(body, &structs, target)?;
     }
     normalized
         .advance_phase(MirPhase::Runtime)
@@ -116,6 +117,7 @@ pub fn normalize_runtime_checks(
 
 fn normalize_body(
     body: &mut Body,
+    structs: &StructTable,
     target: &TargetSpec,
     policy: RuntimeCheckPolicy,
 ) -> Result<(), RuntimeCheckError> {
@@ -127,6 +129,7 @@ fn normalize_body(
         } = body.basic_blocks()[block].clone();
         let mut guards = Guards {
             body: &mut *body,
+            structs,
             target,
             policy,
             block,
@@ -154,6 +157,7 @@ fn normalize_body(
 /// every guard.
 struct Guards<'a> {
     body: &'a mut Body,
+    structs: &'a StructTable,
     target: &'a TargetSpec,
     policy: RuntimeCheckPolicy,
     /// The block being filled.
@@ -176,7 +180,7 @@ impl Guards<'_> {
             Rvalue::UnaryOp(UnOp::Neg, operand)
                 if self.policy.overflow == OverflowMode::Checked =>
             {
-                let ty = typing::operand_ty(operand, &*self.body)?.clone();
+                let ty = typing::operand_ty(operand, &*self.body, self.structs)?.clone();
                 if ty.is_integer() {
                     self.snapshot(operand, &ty);
                     let zero = Operand::constant(Constant::int(0, ty));
@@ -189,7 +193,7 @@ impl Guards<'_> {
                 Ok(())
             }
             Rvalue::Cast(kind, operand, to) => {
-                let from = typing::operand_ty(operand, &*self.body)?.clone();
+                let from = typing::operand_ty(operand, &*self.body, self.structs)?.clone();
                 if !cast::is_lossless(*kind, &from, to, self.target) {
                     self.snapshot(operand, &from);
                     let loses = self.temp(
@@ -215,8 +219,8 @@ impl Guards<'_> {
         lhs: &mut Operand,
         rhs: &mut Operand,
     ) -> Result<(), RuntimeCheckError> {
-        let lhs_ty = typing::operand_ty(lhs, &*self.body)?.clone();
-        let rhs_ty = typing::operand_ty(rhs, &*self.body)?.clone();
+        let lhs_ty = typing::operand_ty(lhs, &*self.body, self.structs)?.clone();
+        let rhs_ty = typing::operand_ty(rhs, &*self.body, self.structs)?.clone();
         if !lhs_ty.is_integer() {
             return Ok(());
         }
@@ -247,7 +251,7 @@ impl Guards<'_> {
             self.trap_if(is_zero, kind);
 
             // `i0` cannot hold `-1`, and its divisor always traps above.
-            if lhs_ty.is_signed_integer() && !lhs_ty.is_zero_sized() {
+            if lhs_ty.is_signed_integer() && !lhs_ty.is_zero_sized(self.structs) {
                 let (min, _) = self
                     .target
                     .int_bounds(&lhs_ty)

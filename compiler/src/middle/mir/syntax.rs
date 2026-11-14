@@ -12,7 +12,7 @@ use std::fmt;
 use num_bigint::BigInt;
 
 use crate::middle::ids::DefId;
-use crate::types::Type;
+use crate::types::{StructTable, StructTy, Type};
 
 pub use crate::middle::ops::{BinOp, CastKind, IndirectionKind, UnOp};
 
@@ -378,28 +378,29 @@ impl Constant {
     }
 
     /// The zero value of `ty`: `false`, `0`, `0.0`, the null pointer, or a
-    /// tuple of zero values.
+    /// tuple or struct of zero values.
     ///
     /// Returns `None` for types without a zero value, such as references,
     /// which must never be null, and tuples containing them.
-    pub fn zero(ty: &Type) -> Option<Self> {
+    pub fn zero(ty: &Type, structs: &StructTable) -> Option<Self> {
         Some(Self {
             ty: ty.clone(),
-            value: zero_value(ty)?,
+            value: zero_value(ty, structs)?,
         })
     }
 
-    /// The constant's tuple elements, each with its type; `None` if it is
-    /// not a well-formed tuple constant.
-    pub fn tuple_elems(&self) -> Option<Vec<Constant>> {
-        let (ConstValue::Tuple(values), Some(tys)) = (&self.value, self.ty.tuple_elems()) else {
+    /// The elements of a tuple or struct constant, each with its type;
+    /// `None` if it is not a well-formed constant of such a type.
+    pub fn elems(&self, structs: &StructTable) -> Option<Vec<Constant>> {
+        let (ConstValue::Tuple(values), Some(tys)) = (&self.value, structs.field_tys(&self.ty))
+        else {
             return None;
         };
         (values.len() == tys.len()).then(|| {
-            tys.iter()
+            tys.into_iter()
                 .zip(values)
                 .map(|(ty, value)| Constant {
-                    ty: ty.clone(),
+                    ty,
                     value: value.clone(),
                 })
                 .collect()
@@ -416,7 +417,7 @@ impl Constant {
 }
 
 /// The payload of the zero value of `ty`, see [`Constant::zero`].
-fn zero_value(ty: &Type) -> Option<ConstValue> {
+fn zero_value(ty: &Type, structs: &StructTable) -> Option<ConstValue> {
     Some(if ty.is_bool() {
         ConstValue::Bool(false)
     } else if ty.is_integer() {
@@ -425,8 +426,14 @@ fn zero_value(ty: &Type) -> Option<ConstValue> {
         ConstValue::Float(0.0)
     } else if matches!(ty, Type::Pointer(_)) {
         ConstValue::Address(BigInt::ZERO)
-    } else if let Type::Tuple(elems) = ty {
-        ConstValue::Tuple(elems.iter().map(zero_value).collect::<Option<_>>()?)
+    } else if ty.is_aggregate() {
+        let elems = structs.field_tys(ty)?;
+        ConstValue::Tuple(
+            elems
+                .iter()
+                .map(|elem| zero_value(elem, structs))
+                .collect::<Option<_>>()?,
+        )
     } else {
         return None;
     })
@@ -444,7 +451,8 @@ pub enum ConstValue {
     Float(f64),
     /// A machine address; must fit the target pointer width.
     Address(BigInt),
-    /// The elements of a tuple, typed by the constant's tuple type.
+    /// The elements of a tuple or the fields of a struct, typed by the
+    /// constant's type.
     Tuple(Vec<ConstValue>),
 }
 
@@ -484,10 +492,12 @@ pub enum Rvalue {
 }
 
 /// The kind of value an [`Rvalue::Aggregate`] builds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AggregateKind {
     /// A tuple whose element types are the operand types.
     Tuple,
+    /// A struct whose fields, in declaration order, are the operands.
+    Struct(StructTy),
 }
 
 impl Rvalue {
@@ -536,6 +546,11 @@ fn write_const_value(f: &mut fmt::Formatter<'_>, value: &ConstValue, ty: &Type) 
         ConstValue::Address(value) => write!(f, "@{value:#x}: {ty}"),
         ConstValue::Tuple(values) => {
             f.write_str("(")?;
+            // A struct's field types are not at hand here: its name and the
+            // bare values have to do.
+            if let Type::Struct(struct_ty) = ty {
+                f.write_str(&struct_ty.name)?;
+            }
             let tys = ty.tuple_elems().unwrap_or_default();
             for (index, value) in values.iter().enumerate() {
                 if index > 0 {
@@ -546,7 +561,8 @@ fn write_const_value(f: &mut fmt::Formatter<'_>, value: &ConstValue, ty: &Type) 
                     None => write!(f, "{value:?}")?,
                 }
             }
-            f.write_str(if values.len() == 1 { ",)" } else { ")" })
+            let one_tuple = values.len() == 1 && !matches!(ty, Type::Struct(_));
+            f.write_str(if one_tuple { ",)" } else { ")" })
         }
     }
 }
@@ -577,7 +593,10 @@ impl fmt::Display for Rvalue {
             }
             Rvalue::AddressOf(IndirectionKind::Pointer, place) => write!(f, "@raw {place}"),
             Rvalue::AddressOf(IndirectionKind::Reference, place) => write!(f, "@ref {place}"),
-            Rvalue::Aggregate(AggregateKind::Tuple, operands) => {
+            Rvalue::Aggregate(kind, operands) => {
+                if let AggregateKind::Struct(struct_ty) = kind {
+                    f.write_str(&struct_ty.name)?;
+                }
                 f.write_str("(")?;
                 for (index, operand) in operands.iter().enumerate() {
                     if index > 0 {
@@ -585,7 +604,8 @@ impl fmt::Display for Rvalue {
                     }
                     write!(f, "{operand}")?;
                 }
-                f.write_str(if operands.len() == 1 { ",)" } else { ")" })
+                let one_tuple = operands.len() == 1 && *kind == AggregateKind::Tuple;
+                f.write_str(if one_tuple { ",)" } else { ")" })
             }
         }
     }

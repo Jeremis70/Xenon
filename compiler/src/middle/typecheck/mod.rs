@@ -46,6 +46,7 @@ mod tuple;
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
+use std::sync::Arc;
 
 use crate::error::{SemanticError, SemanticResult};
 use crate::frontend::ast;
@@ -73,6 +74,7 @@ pub fn check_program(program: &ast::Program, target: &TargetSpec) -> SemanticRes
     Ok(ThirProgram {
         functions,
         entry: globals.entry,
+        structs: Arc::default(),
     })
 }
 

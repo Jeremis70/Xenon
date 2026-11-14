@@ -61,7 +61,7 @@ use thiserror::Error;
 use crate::index::{Idx, IndexVec};
 use crate::middle::ids::{BindingId, DefId};
 use crate::middle::thir::{self, ThirProgram};
-use crate::types::Type;
+use crate::types::{StructTable, Type};
 
 use super::{
     BasicBlock, Body, BodyBuilder, BuildError, Constant, FnDecl, FnSig, Local, LocalDecl,
@@ -116,6 +116,7 @@ pub enum LowerErrorKind {
 /// between diagnostics of both IRs.
 pub fn build_mir(program: &ThirProgram) -> Result<MirProgram, LowerError> {
     let mut mir = MirProgram::new();
+    mir.set_structs(program.structs.clone());
     for (def_id, function) in program.functions.iter_enumerated() {
         let declared = mir.declare(FnDecl {
             name: function.name.clone(),
@@ -136,7 +137,7 @@ pub fn build_mir(program: &ThirProgram) -> Result<MirProgram, LowerError> {
         }
     }
     for (def_id, function) in program.functions.iter_enumerated() {
-        let body = build_body(def_id, function)?;
+        let body = build_body(def_id, function, &program.structs)?;
         mir.set_body(body)
             .map_err(|error| LowerError::new(function, error.into()))?;
     }
@@ -146,9 +147,13 @@ pub fn build_mir(program: &ThirProgram) -> Result<MirProgram, LowerError> {
     Ok(mir)
 }
 
-/// Lowers the body of one function.
-pub fn build_body(def_id: DefId, function: &thir::Function) -> Result<Body, LowerError> {
-    Builder::new(def_id, function)
+/// Lowers the body of one function of a program defining `structs`.
+pub fn build_body(
+    def_id: DefId,
+    function: &thir::Function,
+    structs: &StructTable,
+) -> Result<Body, LowerError> {
+    Builder::new(def_id, function, structs)
         .build()
         .map_err(|kind| LowerError::new(function, kind))
 }
@@ -179,6 +184,7 @@ type LowerResult<T> = Result<Flow<T>, LowerErrorKind>;
 #[derive(Debug)]
 struct Builder<'thir> {
     function: &'thir thir::Function,
+    structs: &'thir StructTable,
     cfg: BodyBuilder,
     /// The MIR local of every binding whose declaration has been lowered.
     locals: IndexVec<BindingId, Option<Local>>,
@@ -186,7 +192,7 @@ struct Builder<'thir> {
 }
 
 impl<'thir> Builder<'thir> {
-    fn new(def_id: DefId, function: &'thir thir::Function) -> Self {
+    fn new(def_id: DefId, function: &'thir thir::Function, structs: &'thir StructTable) -> Self {
         let args = function.params.iter().map(|&binding| {
             let binding = &function.bindings[binding];
             local_decl(binding, SourceInfo::outermost(binding.span))
@@ -200,6 +206,7 @@ impl<'thir> Builder<'thir> {
 
         Self {
             function,
+            structs,
             cfg,
             locals,
             scopes: Scopes::new(),
@@ -247,8 +254,9 @@ impl<'thir> Builder<'thir> {
 }
 
 /// The rvalue `const 0` of type `ty`.
-fn zero_rvalue(ty: &Type) -> Result<Rvalue, LowerErrorKind> {
-    let zero = Constant::zero(ty).ok_or_else(|| LowerErrorKind::NoZeroValue(ty.clone()))?;
+fn zero_rvalue(ty: &Type, structs: &StructTable) -> Result<Rvalue, LowerErrorKind> {
+    let zero =
+        Constant::zero(ty, structs).ok_or_else(|| LowerErrorKind::NoZeroValue(ty.clone()))?;
     Ok(Rvalue::Use(Operand::constant(zero)))
 }
 

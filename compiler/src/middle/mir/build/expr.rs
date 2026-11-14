@@ -203,11 +203,11 @@ impl Builder<'_> {
         ))
     }
 
-    /// A place holding the fully evaluated tuple `expr`: the place itself
+    /// A place holding the fully evaluated tuple or struct `expr`: the place itself
     /// if it is one and no later evaluation can change it (`snapshot` is
     /// false), otherwise a temporary.
     ///
-    /// A zero-sized tuple such as `()` is always copied: comparing it reads
+    /// A zero-sized value such as `()` is always copied: comparing it reads
     /// no element, so the copy is the only read definite-initialization
     /// analysis can see.
     fn as_stored_tuple(
@@ -216,7 +216,7 @@ impl Builder<'_> {
         expr: &Expr,
         snapshot: bool,
     ) -> LowerResult<Place> {
-        if expr.is_place() && !snapshot && !expr.ty.is_zero_sized() {
+        if expr.is_place() && !snapshot && !expr.ty.is_zero_sized(self.structs) {
             return self.as_place(block, expr);
         }
         let (block, temp) = unpack!(self.as_temp(block, expr));
@@ -224,7 +224,7 @@ impl Builder<'_> {
     }
 
     /// Compares the values of type `ty` at `lhs` and `rhs`, element by
-    /// element for tuples, and returns the `bool` result.
+    /// element for tuples and structs, and returns the `bool` result.
     fn elements_equal(
         &mut self,
         block: BasicBlock,
@@ -234,7 +234,7 @@ impl Builder<'_> {
         span: Span,
     ) -> Operand {
         let source_info = self.source_info(span);
-        let Some(elems) = ty.tuple_elems() else {
+        let Some(elems) = self.structs.field_tys(ty) else {
             let equal = self.cfg.new_temp(Type::Bool, span);
             let rvalue = Rvalue::binary(BinOp::Eq, Operand::Copy(lhs), Operand::Copy(rhs));
             self.cfg

@@ -29,6 +29,7 @@ use crate::middle::mir::typing::TypingError;
 use crate::middle::mir::visit::{MutatingUseContext, PlaceContext, Visitor};
 use crate::middle::target::TargetSpec;
 use crate::source::Span;
+use crate::types::StructTable;
 
 use super::flow::executable_successors_with;
 
@@ -86,7 +87,7 @@ pub fn check_known_panics(
                 phase: body.phase(),
             });
         }
-        let mut found = check_body(body, target)?;
+        let mut found = check_body(body, program.structs(), target)?;
         found.sort_by_key(|(location, _, _)| *location);
         panics.extend(found.into_iter().map(|(location, span, kind)| KnownPanic {
             function: program.fn_name(body.def_id()),
@@ -101,6 +102,7 @@ pub fn check_known_panics(
 
 fn check_body(
     body: &Body,
+    structs: &StructTable,
     target: &TargetSpec,
 ) -> Result<Vec<(Location, Span, AssertKind)>, TypingError> {
     let propagatable = propagatable_locals(body);
@@ -122,8 +124,9 @@ fn check_body(
                 continue;
             };
             let (place, rvalue) = &**assign;
-            let value_of = |operand: &_| known_operand(operand, body, |local| known[local].clone());
-            match eval_rvalue(rvalue, body, target, value_of)? {
+            let value_of =
+                |operand: &_| known_operand(operand, body, structs, |local| known[local].clone());
+            match eval_rvalue(rvalue, body, structs, target, value_of)? {
                 EvalResult::Trap(kind) => {
                     let location = Location {
                         block,
@@ -142,7 +145,7 @@ fn check_body(
             }
         }
         let value_of = |operand: &_| {
-            known_operand(operand, body, |local| known[local].clone()).map(|c| c.value)
+            known_operand(operand, body, structs, |local| known[local].clone()).map(|c| c.value)
         };
         for successor in executable_successors_with(&data.terminator.kind, value_of) {
             mark_live(&mut live, successor);

@@ -16,24 +16,26 @@ use crate::middle::mir::interpret::{EvalResult, eval_rvalue, known_operand};
 use crate::middle::mir::syntax::{Constant, Operand, Rvalue, StatementKind, TerminatorKind};
 use crate::middle::mir::typing::{self, HasLocalDecls, TypingError};
 use crate::middle::target::TargetSpec;
+use crate::types::StructTable;
 
 /// Replaces every rvalue computing on a zero-sized integer by its result,
 /// and every switch on one by a jump to the target for `0`.
 pub(super) fn erase_zero_sized_computation(
     body: &mut Body,
+    structs: &StructTable,
     target: &TargetSpec,
 ) -> Result<(), TypingError> {
     let decls = body.local_decls().clone();
     for block in body.basic_blocks_mut().iter_mut() {
         for statement in &mut block.statements {
             if let StatementKind::Assign(assign) = &mut statement.kind
-                && typing::computes_on_zero_sized(&assign.1, &decls)?
+                && typing::computes_on_zero_sized(&assign.1, &decls, structs)?
             {
-                assign.1 = Rvalue::Use(zero_sized_result(&assign.1, &decls, target)?);
+                assign.1 = Rvalue::Use(zero_sized_result(&assign.1, &decls, structs, target)?);
             }
         }
         if let TerminatorKind::SwitchInt { discr, targets } = &block.terminator.kind
-            && typing::operand_ty(discr, &decls)?.is_zero_sized()
+            && typing::operand_ty(discr, &decls, structs)?.is_zero_sized(structs)
         {
             block.terminator.kind = TerminatorKind::Goto {
                 target: targets.target_for(&BigInt::ZERO),
@@ -48,25 +50,26 @@ pub(super) fn erase_zero_sized_computation(
 fn zero_sized_result(
     rvalue: &Rvalue,
     decls: &impl HasLocalDecls,
+    structs: &StructTable,
     target: &TargetSpec,
 ) -> Result<Operand, TypingError> {
-    let ty = typing::rvalue_ty(rvalue, decls)?;
+    let ty = typing::rvalue_ty(rvalue, decls, structs)?;
     // Only the amount is zero-sized: a shift by `0`.
     if let Rvalue::BinaryOp(op, operands) = rvalue
         && op.is_shift()
-        && !ty.is_zero_sized()
+        && !ty.is_zero_sized(structs)
     {
         return Ok(operands.0.clone());
     }
-    let value_of = |operand: &Operand| known_operand(operand, decls, |_| None);
-    let constant = match eval_rvalue(rvalue, decls, target, value_of)? {
+    let value_of = |operand: &Operand| known_operand(operand, decls, structs, |_| None);
+    let constant = match eval_rvalue(rvalue, decls, structs, target, value_of)? {
         EvalResult::Value(constant) => constant,
         // A trapping operation never completes: its guard traps first, so
         // any value of its type will do. An unknown result is a zero-sized
         // value computed from unknown operands, or a conversion of `0`
         // the evaluator does not model, such as `u0` to a float.
         EvalResult::Trap(_) | EvalResult::Unknown => {
-            Constant::zero(&ty).expect("operations on integers produce numbers")
+            Constant::zero(&ty, structs).expect("operations on integers produce numbers")
         }
     };
     Ok(Operand::constant(constant))

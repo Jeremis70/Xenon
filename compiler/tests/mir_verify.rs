@@ -1,13 +1,14 @@
 //! Tests for the MIR verifier: one valid body, then one test per invariant.
 
 use num_bigint::BigInt;
+use std::sync::Arc;
 use xenonc::index::Idx;
 use xenonc::middle::ids::DefId;
 use xenonc::middle::mir::typing::TypingError;
 use xenonc::middle::mir::*;
 use xenonc::middle::target::TargetSpec;
 use xenonc::source::Span;
-use xenonc::types::Type;
+use xenonc::types::{FieldDef, StructDef, StructId, StructTable, StructTy, Type};
 
 const SI: SourceInfo = SourceInfo::outermost(Span::ZERO);
 
@@ -32,7 +33,19 @@ fn verify_with(
     output: Type,
     build: impl FnOnce(&mut BodyBuilder),
 ) -> Vec<VerifyErrorKind> {
+    verify_with_structs(StructTable::default(), target, inputs, output, build)
+}
+
+/// [`verify_with`], in a program that defines `structs`.
+fn verify_with_structs(
+    structs: StructTable,
+    target: TargetSpec,
+    inputs: Vec<Type>,
+    output: Type,
+    build: impl FnOnce(&mut BodyBuilder),
+) -> Vec<VerifyErrorKind> {
     let mut program = MirProgram::new();
+    program.set_structs(Arc::new(structs));
     program.declare(FnDecl {
         name: "callee".to_owned(),
         sig: FnSig {
@@ -564,7 +577,9 @@ fn well_formed_tuple_operations_have_no_errors() {
         assign(
             b,
             z,
-            Rvalue::Use(Operand::constant(Constant::zero(&pair()).expect("zero"))),
+            Rvalue::Use(Operand::constant(
+                Constant::zero(&pair(), &StructTable::default()).expect("zero"),
+            )),
         );
     });
     assert_eq!(errors, vec![]);
@@ -703,4 +718,114 @@ fn cast_checks_produce_bool_and_pointer_casts_go_through_usize() {
             }),
         ]
     );
+}
+
+// ── Structs ───────────────────────────────────────────────────────────────────
+
+/// A table defining `struct Rect { i32 width; bool tall; }`, and its type.
+fn rect() -> (StructTable, Type) {
+    let mut structs = StructTable::default();
+    let field = |name: &str, ty| FieldDef {
+        name: name.to_owned(),
+        ty,
+        span: Span::ZERO,
+    };
+    let id = structs.push(StructDef {
+        name: "Rect".into(),
+        fields: vec![field("width", Type::Int(32)), field("tall", Type::Bool)],
+        span: Span::ZERO,
+    });
+    let ty = structs.ty(id);
+    (structs, ty)
+}
+
+/// Builds `fn f() -> bool` in a program defining `Rect`; `build` gets the
+/// type of `Rect`.
+fn verify_rect_stmts(build: impl FnOnce(&mut BodyBuilder, Type)) -> Vec<VerifyErrorKind> {
+    let (structs, ty) = rect();
+    verify_with_structs(structs, TargetSpec::new(64), vec![], Type::Bool, |b| {
+        build(b, ty);
+        b.terminate(START_BLOCK, SI, TerminatorKind::Return);
+    })
+}
+
+fn rect_aggregate(ty: &Type, operands: Vec<Operand>) -> Rvalue {
+    let Type::Struct(struct_ty) = ty else {
+        panic!("`{ty}` is not a struct");
+    };
+    Rvalue::Aggregate(AggregateKind::Struct(struct_ty.clone()), operands)
+}
+
+#[test]
+fn well_formed_struct_operations_have_no_errors() {
+    let errors = verify_rect_stmts(|b, rect| {
+        let r = b.new_local(LocalDecl::temp(rect.clone(), Span::ZERO));
+        let fields = vec![
+            int(1, Type::Int(32)),
+            Operand::constant(Constant::bool(true)),
+        ];
+        assign(b, r, rect_aggregate(&rect, fields));
+        assign(
+            b,
+            Place::from(r).field(0),
+            Rvalue::Use(int(2, Type::Int(32))),
+        );
+        assign(b, RETURN_PLACE, Rvalue::Use(copy(Place::from(r).field(1))));
+    });
+    assert_eq!(errors, vec![]);
+}
+
+#[test]
+fn struct_field_out_of_range() {
+    let errors = verify_rect_stmts(|b, rect| {
+        let r = b.new_local(LocalDecl::temp(rect.clone(), Span::ZERO));
+        assign(b, RETURN_PLACE, Rvalue::Use(copy(Place::from(r).field(2))));
+    });
+    let (_, ty) = rect();
+    assert_eq!(
+        errors,
+        vec![VerifyErrorKind::Typing(TypingError::InvalidField {
+            ty,
+            index: 2
+        })]
+    );
+}
+
+#[test]
+fn struct_aggregate_must_match_its_definition() {
+    let (_, ty) = rect();
+    let mismatch = VerifyErrorKind::Typing(TypingError::InvalidAggregate(ty));
+    // Too few fields.
+    let errors = verify_rect_stmts(|b, rect| {
+        let r = b.new_local(LocalDecl::temp(rect.clone(), Span::ZERO));
+        assign(b, r, rect_aggregate(&rect, vec![int(1, Type::Int(32))]));
+    });
+    assert_eq!(errors, vec![mismatch.clone()]);
+    // Fields in the wrong order.
+    let errors = verify_rect_stmts(|b, rect| {
+        let r = b.new_local(LocalDecl::temp(rect.clone(), Span::ZERO));
+        let fields = vec![
+            Operand::constant(Constant::bool(true)),
+            int(1, Type::Int(32)),
+        ];
+        assign(b, r, rect_aggregate(&rect, fields));
+    });
+    assert_eq!(errors, vec![mismatch]);
+}
+
+#[test]
+fn unknown_struct_id() {
+    // The program defines no struct, so `Rect`'s id names nothing.
+    let (_, ty) = rect();
+    let errors = verify_stmts(|b| {
+        b.new_local(LocalDecl::temp(ty.clone(), Span::ZERO));
+    });
+    assert_eq!(
+        errors,
+        vec![VerifyErrorKind::UnknownStruct(StructId::from_u32(0))]
+    );
+    let Type::Struct(StructTy { id, .. }) = ty else {
+        panic!("expected a struct type");
+    };
+    assert_eq!(id, StructId::from_u32(0));
 }

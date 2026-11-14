@@ -1,13 +1,14 @@
 //! A whole program in MIR form: function declarations and their bodies.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use thiserror::Error;
 
 use crate::index::IndexVec;
 use crate::middle::ids::DefId;
 use crate::source::Span;
-use crate::types::Type;
+use crate::types::{StructTable, Type};
 
 use super::body::{Body, MirPhase, PhaseError};
 
@@ -54,6 +55,8 @@ pub struct MirProgram {
     decls: IndexVec<DefId, FnDecl>,
     bodies: BTreeMap<DefId, Body>,
     entry: Option<DefId>,
+    /// Shared, so that passes can hold it while they change bodies.
+    structs: Arc<StructTable>,
 }
 
 impl MirProgram {
@@ -131,6 +134,16 @@ impl MirProgram {
         }
         self.bodies_mut()
             .try_for_each(|body| body.advance_phase(to))
+    }
+
+    /// The struct definitions that the types of this program refer to.
+    pub fn structs(&self) -> &Arc<StructTable> {
+        &self.structs
+    }
+
+    /// Sets the struct definitions of the program.
+    pub fn set_structs(&mut self, structs: Arc<StructTable>) {
+        self.structs = structs;
     }
 
     /// Marks `def_id` as the program entry point.
