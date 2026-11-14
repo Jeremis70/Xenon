@@ -8,6 +8,7 @@
     { "include": "#function_definitions" },
     { "include": "#keywords_control" },
     { "include": "#keywords_logical" },
+    { "include": "#keywords_cast" },
     { "include": "#types" },
     { "include": "#constants" },
     { "include": "#function_calls" },
@@ -50,6 +51,11 @@
     "keywords_logical": {
       "name": "keyword.operator.logical.xenon",
       "match": "\\b(and|or|xor|not)\\b"
+    },
+
+    "keywords_cast": {
+      "name": "keyword.operator.cast.xenon",
+      "match": "\\bas\\b"
     },
 
     "types": {
