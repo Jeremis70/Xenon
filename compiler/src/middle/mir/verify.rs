@@ -20,7 +20,7 @@ use thiserror::Error;
 use crate::index::Idx;
 use crate::middle::ids::DefId;
 use crate::middle::target::TargetSpec;
-use crate::types::Type;
+use crate::types::{StructId, Type};
 
 use super::body::{
     BasicBlock, Body, Local, LocalDecl, LocalKind, Location, MirPhase, SourceInfo, SourceScope,
@@ -140,6 +140,9 @@ pub enum VerifyErrorKind {
     #[error("constant {value} does not fit type `{ty}`")]
     ConstantOutOfRange { value: BigInt, ty: Type },
 
+    #[error("type refers to undefined struct `{0}`")]
+    UnknownStruct(StructId),
+
     #[error("computation on a zero-sized integer is not allowed in phase `runtime`")]
     ZeroSizedComputation,
 
@@ -255,7 +258,7 @@ impl Checker<'_> {
 
     /// Types an operand, reporting failures not already reported elsewhere.
     fn operand_ty(&mut self, operand: &Operand) -> Option<Type> {
-        match typing::operand_ty(operand, self.body) {
+        match typing::operand_ty(operand, self.body, self.program.structs()) {
             Ok(ty) => Some(ty.clone()),
             Err(error) => {
                 self.report_typing(error);
@@ -265,7 +268,7 @@ impl Checker<'_> {
     }
 
     fn place_ty(&mut self, place: &Place) -> Option<Type> {
-        match typing::place_ty(place, self.body) {
+        match typing::place_ty(place, self.body, self.program.structs()) {
             Ok(ty) => Some(ty.clone()),
             Err(error) => {
                 self.report_typing(error);
@@ -409,6 +412,20 @@ impl Checker<'_> {
         }
     }
 
+    /// Reports every struct `ty` refers to that the program does not define.
+    fn check_structs_exist(&mut self, ty: &Type) {
+        match ty {
+            Type::Struct(struct_ty) => {
+                if self.program.structs().get(struct_ty.id).is_none() {
+                    self.report(VerifyErrorKind::UnknownStruct(struct_ty.id));
+                }
+            }
+            Type::Pointer(inner) | Type::Reference(inner) => self.check_structs_exist(inner),
+            Type::Tuple(elems) => elems.iter().for_each(|elem| self.check_structs_exist(elem)),
+            _ => {}
+        }
+    }
+
     fn check_constant(&mut self, constant: &Constant) {
         let ty = &constant.ty;
         let range = match &constant.value {
@@ -429,7 +446,7 @@ impl Checker<'_> {
                 .is_indirect()
                 .then(|| (value, self.target.address_bounds())),
             ConstValue::Tuple(_) => {
-                match constant.tuple_elems() {
+                match constant.elems(self.program.structs()) {
                     Some(elems) => elems.iter().for_each(|elem| self.check_constant(elem)),
                     None => self.report(VerifyErrorKind::ConstantKindMismatch(ty.clone())),
                 }
@@ -452,6 +469,7 @@ impl Checker<'_> {
 impl Visitor for Checker<'_> {
     fn visit_local_decl(&mut self, local: Local, decl: &LocalDecl) {
         self.site = ErrorSite::LocalDecl(local);
+        self.check_structs_exist(&decl.ty);
         self.super_local_decl(local, decl);
     }
 
@@ -470,7 +488,7 @@ impl Visitor for Checker<'_> {
     }
 
     fn visit_assign(&mut self, place: &Place, rvalue: &Rvalue, location: Location) {
-        let rvalue_ty = match typing::rvalue_ty(rvalue, self.body) {
+        let rvalue_ty = match typing::rvalue_ty(rvalue, self.body, self.program.structs()) {
             Ok(ty) => Some(ty),
             Err(error) => {
                 self.report_typing(error);
@@ -478,7 +496,7 @@ impl Visitor for Checker<'_> {
             }
         };
         // Silent: a malformed place is reported when the place is visited.
-        let place_ty = typing::place_ty(place, self.body).ok();
+        let place_ty = typing::place_ty(place, self.body, self.program.structs()).ok();
         if let (Some(place_ty), Some(rvalue_ty)) = (place_ty, rvalue_ty)
             && *place_ty != rvalue_ty
         {
@@ -489,7 +507,7 @@ impl Visitor for Checker<'_> {
         }
         // Silent: a malformed rvalue is reported above.
         if self.body.phase() == MirPhase::Runtime
-            && typing::computes_on_zero_sized(rvalue, self.body) == Ok(true)
+            && typing::computes_on_zero_sized(rvalue, self.body, self.program.structs()) == Ok(true)
         {
             self.report(VerifyErrorKind::ZeroSizedComputation);
         }
@@ -505,7 +523,9 @@ impl Visitor for Checker<'_> {
             TerminatorKind::SwitchInt { discr, targets } => {
                 self.check_switch(discr, targets.iter().map(|(value, _)| value.clone()));
                 if self.body.phase() == MirPhase::Runtime
-                    && self.operand_ty(discr).is_some_and(|ty| ty.is_zero_sized())
+                    && self
+                        .operand_ty(discr)
+                        .is_some_and(|ty| ty.is_zero_sized(self.program.structs()))
                 {
                     self.report(VerifyErrorKind::ZeroSizedComputation);
                 }
@@ -541,7 +561,7 @@ impl Visitor for Checker<'_> {
         // Only the projection is checked here; an unknown base local is
         // reported once by `visit_local`.
         if let Err(error @ (TypingError::DerefOfNonPointer(_) | TypingError::InvalidField { .. })) =
-            typing::place_ty(place, self.body)
+            typing::place_ty(place, self.body, self.program.structs())
         {
             self.report(VerifyErrorKind::Typing(error));
         }

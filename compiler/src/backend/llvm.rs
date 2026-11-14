@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::num::NonZero;
+use std::sync::Arc;
 
 use inkwell::basic_block::BasicBlock as LlvmBlock;
 use inkwell::builder::{Builder, BuilderError};
@@ -11,7 +12,9 @@ use inkwell::passes::PassBuilderOptions;
 use inkwell::targets::{
     CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine,
 };
-use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FloatType, IntType};
+use inkwell::types::{
+    BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FloatType, IntType, StructType,
+};
 use inkwell::values::{
     AggregateValueEnum, BasicMetadataValueEnum, BasicValueEnum, FloatValue, FunctionValue,
     IntValue, PointerValue,
@@ -33,7 +36,7 @@ use crate::middle::mir::{
     UnOp,
 };
 use crate::middle::target::TargetSpec;
-use crate::types::Type;
+use crate::types::{StructId, StructTable, Type};
 
 /// Native LLVM backend.
 #[derive(Debug, Default, Clone, Copy)]
@@ -172,6 +175,10 @@ struct MirCodegen<'ctx, 'a> {
     builder: Builder<'ctx>,
     target: &'a TargetSpec,
     functions: HashMap<DefId, FunctionValue<'ctx>>,
+    /// The struct definitions of the program being compiled.
+    structs: Arc<StructTable>,
+    /// The named LLVM type of every struct.
+    struct_types: HashMap<StructId, StructType<'ctx>>,
     /// The stack slots of the body being compiled.
     local_slots: HashMap<Local, PointerValue<'ctx>>,
 }
@@ -189,10 +196,32 @@ impl<'ctx, 'a> MirCodegen<'ctx, 'a> {
             builder: context.create_builder(),
             target,
             functions: HashMap::new(),
+            structs: program.structs().clone(),
+            struct_types: HashMap::new(),
             local_slots: HashMap::new(),
         };
+        this.declare_structs()?;
         this.declare_functions(program)?;
         Ok(this)
+    }
+
+    /// Declares a named LLVM type for every struct, then gives each its
+    /// fields: a field may refer to a struct declared after its own.
+    fn declare_structs(&mut self) -> Result<(), BackendError> {
+        let structs = self.structs.clone();
+        for (id, def) in structs.iter_enumerated() {
+            let ty = self.context.opaque_struct_type(&def.name);
+            self.struct_types.insert(id, ty);
+        }
+        for (id, def) in structs.iter_enumerated() {
+            let fields = def
+                .fields
+                .iter()
+                .map(|field| self.llvm_type(&field.ty))
+                .collect::<Result<Vec<_>, _>>()?;
+            self.struct_types[&id].set_body(&fields, false);
+        }
+        Ok(())
     }
 
     fn declare_functions(&mut self, program: &MirProgram) -> Result<(), BackendError> {
@@ -396,13 +425,13 @@ impl<'ctx, 'a> MirCodegen<'ctx, 'a> {
             Rvalue::Use(operand) => self.operand(operand, body),
             Rvalue::UnaryOp(op, operand) => {
                 let value = self.operand(operand, body)?;
-                let ty = operand_type(operand, body)?;
+                let ty = operand_type(operand, body, &self.structs)?;
                 self.unary(*op, value, ty)
             }
             Rvalue::BinaryOp(op, operands) => {
                 let (lhs, rhs) = &**operands;
-                let ty = operand_type(lhs, body)?;
-                let rhs_ty = operand_type(rhs, body)?;
+                let ty = operand_type(lhs, body, &self.structs)?;
+                let rhs_ty = operand_type(rhs, body, &self.structs)?;
                 self.binary(
                     *op,
                     self.operand(lhs, body)?,
@@ -413,23 +442,33 @@ impl<'ctx, 'a> MirCodegen<'ctx, 'a> {
             }
             Rvalue::Overflows(op, operands) => {
                 let (lhs, rhs) = &**operands;
-                let ty = operand_type(lhs, body)?;
+                let ty = operand_type(lhs, body, &self.structs)?;
                 let lhs = self.operand(lhs, body)?.into_int_value();
                 let rhs = self.operand(rhs, body)?.into_int_value();
                 self.overflows(*op, lhs, rhs, ty).map(Into::into)
             }
             Rvalue::Cast(kind, operand, target) => {
                 let value = self.operand(operand, body)?;
-                self.cast(*kind, value, operand_type(operand, body)?, target)
+                self.cast(
+                    *kind,
+                    value,
+                    operand_type(operand, body, &self.structs)?,
+                    target,
+                )
             }
             Rvalue::CastLoses(kind, operand, target) => {
                 let value = self.operand(operand, body)?;
-                self.cast_loses(*kind, value, operand_type(operand, body)?, target)
-                    .map(Into::into)
+                self.cast_loses(
+                    *kind,
+                    value,
+                    operand_type(operand, body, &self.structs)?,
+                    target,
+                )
+                .map(Into::into)
             }
             Rvalue::AddressOf(_, place) => Ok(self.place_ptr(place, body)?.into()),
             Rvalue::Aggregate(_, operands) => {
-                let ty = typing::rvalue_ty(rvalue, body)
+                let ty = typing::rvalue_ty(rvalue, body, &self.structs)
                     .map_err(|error| invalid_mir(error.to_string()))?;
                 let elems = operands
                     .iter()
@@ -440,7 +479,7 @@ impl<'ctx, 'a> MirCodegen<'ctx, 'a> {
         }
     }
 
-    /// Builds a value of the tuple type `ty` from its elements.
+    /// Builds a value of the tuple or struct type `ty` from its elements.
     fn tuple(
         &self,
         ty: &Type,
@@ -943,7 +982,7 @@ impl<'ctx, 'a> MirCodegen<'ctx, 'a> {
     ) -> Result<BasicValueEnum<'ctx>, BackendError> {
         match operand {
             Operand::Copy(place) => {
-                let ty = typing::place_ty(place, body)
+                let ty = typing::place_ty(place, body, &self.structs)
                     .map_err(|error| invalid_mir(error.to_string()))?;
                 self.builder
                     .build_load(self.llvm_type(ty)?, self.place_ptr(place, body)?, "load")
@@ -960,7 +999,7 @@ impl<'ctx, 'a> MirCodegen<'ctx, 'a> {
                 .into_int_type()
                 .const_int(u64::from(*value), false)
                 .into(),
-            ConstValue::Int(_) if constant.ty.is_zero_sized() => ty.const_zero(),
+            ConstValue::Int(_) if constant.ty.is_zero_sized(&self.structs) => ty.const_zero(),
             ConstValue::Int(value) => bigint_constant(ty.into_int_type(), value).into(),
             ConstValue::Float(value) => ty.into_float_type().const_float(*value).into(),
             ConstValue::Address(value) => {
@@ -972,7 +1011,7 @@ impl<'ctx, 'a> MirCodegen<'ctx, 'a> {
             }
             ConstValue::Tuple(_) => {
                 let elems = constant
-                    .tuple_elems()
+                    .elems(&self.structs)
                     .ok_or_else(|| invalid_mir(format!("malformed tuple constant `{constant}`")))?
                     .iter()
                     .map(|elem| self.constant(elem))
@@ -1006,9 +1045,9 @@ impl<'ctx, 'a> MirCodegen<'ctx, 'a> {
                         .builder
                         .build_struct_gep(self.llvm_type(ty)?, pointer, *index, "field")
                         .map_err(llvm_error("tuple element address"))?;
-                    ty = ty
-                        .tuple_elems()
-                        .and_then(|elems| elems.get(*index as usize))
+                    ty = self
+                        .structs
+                        .field_ty(ty, *index)
                         .ok_or_else(|| invalid_mir(format!("no element {index} in `{ty}`")))?;
                 }
             }
@@ -1054,6 +1093,11 @@ impl<'ctx, 'a> MirCodegen<'ctx, 'a> {
                     .collect::<Result<Vec<_>, _>>()?;
                 self.context.struct_type(&fields, false).into()
             }
+            Type::Struct(struct_ty) => (*self
+                .struct_types
+                .get(&struct_ty.id)
+                .ok_or_else(|| invalid_mir(format!("undefined struct `{ty}`")))?)
+            .into(),
         })
     }
 }
@@ -1113,8 +1157,12 @@ fn bigint_constant<'ctx>(int_type: IntType<'ctx>, value: &BigInt) -> IntValue<'c
     int_type.const_int_arbitrary_precision(&words)
 }
 
-fn operand_type<'a>(operand: &'a Operand, body: &'a Body) -> Result<&'a Type, BackendError> {
-    typing::operand_ty(operand, body).map_err(|error| invalid_mir(error.to_string()))
+fn operand_type<'a>(
+    operand: &'a Operand,
+    body: &'a Body,
+    structs: &'a StructTable,
+) -> Result<&'a Type, BackendError> {
+    typing::operand_ty(operand, body, structs).map_err(|error| invalid_mir(error.to_string()))
 }
 
 fn invalid_mir(message: String) -> BackendError {

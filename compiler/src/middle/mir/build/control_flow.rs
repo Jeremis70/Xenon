@@ -139,7 +139,7 @@ impl Builder<'_> {
         span: Span,
     ) -> LowerResult<()> {
         let source_info = self.source_info(span);
-        let zero = zero_rvalue(ty)?;
+        let zero = zero_rvalue(ty, self.structs)?;
         self.cfg
             .push_assign(block, source_info, destination.clone(), zero);
 

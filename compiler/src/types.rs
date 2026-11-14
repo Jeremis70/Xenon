@@ -1,13 +1,17 @@
 //! Semantic types shared by every compiler stage.
 //!
-//! The AST currently spells types with this same representation, but the
-//! type itself is a semantic concept: the type checker, MIR, and backends
-//! all consume it. It therefore lives below the frontend in the dependency
-//! graph so that the middle end never has to depend on syntax modules.
+//! The AST spells types with its own syntax (`ast::TypeExpr`), which the
+//! type checker resolves to this representation. The type itself is a
+//! semantic concept: the type checker, MIR, and backends all consume it. It
+//! therefore lives below the frontend in the dependency graph so that the
+//! middle end never has to depend on syntax modules.
 
 use crate::error::TypeError;
+use crate::index::{IndexVec, newtype_index};
+use crate::source::Span;
 use num_bigint::BigInt;
 use std::str::FromStr;
+use std::sync::Arc;
 
 /// Largest supported integer width, matching LLVM's `IntegerType::MAX_INT_BITS`.
 pub const MAX_INT_WIDTH: u32 = 1 << 23;
@@ -41,6 +45,129 @@ pub enum Type {
     /// Anonymous positional product `(T1, T2, ..)`. The empty tuple `()` is
     /// the unit type, the return type of functions that return nothing.
     Tuple(Vec<Type>),
+
+    /// A user-defined `struct`. Its fields live in the program's
+    /// [`StructTable`].
+    Struct(StructTy),
+}
+
+newtype_index! {
+    /// Identifies a struct definition within a compiled program.
+    pub struct StructId = "struct{}";
+}
+
+/// A reference to a struct definition.
+///
+/// Two struct types are the same type exactly when they have the same
+/// [`StructId`]; the name only labels the type in diagnostics and dumps,
+/// which therefore need no [`StructTable`] to print a type.
+#[derive(Debug, Clone)]
+pub struct StructTy {
+    pub id: StructId,
+    pub name: Arc<str>,
+}
+
+impl PartialEq for StructTy {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
+impl Eq for StructTy {}
+
+impl std::hash::Hash for StructTy {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.id.hash(state);
+    }
+}
+
+/// One field of a struct.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FieldDef {
+    pub name: String,
+    pub ty: Type,
+    /// Where the field is declared.
+    pub span: Span,
+}
+
+/// The definition of a struct: its fields, in declaration order, which is
+/// also their layout order.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StructDef {
+    pub name: Arc<str>,
+    pub fields: Vec<FieldDef>,
+    /// Where the struct is declared.
+    pub span: Span,
+}
+
+/// Every struct definition of a program, indexed by [`StructId`].
+///
+/// A [`Type::Struct`] only names its definition, so whatever depends on the
+/// fields of a struct (its layout, the type of a field, whether it has any
+/// bits) is answered here.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct StructTable {
+    defs: IndexVec<StructId, StructDef>,
+}
+
+impl StructTable {
+    /// Adds a definition and returns its identifier.
+    pub fn push(&mut self, def: StructDef) -> StructId {
+        self.defs.push(def)
+    }
+
+    /// The definition of `id`, if it exists.
+    pub fn get(&self, id: StructId) -> Option<&StructDef> {
+        self.defs.get(id)
+    }
+
+    /// Mutable access to the definition of `id`, if it exists.
+    pub fn get_mut(&mut self, id: StructId) -> Option<&mut StructDef> {
+        self.defs.get_mut(id)
+    }
+
+    /// Every definition with its identifier, in declaration order.
+    pub fn iter_enumerated(&self) -> impl DoubleEndedIterator<Item = (StructId, &StructDef)> + '_ {
+        self.defs.iter_enumerated()
+    }
+
+    /// The type of the struct `id`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `id` is not defined in this table.
+    pub fn ty(&self, id: StructId) -> Type {
+        Type::Struct(StructTy {
+            id,
+            name: self.defs[id].name.clone(),
+        })
+    }
+
+    /// The type of element `index` of a tuple or struct `ty`; `None` for
+    /// other types, unknown structs, and indices out of range.
+    pub fn field_ty<'a>(&'a self, ty: &'a Type, index: u32) -> Option<&'a Type> {
+        match ty {
+            Type::Tuple(elems) => elems.get(index as usize),
+            Type::Struct(struct_ty) => {
+                let field = self.get(struct_ty.id)?.fields.get(index as usize)?;
+                Some(&field.ty)
+            }
+            _ => None,
+        }
+    }
+
+    /// The element types of a tuple or struct `ty`, in order; `None` for
+    /// other types and unknown structs.
+    pub fn field_tys(&self, ty: &Type) -> Option<Vec<Type>> {
+        match ty {
+            Type::Tuple(elems) => Some(elems.clone()),
+            Type::Struct(struct_ty) => {
+                let def = self.get(struct_ty.id)?;
+                Some(def.fields.iter().map(|field| field.ty.clone()).collect())
+            }
+            _ => None,
+        }
+    }
 }
 
 impl Type {
@@ -78,16 +205,28 @@ impl Type {
     }
 
     /// Returns `true` for types with a single value and no bits: `i0` and
-    /// `u0`, which only hold `0`, and tuples of such types, including `()`.
-    pub fn is_zero_sized(&self) -> bool {
+    /// `u0`, which only hold `0`, and tuples and structs of such types,
+    /// including `()` and structs without fields.
+    pub fn is_zero_sized(&self, structs: &StructTable) -> bool {
         match self {
             Type::Int(0) | Type::UInt(0) => true,
-            Type::Tuple(elems) => elems.iter().all(Type::is_zero_sized),
+            Type::Tuple(elems) => elems.iter().all(|elem| elem.is_zero_sized(structs)),
+            Type::Struct(struct_ty) => structs.get(struct_ty.id).is_some_and(|def| {
+                def.fields
+                    .iter()
+                    .all(|field| field.ty.is_zero_sized(structs))
+            }),
             _ => false,
         }
     }
 
-    /// Returns `true` for a reference type or a tuple containing one.
+    /// Returns `true` for tuples and structs, the types made of elements.
+    pub fn is_aggregate(&self) -> bool {
+        matches!(self, Type::Tuple(_) | Type::Struct(_))
+    }
+
+    /// Returns `true` for a reference type or a tuple containing one. A
+    /// struct never contains one: its fields cannot have reference types.
     pub fn contains_reference(&self) -> bool {
         match self {
             Type::Reference(_) => true,
@@ -275,6 +414,7 @@ impl std::fmt::Display for Type {
                 }
                 f.write_str(")")
             }
+            Type::Struct(struct_ty) => f.write_str(&struct_ty.name),
         }
     }
 }

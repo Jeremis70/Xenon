@@ -21,7 +21,7 @@ use num_bigint::{BigInt, Sign};
 use num_traits::{One, Zero};
 
 use crate::middle::target::TargetSpec;
-use crate::types::Type;
+use crate::types::{StructTable, Type};
 
 use super::body::Local;
 use super::syntax::{AssertKind, BinOp, CastKind, ConstValue, Constant, Operand, Rvalue, UnOp};
@@ -45,13 +45,16 @@ pub enum EvalResult {
 pub fn known_operand(
     operand: &Operand,
     decls: &impl HasLocalDecls,
+    structs: &StructTable,
     local_value: impl Fn(Local) -> Option<Constant>,
 ) -> Option<Constant> {
     match operand {
         Operand::Constant(constant) => Some((**constant).clone()),
         Operand::Copy(place) => place.as_local().and_then(&local_value).or_else(|| {
-            let ty = typing::place_ty(place, decls).ok()?;
-            ty.is_zero_sized().then(|| Constant::zero(ty)).flatten()
+            let ty = typing::place_ty(place, decls, structs).ok()?;
+            ty.is_zero_sized(structs)
+                .then(|| Constant::zero(ty, structs))
+                .flatten()
         }),
     }
 }
@@ -62,10 +65,11 @@ pub fn known_operand(
 pub fn eval_rvalue(
     rvalue: &Rvalue,
     decls: &impl HasLocalDecls,
+    structs: &StructTable,
     target: &TargetSpec,
     value_of: impl Fn(&Operand) -> Option<Constant>,
 ) -> Result<EvalResult, TypingError> {
-    let ty = typing::rvalue_ty(rvalue, decls)?;
+    let ty = typing::rvalue_ty(rvalue, decls, structs)?;
     let result = match rvalue {
         Rvalue::Use(operand) => value_of(operand).map_or(EvalResult::Unknown, EvalResult::Value),
         Rvalue::UnaryOp(op, operand) => match value_of(operand) {
@@ -75,7 +79,7 @@ pub fn eval_rvalue(
         Rvalue::BinaryOp(op, operands) => {
             let lhs = value_of(&operands.0);
             let rhs = value_of(&operands.1);
-            let operand_ty = typing::operand_ty(&operands.0, decls)?;
+            let operand_ty = typing::operand_ty(&operands.0, decls, structs)?;
             eval_binary(
                 *op,
                 lhs.as_ref().map(|c| &c.value),

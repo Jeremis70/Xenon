@@ -341,3 +341,71 @@ fn linked_llvm_is_version_23() {
         "xenonc is built for LLVM 23 but linked LLVM {major}.{minor}.{patch}"
     );
 }
+
+/// Hand-built MIR: `fn width(Rect r) -> f64 { return r.width; }`, with
+/// `struct Rect { f64 width; f64 height; }` and an unused empty struct.
+#[test]
+fn structs_lower_to_named_llvm_types() {
+    use std::sync::Arc;
+    use xenonc::middle::mir::{
+        BodyBuilder, FnDecl, FnSig, LocalDecl, Operand, Place, RETURN_PLACE, Rvalue, START_BLOCK,
+        SourceInfo, TerminatorKind,
+    };
+    use xenonc::source::Span;
+    use xenonc::types::{FieldDef, StructDef, StructTable, Type};
+
+    let mut structs = StructTable::default();
+    let field = |name: &str| FieldDef {
+        name: name.to_owned(),
+        ty: Type::Float64,
+        span: Span::ZERO,
+    };
+    let rect = structs.push(StructDef {
+        name: "Rect".into(),
+        fields: vec![field("width"), field("height")],
+        span: Span::ZERO,
+    });
+    structs.push(StructDef {
+        name: "Empty".into(),
+        fields: vec![],
+        span: Span::ZERO,
+    });
+    let rect = structs.ty(rect);
+
+    let mut program = MirProgram::new();
+    program.set_structs(Arc::new(structs));
+    let def_id = program.declare(FnDecl {
+        name: "width".to_owned(),
+        sig: FnSig {
+            inputs: vec![rect.clone()],
+            output: Type::Float64,
+        },
+        span: Span::ZERO,
+    });
+    let info = SourceInfo::outermost(Span::ZERO);
+    let args = [LocalDecl::temp(rect, Span::ZERO)];
+    let mut builder = BodyBuilder::new(def_id, Span::ZERO, Type::Float64, args);
+    let param = xenonc::middle::mir::Local::from_u32(1);
+    builder.push_assign(
+        START_BLOCK,
+        info,
+        RETURN_PLACE.into(),
+        Rvalue::Use(Operand::Copy(Place::from(param).field(0))),
+    );
+    builder.terminate(START_BLOCK, info, TerminatorKind::Return);
+    program
+        .set_body(builder.finish().expect("body should build"))
+        .expect("body should attach");
+    let target = TargetSpec::host();
+    analyze_program(&mut program, &target).expect("MIR flow analysis should pass");
+    let policy = RuntimeCheckPolicy {
+        overflow: OverflowMode::Checked,
+    };
+    normalize_runtime_checks(&mut program, &target, policy).expect("should normalize");
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let ir = emit_ir(&program, &dir.path().join("out.ll"));
+    assert!(ir.contains("%Rect = type { double, double }"), "{ir}");
+    assert!(ir.contains("define double @width(%Rect %0)"), "{ir}");
+    assert!(ir.contains("getelementptr inbounds"), "{ir}");
+}

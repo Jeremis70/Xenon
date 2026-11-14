@@ -12,7 +12,7 @@
 use thiserror::Error;
 
 use crate::index::IndexVec;
-use crate::types::Type;
+use crate::types::{StructTable, Type};
 
 use super::body::{Body, Local, LocalDecl};
 use super::syntax::{AggregateKind, BinOp, CastKind, Operand, Place, ProjectionElem, Rvalue, UnOp};
@@ -47,6 +47,9 @@ pub enum TypingError {
     #[error("`{ty}` has no element {index}")]
     InvalidField { ty: Type, index: u32 },
 
+    #[error("aggregate does not match the definition of `{0}`")]
+    InvalidAggregate(Type),
+
     #[error("`{op:?}` operands have different types `{lhs}` and `{rhs}`")]
     OperandMismatch { op: BinOp, lhs: Type, rhs: Type },
 
@@ -71,7 +74,11 @@ pub enum TypingError {
 }
 
 /// The type of the value stored at `place`.
-pub fn place_ty<'a>(place: &Place, decls: &'a impl HasLocalDecls) -> Result<&'a Type, TypingError> {
+pub fn place_ty<'a>(
+    place: &Place,
+    decls: &'a impl HasLocalDecls,
+    structs: &'a StructTable,
+) -> Result<&'a Type, TypingError> {
     let mut ty = &decls
         .local_decls()
         .get(place.local)
@@ -82,13 +89,14 @@ pub fn place_ty<'a>(place: &Place, decls: &'a impl HasLocalDecls) -> Result<&'a 
             ProjectionElem::Deref => ty
                 .pointee()
                 .ok_or_else(|| TypingError::DerefOfNonPointer(ty.clone()))?,
-            ProjectionElem::Field(index) => ty
-                .tuple_elems()
-                .and_then(|elems| elems.get(*index as usize))
-                .ok_or_else(|| TypingError::InvalidField {
-                    ty: ty.clone(),
-                    index: *index,
-                })?,
+            ProjectionElem::Field(index) => {
+                structs
+                    .field_ty(ty, *index)
+                    .ok_or_else(|| TypingError::InvalidField {
+                        ty: ty.clone(),
+                        index: *index,
+                    })?
+            }
         };
     }
     Ok(ty)
@@ -98,26 +106,31 @@ pub fn place_ty<'a>(place: &Place, decls: &'a impl HasLocalDecls) -> Result<&'a 
 pub fn operand_ty<'a>(
     operand: &'a Operand,
     decls: &'a impl HasLocalDecls,
+    structs: &'a StructTable,
 ) -> Result<&'a Type, TypingError> {
     match operand {
-        Operand::Copy(place) => place_ty(place, decls),
+        Operand::Copy(place) => place_ty(place, decls, structs),
         Operand::Constant(constant) => Ok(&constant.ty),
     }
 }
 
 /// The type of the value produced by `rvalue`.
-pub fn rvalue_ty(rvalue: &Rvalue, decls: &impl HasLocalDecls) -> Result<Type, TypingError> {
+pub fn rvalue_ty(
+    rvalue: &Rvalue,
+    decls: &impl HasLocalDecls,
+    structs: &StructTable,
+) -> Result<Type, TypingError> {
     match rvalue {
-        Rvalue::Use(operand) => operand_ty(operand, decls).cloned(),
-        Rvalue::UnaryOp(op, operand) => unary_op_ty(*op, operand_ty(operand, decls)?),
+        Rvalue::Use(operand) => operand_ty(operand, decls, structs).cloned(),
+        Rvalue::UnaryOp(op, operand) => unary_op_ty(*op, operand_ty(operand, decls, structs)?),
         Rvalue::BinaryOp(op, operands) => binary_op_ty(
             *op,
-            operand_ty(&operands.0, decls)?,
-            operand_ty(&operands.1, decls)?,
+            operand_ty(&operands.0, decls, structs)?,
+            operand_ty(&operands.1, decls, structs)?,
         ),
         Rvalue::Overflows(op, operands) => {
-            let lhs = operand_ty(&operands.0, decls)?;
-            let rhs = operand_ty(&operands.1, decls)?;
+            let lhs = operand_ty(&operands.0, decls, structs)?;
+            let rhs = operand_ty(&operands.1, decls, structs)?;
             if !op.is_overflow_checkable() {
                 return Err(TypingError::UncheckableOverflowOp(*op));
             }
@@ -131,22 +144,43 @@ pub fn rvalue_ty(rvalue: &Rvalue, decls: &impl HasLocalDecls) -> Result<Type, Ty
             Ok(Type::Bool)
         }
         Rvalue::Cast(kind, operand, target) => {
-            let source = operand_ty(operand, decls)?;
+            let source = operand_ty(operand, decls, structs)?;
             check_cast(*kind, source, target)?;
             Ok(target.clone())
         }
         Rvalue::CastLoses(kind, operand, target) => {
-            let source = operand_ty(operand, decls)?;
+            let source = operand_ty(operand, decls, structs)?;
             check_cast(*kind, source, target)?;
             Ok(Type::Bool)
         }
-        Rvalue::AddressOf(kind, place) => Ok(kind.pointer_to(place_ty(place, decls)?.clone())),
+        Rvalue::AddressOf(kind, place) => {
+            Ok(kind.pointer_to(place_ty(place, decls, structs)?.clone()))
+        }
         Rvalue::Aggregate(AggregateKind::Tuple, operands) => Ok(Type::Tuple(
             operands
                 .iter()
-                .map(|operand| operand_ty(operand, decls).cloned())
+                .map(|operand| operand_ty(operand, decls, structs).cloned())
                 .collect::<Result<_, _>>()?,
         )),
+        Rvalue::Aggregate(AggregateKind::Struct(struct_ty), operands) => {
+            let ty = Type::Struct(struct_ty.clone());
+            let fields = structs.get(struct_ty.id).map(|def| def.fields.as_slice());
+            let matches = match fields {
+                Some(fields) if fields.len() == operands.len() => {
+                    let mut all = true;
+                    for (field, operand) in fields.iter().zip(operands) {
+                        all &= *operand_ty(operand, decls, structs)? == field.ty;
+                    }
+                    all
+                }
+                _ => false,
+            };
+            if matches {
+                Ok(ty)
+            } else {
+                Err(TypingError::InvalidAggregate(ty))
+            }
+        }
     }
 }
 
@@ -159,6 +193,7 @@ pub fn rvalue_ty(rvalue: &Rvalue, decls: &impl HasLocalDecls) -> Result<Type, Ty
 pub fn computes_on_zero_sized(
     rvalue: &Rvalue,
     decls: &impl HasLocalDecls,
+    structs: &StructTable,
 ) -> Result<bool, TypingError> {
     let (first, second) = match rvalue {
         Rvalue::Use(_) | Rvalue::AddressOf(..) | Rvalue::Aggregate(..) => return Ok(false),
@@ -170,11 +205,11 @@ pub fn computes_on_zero_sized(
         }
     };
     for operand in std::iter::once(first).chain(second) {
-        if operand_ty(operand, decls)?.is_zero_sized() {
+        if operand_ty(operand, decls, structs)?.is_zero_sized(structs) {
             return Ok(true);
         }
     }
-    Ok(rvalue_ty(rvalue, decls)?.is_zero_sized())
+    Ok(rvalue_ty(rvalue, decls, structs)?.is_zero_sized(structs))
 }
 
 /// The result type of `op` applied to an operand of type `ty`.
