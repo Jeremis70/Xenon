@@ -737,8 +737,10 @@ impl<'ctx, 'a> MirCodegen<'ctx, 'a> {
                     .build_or(below, above, "cast.loses")
                     .map_err(error())
             }
-            // Lossy unless `min <= x < max + 1` and `x` is integral; NaN
-            // fails the ordered comparisons.
+            // Lossy unless `min <= x < max + 1`, `x > -inf`, and `x` is
+            // integral; NaN fails the ordered comparisons. `min` rounds to
+            // `-inf` when the integer range exceeds the float's, so `x >= min`
+            // alone would admit `-inf`.
             CastKind::FloatToInt => {
                 let value = value.into_float_value();
                 let float_type = value.get_type();
@@ -763,7 +765,10 @@ impl<'ctx, 'a> MirCodegen<'ctx, 'a> {
                     .build_float_compare(FloatPredicate::OLT, value, high, "cast.below_high")
                     .map_err(error())?;
                 let in_range = builder
-                    .build_and(above_low, below_high, "cast.in_range")
+                    .build_and(above_low, below_high, "cast.bounded")
+                    .map_err(error())?;
+                let in_range = builder
+                    .build_and(in_range, self.above_neg_inf(value)?, "cast.in_range")
                     .map_err(error())?;
                 let truncated = self.float_to_int(value, target, self.int_type(width)?)?;
                 let back = self.int_to_float(truncated, target, float_type)?;
@@ -772,16 +777,20 @@ impl<'ctx, 'a> MirCodegen<'ctx, 'a> {
                     .map_err(error())?;
                 self.select_loss(in_range, fractional)
             }
-            // Lossy unless the rounded float is below `max + 1` (so it
-            // converts back without poison) and converts back to `value`.
+            // Lossy unless the rounded float is finite and below `max + 1`
+            // (so it converts back without poison) and converts back to
+            // `value`. A negative value can round to `-inf`.
             CastKind::IntToFloat => {
                 let value = value.into_int_value();
                 let float_type = self.llvm_type(target)?.into_float_type();
                 let converted = self.int_to_float(value, source, float_type)?;
                 let (_, max) = self.int_bounds(source)?;
                 let high = self.float_constant(float_type, &(max + 1))?;
+                let below_high = builder
+                    .build_float_compare(FloatPredicate::OLT, converted, high, "cast.below_high")
+                    .map_err(error())?;
                 let in_range = builder
-                    .build_float_compare(FloatPredicate::OLT, converted, high, "cast.in_range")
+                    .build_and(below_high, self.above_neg_inf(converted)?, "cast.in_range")
                     .map_err(error())?;
                 let back = self.float_to_int(converted, source, value.get_type())?;
                 let rounded = builder
@@ -805,6 +814,14 @@ impl<'ctx, 'a> MirCodegen<'ctx, 'a> {
                     .map_err(error())
             }
         }
+    }
+
+    /// `value > -inf`: false for `-inf` and NaN.
+    fn above_neg_inf(&self, value: FloatValue<'ctx>) -> Result<IntValue<'ctx>, BackendError> {
+        let neg_inf = value.get_type().const_float(f64::NEG_INFINITY);
+        self.builder
+            .build_float_compare(FloatPredicate::OGT, value, neg_inf, "cast.above_neg_inf")
+            .map_err(llvm_error("cast check"))
     }
 
     /// `in_range ? loses : true`. A `select` ignores the arm it does not

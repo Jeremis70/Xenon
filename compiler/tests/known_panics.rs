@@ -274,6 +274,56 @@ fn float_casts_are_exact_or_trap() {
     assert!(matches!(narrow(f64::NAN), EvalResult::Value(_)));
 }
 
+/// `f16` and `bf16` constants are rounded to their format before a cast.
+#[test]
+fn half_float_casts_round_to_their_format() {
+    let lossy = EvalResult::Trap(AssertKind::LossyCast);
+    let cast = |kind, value: f64, from: Type, to: Type| {
+        eval(Rvalue::Cast(
+            kind,
+            Operand::constant(Constant::float(value, from)),
+            to,
+        ))
+    };
+    let narrow = |value, to| cast(CastKind::FloatToFloat, value, Type::Float64, to);
+    // 0.1 rounds in both; 0.5, 2048, and 65504 (the largest `f16`) do not.
+    assert_eq!(narrow(0.1, Type::Float16), lossy);
+    assert_eq!(narrow(0.1, Type::BFloat16), lossy);
+    for value in [0.5, 2048.0, 65504.0, -65504.0] {
+        assert!(
+            matches!(narrow(value, Type::Float16), EvalResult::Value(_)),
+            "{value}"
+        );
+    }
+    // 2049 needs 12 significand bits; 65520 rounds up to infinity.
+    assert_eq!(narrow(2049.0, Type::Float16), lossy);
+    assert_eq!(narrow(65520.0, Type::Float16), lossy);
+    // 2^-24 is the smallest `f16` subnormal; 2^-25 rounds to zero.
+    assert!(matches!(
+        narrow(2f64.powi(-24), Type::Float16),
+        EvalResult::Value(_)
+    ));
+    assert_eq!(narrow(2f64.powi(-25), Type::Float16), lossy);
+    // bf16 keeps f32's range with 8 significand bits.
+    assert!(matches!(
+        narrow(2f64.powi(127), Type::BFloat16),
+        EvalResult::Value(_)
+    ));
+    assert_eq!(narrow(2f64.powi(128), Type::BFloat16), lossy);
+    assert_eq!(narrow(257.0, Type::BFloat16), lossy);
+    assert!(matches!(
+        narrow(256.0, Type::BFloat16),
+        EvalResult::Value(_)
+    ));
+
+    // A typed `f16` literal holds its rounded value: 2.5 is exact, so
+    // casting it to an integer traps, while 2049.0 rounds to 2048.
+    let to_int = |value, from| cast(CastKind::FloatToInt, value, from, Type::Int(32));
+    assert_eq!(to_int(2.5, Type::Float16), lossy);
+    assert_eq!(to_int(2049.0, Type::Float16), value(2048, Type::Int(32)));
+    assert_eq!(to_int(-3.0, Type::BFloat16), value(-3, Type::Int(32)));
+}
+
 #[test]
 fn floats_are_not_evaluated() {
     let float = |value| Operand::constant(Constant::float(value, Type::Float64));

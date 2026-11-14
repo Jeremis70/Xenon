@@ -274,6 +274,25 @@ fn f16_and_bf16_convert_through_f32() {
     assert!(ir.contains("to bfloat"), "{ir}");
 }
 
+/// Integer bounds beyond a float's range round to infinities, so the range
+/// check must exclude `-inf` itself before the round trip, whose `fptosi`
+/// would otherwise be poison.
+#[test]
+fn cast_checks_exclude_negative_infinity() {
+    for source in [
+        "fn f(f32 x)->i256 { return x as i256; }",
+        "fn f(f16 x)->i32 { return x as i32; }",
+        "fn f(i32 n)->f16 { return n as f16; }",
+    ] {
+        let ir = ir_for(source);
+        assert!(
+            ir.contains("%cast.above_neg_inf = fcmp ogt"),
+            "{source}:\n{ir}"
+        );
+        assert!(ir.contains("%cast.in_range = and i1"), "{source}:\n{ir}");
+    }
+}
+
 /// The relocation model reaches LLVM: PIC and PIE code record their level
 /// in the module, as clang does.
 #[test]

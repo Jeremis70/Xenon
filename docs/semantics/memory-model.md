@@ -32,11 +32,11 @@ rules.
 
 `@name` means the address of the variable `name`, even when `name` has an
 integer type. Converting an integer value into a pointer is a separate,
-explicit operation, which is **not implemented yet**:
+explicit operation:
 
 ```xe
 let usize address = 0xFFFFFFFF;
-let *u32 p = address as *u32; // planned
+let *u32 p = address as *u32;
 ```
 
 ## References

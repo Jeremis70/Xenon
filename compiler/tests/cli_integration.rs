@@ -187,6 +187,14 @@ fn known_panics_are_compile_errors() {
             "#[entry] fn main() { let i64 big = 16777217; let f32 x = big as f32; }",
             "attempt to cast a value the target type cannot represent exactly",
         ),
+        (
+            "#[entry] fn main() { let f16 x = 2.5; let i32 n = x as i32; }",
+            "attempt to cast a value the target type cannot represent exactly",
+        ),
+        (
+            "#[entry] fn main() { let f64 x = 0.1; let f16 y = x as f16; }",
+            "attempt to cast a value the target type cannot represent exactly",
+        ),
     ] {
         for command in ["check", "compile"] {
             let diagnostic = single_json_diagnostic(command, source);
@@ -651,6 +659,11 @@ fn lossy_casts_trap_at_runtime() {
         "fn to_f64(u64 n) -> f64 { return n as f64; }\n",
         "fn narrow(f64 x) -> f32 { return x as f32; }\n",
         "fn nan() -> f64 { let f64 zero = 0.0; return zero / zero; }\n",
+        "fn half_to_i32(f16 x) -> i32 { return x as i32; }\n",
+        "fn to_i256(f32 x) -> i256 { return x as i256; }\n",
+        "fn to_f16(i32 n) -> f16 { return n as f16; }\n",
+        "fn neg_inf() -> f16 { let f16 zero = 0.0; return -1.0 / zero; }\n",
+        "fn neg_inf32() -> f32 { let f32 zero = 0.0; return -1.0 / zero; }\n",
     );
     for call in [
         "to_u8(-1)",
@@ -664,6 +677,11 @@ fn lossy_casts_trap_at_runtime() {
         "to_f64(18446744073709551615)",
         "narrow(0.1)",
         "narrow(1.0e300)",
+        // The integer bounds are infinite in the float type.
+        "half_to_i32(neg_inf())",
+        "to_i256(neg_inf32())",
+        // -65536 rounds to `-inf` in `f16`.
+        "to_f16(-65536)",
     ] {
         let status = run_status(&format!(
             "#[entry] fn main() -> u8 {{ {call}; return 0; }}\n{helpers}"
@@ -675,6 +693,7 @@ fn lossy_casts_trap_at_runtime() {
         "to_uint(-0.0)",
         "to_uint(4294967295.0)",
         "narrow(nan())",
+        "to_f16(-65504)",
     ] {
         let status = run_status(&format!(
             "#[entry] fn main() -> u8 {{ {call}; return 0; }}\n{helpers}"
