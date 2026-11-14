@@ -25,6 +25,11 @@ If overload resolution is ambiguous, the compiler should emit an error and requi
 
 ## Default and named arguments
 
+Not implemented for functions. The named form is implemented only for
+building a struct, where every field is named:
+`Rect(width = 3.0, height = 4.0)`. Naming the arguments of a function is an
+error for now. The draft below shows the intended shape.
+
 ```xe
 fn foo(u32 x, u32 y = 10) -> u32 { ... }
 
@@ -91,6 +96,13 @@ let _, i32 rest = divmod(9, 4);     // ignore the quotient
 let (i32, i32) both = divmod(9, 4); // or keep the tuple
 i32 three = divmod(17, 5).0;
 ```
+
+## Methods
+
+Functions declared in an `impl` block belong to a struct. One whose first
+parameter is `self` or `&self` is a method, called on a value
+(`rect.scale(2.0)`); one without is an associated function, called on the
+struct (`Rect.unit()`). See [Structs and Enums](structs-and-enums.md#methods).
 
 ## Callable model
 

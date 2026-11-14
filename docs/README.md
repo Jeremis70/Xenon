@@ -46,7 +46,8 @@ Open `http://localhost:3000` in VS Code Simple Browser (or any browser).
 - [x] Low-level control flow (`goto`, `nop`, `asm`, `llvm`)
 - [x] Compiler tooling (`xenonc` CLI)
 - [x] Build system (Cargo workspace)
-- [ ] Structs/enums details (no doc yet)
+- [x] Structs, methods, and computed properties
+- [ ] Enums (no doc yet)
 - [ ] Modules/imports details (no doc yet)
 - [ ] Memory model / ownership / references (pointers and references implemented: `*T`, `&T`, `@`, `*p`)
 - [ ] Standard library overview (no doc yet)

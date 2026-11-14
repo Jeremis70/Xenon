@@ -56,6 +56,10 @@ writes through to it, so no explicit `*` is used. A consequence is that a
 reference is bound once, at its declaration, and cannot later be rebound to a
 different location.
 
+A reference always refers to a value: taking a reference to a variable that
+has not been assigned yet is a compile error. A pointer may be taken to
+such a variable, which is how a function fills in a variable of its caller.
+
 When passing a variable to a function that expects a reference, use `@`:
 
 ```xe

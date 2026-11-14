@@ -170,8 +170,32 @@ Every new name spells its type: there is no type inference. See
 destructuring and parallel assignment, and [Functions](functions.md) for
 multiple results.
 
+## Structs
+
+A struct is a named type with named fields, declared with `struct` and used
+by its name like any other type:
+
+```xe
+struct Rect {
+    f64 width;
+    f64 height;
+}
+
+let Rect r = Rect(width = 3.0, height = 4.0);
+let *Rect p = @r;
+let (Rect, bool) tagged = (r, true);
+```
+
+Any name that is not a built-in type names a struct; a name no struct has
+is an "unknown type" error. Built-in integer names are exactly `i` or `u`
+followed by digits, so `item`, `user`, and `u` are ordinary names.
+
+See [Structs and Enums](structs-and-enums.md) for fields, methods, and
+computed properties.
+
 ## Related pages
 
+- [Structs and Enums](structs-and-enums.md)
 - [Operators](operators.md)
 - [Syntax Basics](syntax-basics.md)
 - [Memory Model](../semantics/memory-model.md)

@@ -36,6 +36,8 @@ AST ──typecheck::check_program──▶ THIR ──mir::build_mir──▶ M
 | `middle/typecheck/operator.rs` | Unary, binary, compound, shift, and comparison operators. |
 | `middle/typecheck/stmt.rs` | Blocks, statements, `break`, and loops. |
 | `middle/typecheck/tuple.rs` | Tuple expressions, `.N`, destructuring `let`, parallel assignment, and bare `return`. |
+| `middle/typecheck/items.rs` | Collection of structs (names, fields, recursion check) and of every function: free functions, `impl` members, and property getters. |
+| `middle/typecheck/structs.rs` | Struct construction, member access `.name`, and method calls. |
 
 ## Typing rules
 
@@ -64,6 +66,22 @@ AST ──typecheck::check_program──▶ THIR ──mir::build_mir──▶ M
 - **Places** are bindings, dereferences, and elements (`.N`) of places. A
   binding or tuple element of type `&T` is dereferenced automatically
   wherever it is used.
+- **Type names.** The AST spells types as `TypeExpr`, with user-defined
+  names unresolved. `GlobalCtxt::resolve` turns one into a `Type`, where a
+  struct is `Type::Struct` (a `StructId` and the name); an unknown name is
+  an error. THIR never holds an unresolved type.
+- **Structs.** `Rect(width = a, height = b)` becomes `ExprKind::Struct`,
+  whose values are kept in source order, each with the index of its field.
+  A field read is the same `Field { base, index }` as a tuple element, with
+  the field's declaration index. Structs compare like tuples.
+- **Methods and properties** leave no trace of their own. Each is an
+  ordinary THIR function named `Rect.scale` or `Rect.area.get`, whose first
+  parameter `self` is the receiver: a `Rect` for `self`, a `&Rect` for
+  `&self` and for getters. `r.scale(2.0)` is a `Call` whose first argument
+  is `&r`, an `AddressOf` that may hold a value instead of a place (MIR
+  construction gives it a temporary); `r.area` is a `Call` of the getter;
+  `Rect.unit()` is a plain `Call`. A property reached where a place is
+  needed (an assignment target or `@`) is an error.
 - **Tuples.** A tuple literal gives each element the matching element of
   its expected tuple type, if the arities agree. A tuple literal of the
   wrong length is reported as an arity mismatch ("expected 2 values, found

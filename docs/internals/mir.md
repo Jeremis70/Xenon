@@ -29,20 +29,29 @@ A `Body` is one function:
 - **Terminators**: `Goto`, `SwitchInt`, `Call`, `Assert`, `Return`,
   `Unreachable`, and `EndOfBody` (allowed only in the `Built` phase).
 - **Places**: a local plus projections: `Deref`, as in `(*_1)`, and
-  `Field(i)`, a tuple element, as in `_1.0` or `(*_1).1`. Arrays will add
-  index projections.
+  `Field(i)`, a tuple element or the struct field with that index in
+  declaration order, as in `_1.0` or `(*_1).1`. Arrays will add index
+  projections.
 - **Operands**: `copy place` or `const value`. Constants include tuples,
   such as `const (0_i32, false)` and the unit value `const ()`.
 - **Rvalues**: `Use`, `UnaryOp`, `BinaryOp`, `Overflows`, `Cast`,
-  `CastLoses`, `AddressOf`, and `Aggregate`, which builds a whole tuple at
-  once: `_2 = (copy _1, const true)`. Its type is derived from its operands.
+  `CastLoses`, `AddressOf`, and `Aggregate`, which builds a whole tuple or
+  struct at once: `_2 = (copy _1, const true)` or `_2 = Rect(copy _1, copy _3)`.
+  A tuple's type is derived from its operands; a struct aggregate names its
+  struct, and its operands are the fields in declaration order.
+- **Struct definitions** live in the program's `StructTable`
+  (`MirProgram::structs`), not in the type: `Type::Struct` only carries the
+  `StructId` and the name. Whatever depends on the fields takes the table:
+  `place_ty`, `rvalue_ty`, `Type::is_zero_sized`, `Constant::zero`. Methods
+  and property getters are ordinary functions named `Rect.scale` and
+  `Rect.area.get`, with the receiver as their first parameter.
 - **Casts are exact or trap.** In `Built` and `Checked` MIR, a `Cast` whose
   target type cannot represent the value exactly traps (`LossyCast`). Runtime
   normalization makes that check an explicit `CastLoses` guard, a `bool`
   that never traps, after which the `Cast` is the raw conversion: truncate
   or extend, round to nearest, or copy the bits.
-- **Tuples have no operators.** `BinaryOp` is only defined on scalars;
-  MIR construction expands tuple `==` and `!=` (see below).
+- **Tuples and structs have no operators.** `BinaryOp` is only defined on
+  scalars; MIR construction expands their `==` and `!=` (see below).
 
 Example dump:
 
@@ -154,9 +163,11 @@ locals that are not initialized on every incoming path. Arguments begin
 initialized; `StorageLive` and `StorageDead` clear a local's initialized
 state. Call destinations become initialized only on the normal-return edge.
 Indirect places track initialization of their base pointer, not the memory
-they point to. Tuples are initialized as a whole (by an `Aggregate`, a call,
-or a constant); a store to one element requires the tuple to be initialized
-already, so partial initialization is never tracked.
+they point to. Tuples and structs are initialized as a whole (by an
+`Aggregate`, a call, or a constant); a store to one element requires the
+whole value to be initialized already, so partial initialization is never
+tracked. Taking a reference (`@ref _1`) reads the local, which must be
+initialized; taking a pointer (`@raw _1`) neither reads nor writes it.
 
 `analysis::analyze_liveness` is a reusable backward local analysis. Results
 are owned by the caller rather than cached on `Body`, so a MIR mutation cannot
@@ -243,12 +254,13 @@ Lowering rules:
   (`LocalDecl::is_named_result`). Definite-initialization analysis reports
   any read of one that is not assigned on every path as
   `UnassignedNamedResult`; a bare `return;` reads all of them.
-- **Tuples** are built with one `Aggregate`, so a tuple local is initialized
-  in a single step. An element store such as `_1.0 = ..` is visited with
+- **Tuples and structs** are built with one `Aggregate`, so such a local is
+  initialized in a single step. The values of a struct expression are
+  evaluated in source order, then stored in field order. An element store such as `_1.0 = ..` is visited with
   `MutatingUseContext::Projection`: it is not a definition of `_1`, so flow
   analysis requires `_1` to be initialized already and liveness counts it
   as a use.
-- **Tuple `==` / `!=`** evaluate both operands completely, left to right,
+- **Tuple and struct `==` / `!=`** evaluate both operands completely, left to right,
   into places (a left place is snapshotted if the right side has side
   effects), then compare the elements pairwise with scalar `Eq` and fold
   the results with `BitAnd` (`Not` for `!=`). Every call in the operands

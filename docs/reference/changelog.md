@@ -25,7 +25,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   the value exactly, and a constant that would fail is a compile error.
   Pointers convert to other pointers and to and from `usize`.
 
+- Structs: `struct Rect { f64 width; f64 height; }`, built by naming every
+  field in any order (`Rect(width = 3.0, height = 4.0)`), with assignable
+  fields (`r.width`), field-wise `==` / `!=`, and copy semantics. A struct
+  may point to itself through `*T`.
+- `impl` blocks: methods taking `self` (a copy) or `&self` (a reference
+  that can change the value), called as `r.scale(2.0)`, and associated
+  functions called as `Rect.unit()`.
+- Computed properties: `f64 area { return self.width * self.height; }` in
+  an `impl` block is read as `r.area`, takes no room in the struct, and is
+  read-only.
+
 ### Changed
+
+- `struct`, `impl`, and `self` are keywords.
+- Any name that is not a built-in type is a type name: an unknown type is
+  now reported by the type checker as "unknown type `foo`". `let x = 5;`
+  reports "expected a type before `x`".
+- Only `i` or `u` followed by digits is an integer type. Names such as
+  `item`, `user`, and `u` no longer report a missing or invalid bit width.
+- Taking a reference `&T` to a variable requires the variable to be
+  assigned already. Taking a pointer `*T` does not.
 
 - The entry point returns `u8` (the exit code) or `()` (exit code 0) instead
   of `i32`, whose high bits POSIX systems silently drop. A C `int main`
