@@ -6,6 +6,9 @@
     { "include": "#line_comments" },
     { "include": "#strings" },
     { "include": "#function_definitions" },
+    { "include": "#struct_name" },
+    { "include": "#keywords_declaration" },
+    { "include": "#self" },
     { "include": "#keywords_control" },
     { "include": "#keywords_logical" },
     { "include": "#keywords_cast" },
@@ -40,6 +43,24 @@
       "captures": {
         "1": { "name": "keyword.other.fn.xenon" },
         "2": { "name": "entity.name.function.xenon" }
+      }
+    },
+
+    "keywords_declaration": {
+      "name": "keyword.other.declaration.xenon",
+      "match": "\\b(struct|impl)\\b"
+    },
+
+    "self": {
+      "name": "variable.language.self.xenon",
+      "match": "\\bself\\b"
+    },
+
+    "struct_name": {
+      "match": "\\b(struct|impl)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
+      "captures": {
+        "1": { "name": "keyword.other.declaration.xenon" },
+        "2": { "name": "entity.name.type.struct.xenon" }
       }
     },
 
