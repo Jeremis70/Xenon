@@ -1,11 +1,27 @@
 use num_bigint::BigInt;
-use xenonc::frontend::ast::{BinOp, Binding, ExprKind, IncDecOp, Stmt, StmtKind, Type};
+use xenonc::frontend::ast::{
+    BinOp, Binding, ExprKind, Function, IncDecOp, Stmt, StmtKind, TypeExpr, TypeExprKind,
+};
 use xenonc::frontend::lexer::lex;
 use xenonc::frontend::parser::Parser;
 use xenonc::frontend::tokens::Span;
+use xenonc::types::Type;
 
 fn bi(n: i64) -> BigInt {
     BigInt::from(n)
+}
+
+/// The syntax of the built-in scalar type `ty`.
+fn prim(ty: Type) -> TypeExpr {
+    TypeExpr {
+        kind: TypeExprKind::Primitive(ty),
+        span: Span::ZERO,
+    }
+}
+
+/// The types after `->`, in order.
+fn result_types(function: &Function) -> Vec<TypeExpr> {
+    function.returns.iter().map(|r| r.ty.clone()).collect()
 }
 
 // Variable declarations
@@ -274,7 +290,7 @@ fn parse_program_parses_minimal_function() {
         function.returns,
         vec![Binding {
             name: None,
-            ty: Type::UInt(32),
+            ty: prim(Type::UInt(32)),
             default: None,
             span: Span::ZERO,
         }]
@@ -301,13 +317,13 @@ fn parse_function_with_parameters() {
         vec![
             Binding {
                 name: Some("x".to_string()),
-                ty: Type::UInt(32),
+                ty: prim(Type::UInt(32)),
                 default: None,
                 span: Span::ZERO
             },
             Binding {
                 name: Some("y".to_string()),
-                ty: Type::UInt(64),
+                ty: prim(Type::UInt(64)),
                 default: None,
                 span: Span::ZERO
             },
@@ -707,7 +723,7 @@ fn parse_pointer_return_type() {
     let program = parser.parse_program().expect("parsing should succeed");
 
     let f = &program.functions[0];
-    assert_eq!(f.return_ty(), Type::Pointer(Box::new(Type::Int(32))));
+    assert_eq!(result_types(f), [Type::Pointer(Box::new(Type::Int(32)))]);
 }
 
 // ── Pointer / Reference expressions ───────────────────────────────────────────
@@ -978,7 +994,7 @@ fn parse_nested_trailing_conditions_in_linear_time() {
 
 // Tuples, patterns, and multiple results
 
-fn parse_function(src: &str) -> xenonc::frontend::ast::Function {
+fn parse_function(src: &str) -> Function {
     let tokens = lex(src).expect("lexing should succeed");
     let mut program = Parser::new(&tokens)
         .parse_program()
@@ -1116,24 +1132,21 @@ fn parse_return_lists() {
     let named = parse_function("fn f() -> i32 q, i32 r { return; }");
     assert_eq!(named.returns.len(), 2);
     assert!(named.has_named_results());
-    assert_eq!(
-        named.return_ty(),
-        Type::Tuple(vec![Type::Int(32), Type::Int(32)])
-    );
+    assert_eq!(result_types(&named), [Type::Int(32), Type::Int(32)]);
 
     let unnamed = parse_function("fn f() -> i32, bool { return 1, true; }");
     assert!(!unnamed.has_named_results());
-    assert_eq!(
-        unnamed.return_ty(),
-        Type::Tuple(vec![Type::Int(32), Type::Bool])
-    );
+    assert_eq!(result_types(&unnamed), [Type::Int(32), Type::Bool]);
 
     let single = parse_function("fn f() -> i32 r { return; }");
-    assert_eq!(single.return_ty(), Type::Int(32));
+    assert_eq!(result_types(&single), [Type::Int(32)]);
 
-    // No `->` and `-> ()` are the same signature.
-    assert_eq!(parse_function("fn f() {}").return_ty(), Type::unit());
-    assert_eq!(parse_function("fn f() -> () {}").return_ty(), Type::unit());
+    // No `->` means no results; `-> ()` spells the same signature out.
+    assert!(parse_function("fn f() {}").returns.is_empty());
+    assert_eq!(
+        result_types(&parse_function("fn f() -> () {}")),
+        [Type::unit()]
+    );
 
     let (message, _) = parse_error("fn f() -> i32 q, bool { return; }");
     assert_eq!(message, "name every result or none of them");
@@ -1249,4 +1262,13 @@ fn parse_rejects_invalid_tuple_indices() {
             "{src}"
         );
     }
+}
+
+#[test]
+fn type_expressions_carry_spans() {
+    let src = "fn f(*i32 p) {}";
+    let f = parse_function(src);
+    let ty = &f.params[0].ty;
+    assert_eq!(*ty, Type::Pointer(Box::new(Type::Int(32))));
+    assert_eq!(&src[ty.span.start..ty.span.end], "*i32");
 }

@@ -1,6 +1,7 @@
 use num_bigint::BigInt;
-use xenonc::frontend::ast::{BinOp, Expr, ExprKind, StmtKind, Type, UnaryOp};
+use xenonc::frontend::ast::{BinOp, Expr, ExprKind, StmtKind, TypeExpr, TypeExprKind, UnaryOp};
 use xenonc::frontend::tokens::Span;
+use xenonc::types::Type;
 
 fn ternary(then_branch: Expr, condition: Expr, else_branch: Expr) -> Expr {
     Expr {
@@ -556,7 +557,10 @@ fn cast(operand: Expr, ty: Type) -> Expr {
     Expr {
         kind: ExprKind::Cast {
             operand: Box::new(operand),
-            ty,
+            ty: TypeExpr {
+                kind: TypeExprKind::Primitive(ty),
+                span: Span::ZERO,
+            },
         },
         span: Span::ZERO,
     }

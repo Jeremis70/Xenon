@@ -66,8 +66,9 @@ use scope::Scopes;
 pub fn check_program(program: &ast::Program, target: &TargetSpec) -> SemanticResult<ThirProgram> {
     let globals = GlobalCtxt::collect(program, target)?;
     let mut functions = IndexVec::with_capacity(program.functions.len());
-    for function in &program.functions {
-        functions.push(FnCtxt::new(&globals, function).check_function(function)?);
+    for (index, function) in program.functions.iter().enumerate() {
+        let def_id = DefId::new(index);
+        functions.push(FnCtxt::new(&globals, def_id).check_function(function)?);
     }
     Ok(ThirProgram {
         functions,
@@ -82,6 +83,10 @@ const ENTRY_ATTRIBUTE: &str = "entry";
 #[derive(Debug)]
 struct Signature {
     params: Vec<Type>,
+    /// The types after `->`, in order.
+    results: Vec<Type>,
+    /// `()` without results, the type of a single result, or the tuple of
+    /// several results' types.
     return_ty: Type,
 }
 
@@ -104,13 +109,18 @@ impl<'a> GlobalCtxt<'a> {
         let mut by_name = HashMap::with_capacity(program.functions.len());
         let mut entry: Option<DefId> = None;
         for function in &program.functions {
+            let resolve_all = |bindings: &[ast::Binding]| -> SemanticResult<Vec<Type>> {
+                bindings.iter().map(|b| resolve(&b.ty)).collect()
+            };
+            let results = resolve_all(&function.returns)?;
             let def_id = signatures.push(Signature {
-                params: function
-                    .params
-                    .iter()
-                    .map(|param| param.ty.clone())
-                    .collect(),
-                return_ty: function.return_ty(),
+                params: resolve_all(&function.params)?,
+                return_ty: match results.as_slice() {
+                    [] => Type::unit(),
+                    [single] => single.clone(),
+                    results => Type::Tuple(results.to_vec()),
+                },
+                results,
             });
             match by_name.entry(function.name.as_str()) {
                 Entry::Vacant(entry) => {
@@ -150,6 +160,28 @@ impl<'a> GlobalCtxt<'a> {
             entry,
         })
     }
+
+    /// Resolves a type written in the source to the type it names.
+    fn resolve(&self, ty: &ast::TypeExpr) -> SemanticResult<Type> {
+        resolve(ty)
+    }
+}
+
+/// Resolves `ty` knowing only the built-in types.
+fn resolve(ty: &ast::TypeExpr) -> SemanticResult<Type> {
+    use ast::TypeExprKind as Kind;
+    Ok(match &ty.kind {
+        Kind::Primitive(ty) => ty.clone(),
+        Kind::Pointer(inner) => Type::Pointer(Box::new(resolve(inner)?)),
+        Kind::Reference(inner) => Type::Reference(Box::new(resolve(inner)?)),
+        Kind::Tuple(elems) => Type::Tuple(elems.iter().map(resolve).collect::<Result<_, _>>()?),
+        Kind::Named(name) => {
+            return Err(SemanticError::UnknownType {
+                name: name.clone(),
+                span: ty.span,
+            });
+        }
+    })
 }
 
 /// What a context knows about the type of an expression it checks.
@@ -201,6 +233,8 @@ struct LoopFrame {
 #[derive(Debug)]
 struct FnCtxt<'g, 'a> {
     globals: &'g GlobalCtxt<'a>,
+    /// The function being checked.
+    def_id: DefId,
     return_ty: Type,
     /// The bindings of the named results, in order.
     named_returns: Vec<BindingId>,
@@ -210,10 +244,11 @@ struct FnCtxt<'g, 'a> {
 }
 
 impl<'g, 'a> FnCtxt<'g, 'a> {
-    fn new(globals: &'g GlobalCtxt<'a>, function: &ast::Function) -> Self {
+    fn new(globals: &'g GlobalCtxt<'a>, def_id: DefId) -> Self {
         Self {
             globals,
-            return_ty: function.return_ty(),
+            def_id,
+            return_ty: globals.signatures[def_id].return_ty.clone(),
             named_returns: Vec::new(),
             bindings: IndexVec::new(),
             scopes: Scopes::default(),
@@ -227,21 +262,25 @@ impl<'g, 'a> FnCtxt<'g, 'a> {
 
     fn check_function(mut self, function: &ast::Function) -> SemanticResult<thir::Function> {
         self.scopes.push();
+        let globals = self.globals;
+        let signature = &globals.signatures[self.def_id];
         let params = function
             .params
             .iter()
-            .map(|param| self.declare(param, BindingKind::Param))
+            .zip(&signature.params)
+            .map(|(param, ty)| self.declare(param, ty.clone(), BindingKind::Param))
             .collect();
-        for result in function.returns.iter().filter(|r| r.name.is_some()) {
+        let results = function.returns.iter().zip(&signature.results);
+        for (result, ty) in results.filter(|(r, _)| r.name.is_some()) {
             // A reference can only be bound at its declaration, and a named
             // result has none: it could never refer to anything.
-            if matches!(result.ty, Type::Reference(_)) {
+            if matches!(ty, Type::Reference(_)) {
                 return Err(SemanticError::ReferenceNamedReturn {
-                    ty: result.ty.clone(),
+                    ty: ty.clone(),
                     span: result.span,
                 });
             }
-            let id = self.declare(result, BindingKind::NamedReturn);
+            let id = self.declare(result, ty.clone(), BindingKind::NamedReturn);
             self.named_returns.push(id);
         }
         let body = self.check_block(&function.body, function.span)?;
@@ -258,11 +297,12 @@ impl<'g, 'a> FnCtxt<'g, 'a> {
         })
     }
 
-    /// Creates a binding for `binding` and brings it into scope.
-    fn declare(&mut self, binding: &ast::Binding, kind: BindingKind) -> BindingId {
+    /// Creates a binding for `binding`, whose resolved type is `ty`, and
+    /// brings it into scope.
+    fn declare(&mut self, binding: &ast::Binding, ty: Type, kind: BindingKind) -> BindingId {
         let id = self.bindings.push(thir::Binding {
             name: binding.name.clone(),
-            ty: binding.ty.clone(),
+            ty,
             kind,
             span: binding.span,
         });

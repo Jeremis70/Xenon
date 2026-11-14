@@ -41,13 +41,14 @@ impl FnCtxt<'_, '_> {
         let span = stmt.span;
         let kind = match &stmt.kind {
             AstStmt::VarDecl(binding) => {
+                let ty = self.globals.resolve(&binding.ty)?;
                 let init = match &binding.default {
-                    Some(init) => Some(self.check_initializer(binding, init)?),
+                    Some(init) => Some(self.check_initializer(binding, &ty, init)?),
                     None => None,
                 };
                 // Declared only after the initializer, which therefore
                 // still sees any shadowed binding of the same name.
-                let binding = self.declare(binding, BindingKind::Local);
+                let binding = self.declare(binding, ty, BindingKind::Local);
                 StmtKind::Let { binding, init }
             }
             AstStmt::Destructure { pattern, init } => {
@@ -125,10 +126,11 @@ impl FnCtxt<'_, '_> {
         Ok(())
     }
 
-    /// Checks the initializer of a variable declaration.
+    /// Checks the initializer of a variable declared with type `ty`.
     pub(super) fn check_initializer(
         &mut self,
         binding: &ast::Binding,
+        ty: &Type,
         init: &ast::Expr,
     ) -> SemanticResult<Expr> {
         let is_literal = match &init.kind {
@@ -139,7 +141,7 @@ impl FnCtxt<'_, '_> {
             } => matches!(operand.kind, Ast::Int(_)),
             _ => false,
         };
-        let init = self.check_expr_has_type(init, &binding.ty);
+        let init = self.check_expr_has_type(init, ty);
         // A literal initializer that does not fit names the variable.
         if let (true, Err(SemanticError::LiteralOutOfRange { value, ty, .. })) = (is_literal, &init)
         {
