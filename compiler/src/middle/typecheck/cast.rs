@@ -20,9 +20,10 @@ impl FnCtxt<'_, '_> {
     pub(super) fn check_cast(
         &mut self,
         operand: &ast::Expr,
-        ty: &Type,
+        ty: &ast::TypeExpr,
         span: Span,
     ) -> SemanticResult<Expr> {
+        let ty = &self.globals.resolve(ty)?;
         let hint = literal_class(operand)
             .filter(|class| class.accepts(ty))
             .map(|_| ty);

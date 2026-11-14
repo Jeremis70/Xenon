@@ -27,8 +27,9 @@ use super::{Expectation, FnCtxt};
 
 /// The destination of one value of a destructuring `let`.
 enum Pending<'p> {
-    /// A user variable, declared once every value has been evaluated.
-    User(&'p ast::Binding),
+    /// A user variable and its type, declared once every value has been
+    /// evaluated.
+    User(&'p ast::Binding, Type),
     /// A temporary holding a whole tuple that is destructured further.
     Temp(BindingId),
     /// A value matched by `_`, evaluated only for its side effects.
@@ -102,8 +103,8 @@ impl FnCtxt<'_, '_> {
         // Every value has been checked, so names are only declared now.
         for (pending, init) in entries {
             let kind = match pending {
-                Pending::User(binding) => StmtKind::Let {
-                    binding: self.declare(binding, BindingKind::Local),
+                Pending::User(binding, ty) => StmtKind::Let {
+                    binding: self.declare(binding, ty, BindingKind::Local),
                     init: Some(init),
                 },
                 Pending::Temp(binding) => StmtKind::Let {
@@ -141,8 +142,9 @@ impl FnCtxt<'_, '_> {
                 Ok(())
             }
             (Pattern::Binding(binding), _) => {
-                let init = self.check_initializer(binding, init)?;
-                entries.push((Pending::User(binding), init));
+                let ty = self.globals.resolve(&binding.ty)?;
+                let init = self.check_initializer(binding, &ty, init)?;
+                entries.push((Pending::User(binding, ty), init));
                 Ok(())
             }
             (Pattern::Wildcard(_), _) => {
@@ -151,7 +153,8 @@ impl FnCtxt<'_, '_> {
                 Ok(())
             }
             (Pattern::Tuple(..), _) => {
-                let value = self.check_expr_expecting(init, &pattern_expectation(pattern))?;
+                let expectation = self.pattern_expectation(pattern)?;
+                let value = self.check_expr_expecting(init, &expectation)?;
                 // A pattern of only `_` reads no element of a variable, so
                 // read it whole, once: `let _, _ = r;` must not hide that
                 // `r` may be uninitialized, just as `let _ = r;` does not.
@@ -163,6 +166,20 @@ impl FnCtxt<'_, '_> {
         }
     }
 
+    /// What a pattern expects of its value; `_` leaves its part unknown.
+    fn pattern_expectation(&self, pattern: &Pattern) -> SemanticResult<Expectation> {
+        Ok(match pattern {
+            Pattern::Binding(binding) => Expectation::Type(self.globals.resolve(&binding.ty)?),
+            Pattern::Wildcard(_) => Expectation::Unknown,
+            Pattern::Tuple(patterns, _) => Expectation::Tuple(
+                patterns
+                    .iter()
+                    .map(|pattern| self.pattern_expectation(pattern))
+                    .collect::<Result<_, _>>()?,
+            ),
+        })
+    }
+
     /// Matches `pattern` against the checked value `value`.
     fn destructure_value<'p>(
         &mut self,
@@ -172,8 +189,9 @@ impl FnCtxt<'_, '_> {
     ) -> SemanticResult<()> {
         match pattern {
             Pattern::Binding(binding) => {
-                require_type(&binding.ty, &value.ty, value.span)?;
-                entries.push((Pending::User(binding), value));
+                let ty = self.globals.resolve(&binding.ty)?;
+                require_type(&ty, &value.ty, value.span)?;
+                entries.push((Pending::User(binding, ty), value));
             }
             // Only reached for elements of a stored tuple, whose reads have
             // no side effects.
@@ -476,17 +494,6 @@ fn static_path(place: &Expr) -> Option<(BindingId, Vec<u32>)> {
             Some((binding, path))
         }
         _ => None,
-    }
-}
-
-/// What a pattern expects of its value; `_` leaves its part unknown.
-fn pattern_expectation(pattern: &Pattern) -> Expectation {
-    match pattern {
-        Pattern::Binding(binding) => Expectation::Type(binding.ty.clone()),
-        Pattern::Wildcard(_) => Expectation::Unknown,
-        Pattern::Tuple(patterns, _) => {
-            Expectation::Tuple(patterns.iter().map(pattern_expectation).collect())
-        }
     }
 }
 

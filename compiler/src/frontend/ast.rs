@@ -3,12 +3,83 @@ use crate::frontend::tokens::TokenKind;
 use crate::source::Span;
 use num_bigint::BigInt;
 
-pub use crate::types::Type;
+use crate::types::Type;
+
+/// A type as written in the source, before names are resolved.
+///
+/// The parser cannot know which names are user-defined types, so the AST
+/// keeps the syntax and the type checker resolves it to a [`Type`].
+#[derive(Debug, Clone)]
+pub struct TypeExpr {
+    pub kind: TypeExprKind,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum TypeExprKind {
+    /// A built-in scalar type, such as `i32` or `bool`.
+    Primitive(Type),
+    /// `*T`
+    Pointer(Box<TypeExpr>),
+    /// `&T`
+    Reference(Box<TypeExpr>),
+    /// `(T, U, ..)`; empty for the unit type `()`.
+    Tuple(Vec<TypeExpr>),
+    /// A user-defined type, by name.
+    Named(String),
+}
+
+impl PartialEq for TypeExpr {
+    fn eq(&self, other: &Self) -> bool {
+        self.kind == other.kind
+    }
+}
+
+/// Structural comparison with a resolved type. A [`TypeExprKind::Named`]
+/// type is unresolved and equals no [`Type`].
+impl PartialEq<Type> for TypeExpr {
+    fn eq(&self, other: &Type) -> bool {
+        match (&self.kind, other) {
+            (TypeExprKind::Primitive(ty), other) => ty == other,
+            (TypeExprKind::Pointer(inner), Type::Pointer(other))
+            | (TypeExprKind::Reference(inner), Type::Reference(other)) => **inner == **other,
+            (TypeExprKind::Tuple(elems), Type::Tuple(others)) => {
+                elems.len() == others.len() && elems.iter().zip(others).all(|(a, b)| a == b)
+            }
+            _ => false,
+        }
+    }
+}
+
+impl std::fmt::Display for TypeExpr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.kind {
+            TypeExprKind::Primitive(ty) => write!(f, "{ty}"),
+            TypeExprKind::Pointer(inner) => write!(f, "*{inner}"),
+            TypeExprKind::Reference(inner) => write!(f, "&{inner}"),
+            TypeExprKind::Tuple(elems) => {
+                f.write_str("(")?;
+                for (index, elem) in elems.iter().enumerate() {
+                    if index > 0 {
+                        f.write_str(", ")?;
+                    }
+                    write!(f, "{elem}")?;
+                }
+                // A one-tuple keeps its comma: `(i32,)` is not `(i32)`.
+                if elems.len() == 1 {
+                    f.write_str(",")?;
+                }
+                f.write_str(")")
+            }
+            TypeExprKind::Named(name) => f.write_str(name),
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct Binding {
     pub name: Option<String>,
-    pub ty: Type,
+    pub ty: TypeExpr,
     pub default: Option<Box<Expr>>,
     pub span: Span,
 }
@@ -166,7 +237,7 @@ pub enum ExprKind {
     /// conversion exactly: a cast that would change it panics at runtime.
     Cast {
         operand: Box<Expr>,
-        ty: Type,
+        ty: TypeExpr,
     },
 
     // Control flow
@@ -343,16 +414,6 @@ impl PartialEq for Function {
 }
 
 impl Function {
-    /// The return type: `()` without results, the type of a single result,
-    /// or the tuple of several results' types.
-    pub fn return_ty(&self) -> Type {
-        match self.returns.as_slice() {
-            [] => Type::unit(),
-            [single] => single.ty.clone(),
-            results => Type::Tuple(results.iter().map(|r| r.ty.clone()).collect()),
-        }
-    }
-
     /// Whether the results are named (`-> i32 q, i32 r`).
     pub fn has_named_results(&self) -> bool {
         self.returns.iter().any(|result| result.name.is_some())

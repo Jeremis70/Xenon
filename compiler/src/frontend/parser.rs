@@ -1,10 +1,11 @@
 use crate::error::{ParseError, ParseResult, TypeError};
 use crate::frontend::ast::{
     Attribute, BinOp, Binding, Expr, ExprKind, Function, IncDecOp, Pattern, Program, Stmt,
-    StmtKind, Type, UnaryOp,
+    StmtKind, TypeExpr, TypeExprKind, UnaryOp,
 };
 use crate::frontend::precedence::{AS_BP, OpInfo, UNARY_BP, infix_info};
 use crate::frontend::tokens::{Span, Token, TokenKind};
+use crate::types::Type;
 
 /// A simple statement's trailing `if c` or `unless c`.
 struct TrailingCondition {
@@ -189,52 +190,59 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_type(&mut self) -> ParseResult<Type> {
+    fn parse_type(&mut self) -> ParseResult<TypeExpr> {
         let token = self.peek().ok_or_else(|| self.error("expected type"))?;
-        match token.kind {
+        let start = token.span.start;
+        let kind = match token.kind {
             TokenKind::Star => {
                 self.advance();
-                let inner = self.parse_type()?;
-                Ok(Type::Pointer(Box::new(inner)))
+                TypeExprKind::Pointer(Box::new(self.parse_type()?))
             }
             TokenKind::Ampersand => {
                 self.advance();
-                let inner = self.parse_type()?;
-                Ok(Type::Reference(Box::new(inner)))
+                TypeExprKind::Reference(Box::new(self.parse_type()?))
             }
             TokenKind::LParen => {
                 // `()` is unit, `(T)` is `T`, `(T,)` and `(T, U, ..)` are tuples.
                 self.advance();
                 if self.eat(TokenKind::RParen) {
-                    return Ok(Type::unit());
-                }
-                let first = self.parse_type()?;
-                if self.eat(TokenKind::RParen) {
-                    return Ok(first);
-                }
-                self.expect([TokenKind::Comma, TokenKind::RParen])?;
-                let mut elems = vec![first];
-                while !self.at(TokenKind::RParen) {
-                    elems.push(self.parse_type()?);
-                    if !self.eat(TokenKind::Comma) {
-                        break;
+                    TypeExprKind::Tuple(Vec::new())
+                } else {
+                    let first = self.parse_type()?;
+                    if self.eat(TokenKind::RParen) {
+                        return Ok(first);
                     }
+                    self.expect([TokenKind::Comma, TokenKind::RParen])?;
+                    let mut elems = vec![first];
+                    while !self.at(TokenKind::RParen) {
+                        elems.push(self.parse_type()?);
+                        if !self.eat(TokenKind::Comma) {
+                            break;
+                        }
+                    }
+                    self.expect(TokenKind::RParen)?;
+                    TypeExprKind::Tuple(elems)
                 }
-                self.expect(TokenKind::RParen)?;
-                Ok(Type::Tuple(elems))
             }
             TokenKind::Ident => {
                 let token = self.expect(TokenKind::Ident)?;
-                token
+                let ty = token
                     .ident_value()?
                     .parse::<Type>()
-                    .map_err(|e: TypeError| ParseError::new(e.to_string(), token.span))
+                    .map_err(|e: TypeError| ParseError::new(e.to_string(), token.span))?;
+                TypeExprKind::Primitive(ty)
             }
-            _ => Err(ParseError::new(
-                format!("expected type, found {:?}", token.kind),
-                token.span,
-            )),
-        }
+            _ => {
+                return Err(ParseError::new(
+                    format!("expected type, found {:?}", token.kind),
+                    token.span,
+                ));
+            }
+        };
+        Ok(TypeExpr {
+            kind,
+            span: self.span_since(start),
+        })
     }
 
     fn parse_expression(&mut self) -> ParseResult<Expr> {
