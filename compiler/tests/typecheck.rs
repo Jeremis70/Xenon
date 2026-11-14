@@ -1376,7 +1376,7 @@ fn method_call_errors() {
     }
     assert_eq!(
         method_error("fn f() { Rect.scale(2.0); }").to_string(),
-        "`scale` is a method: call it on a value of type `Rect`"
+        "`scale` is used on a value of type `Rect`, not on `Rect` itself"
     );
     check(&format!("{RECT_IMPL}fn f(*Rect p) {{ (*p).scale(2.0); }}")).expect("should check");
 }
@@ -1414,4 +1414,123 @@ fn reserved_struct_name() {
         matches!(error, SemanticError::ReservedName { .. }),
         "{error}"
     );
+}
+
+// ── Properties ────────────────────────────────────────────────────────────────
+
+const SHAPE: &str = "struct Size { f64 w; f64 h; }\n\
+    struct Shape { Size size; }\n\
+    impl Shape {\n\
+        f64 area { return self.size.w * self.size.h; }\n\
+        Size doubled { return Size(w = self.size.w * 2.0, h = self.size.h * 2.0); }\n\
+        f64 twice { return self.area * 2.0; }\n\
+        fn unit() -> Shape { return Shape(size = Size(w = 1.0, h = 1.0)); }\n\
+    }\n";
+
+fn shape_error(src: &str) -> SemanticError {
+    error(&format!("{SHAPE}{src}"))
+}
+
+#[test]
+fn property_read_desugars_to_getter_call() {
+    let dump = thir(&format!(
+        "{SHAPE}fn f(Shape s, &Shape r) -> f64 {{ return s.area + r.area + Shape.unit().area; }}"
+    ));
+    // A getter is a function taking a reference to the value.
+    assert!(
+        dump.contains("fn Shape.area.get(self@b0: &Shape) -> f64"),
+        "{dump}"
+    );
+    assert!(dump.contains("Shape.area.get(&s@b0)"), "{dump}");
+    assert!(dump.contains("Shape.area.get(&(*r@b1))"), "{dump}");
+    assert!(dump.contains("Shape.area.get(&Shape.unit())"), "{dump}");
+    // A property reads other properties, of `self` and of its results.
+    assert!(
+        dump.contains("Mul(Shape.area.get(&(*self@b0)), 2.0_f64)"),
+        "{dump}"
+    );
+    check(&format!(
+        "{SHAPE}fn f(Shape s) -> f64 {{ return s.doubled.w + s.twice; }}"
+    ))
+    .expect("should check");
+}
+
+#[test]
+fn property_is_not_assignable() {
+    for body in [
+        "s.area = 1.0;",
+        "s.area += 1.0;",
+        "s.area++;",
+        "let *f64 p = @s.area;",
+        "s.area, s.size.w = 1.0, 2.0;",
+    ] {
+        let error = shape_error(&format!("fn f(Shape s) {{ {body} }}"));
+        assert!(
+            matches!(&error, SemanticError::PropertyNotAssignable { name, .. } if name == "area"),
+            "{body}: {error:?}"
+        );
+    }
+    // Nor is a field of the value a property computes: it names the property.
+    let error = shape_error("fn f(Shape s) { s.doubled.w = 1.0; }");
+    assert!(
+        matches!(&error, SemanticError::PropertyNotAssignable { name, .. } if name == "doubled"),
+        "{error:?}"
+    );
+    assert_eq!(
+        error.to_string(),
+        "`doubled` is a computed property of `Shape`: it cannot be assigned or have its address taken"
+    );
+    // A stored field next to it still is.
+    check(&format!("{SHAPE}fn f(Shape s) {{ s.size.w = s.area; }}")).expect("should check");
+}
+
+#[test]
+fn property_is_read_without_parentheses() {
+    let error = shape_error("fn f(Shape s) -> f64 { return s.area(); }");
+    assert!(
+        matches!(&error, SemanticError::PropertyCalled { name, .. } if name == "area"),
+        "{error:?}"
+    );
+    assert_eq!(
+        error.to_string(),
+        "`area` is a property of `Shape`: read it without parentheses, as `.area`"
+    );
+    let error = shape_error("fn f() -> f64 { return Shape.area; }");
+    assert!(
+        matches!(error, SemanticError::MethodNeedsReceiver { .. }),
+        "{error:?}"
+    );
+    let error = shape_error("fn f(*Shape p) -> f64 { return p.area; }");
+    assert!(
+        matches!(error, SemanticError::NoSuchMember { .. }),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn property_shares_the_member_namespace() {
+    let cases: [ErrorCase; 4] = [
+        (
+            "struct A { i32 x; }\nimpl A { i32 x { return 1; } }",
+            |e| matches!(e, SemanticError::DuplicateMember { name, .. } if name == "x"),
+        ),
+        (
+            "struct A {}\nimpl A { i32 x { return 1; } fn x(self) {} }",
+            |e| matches!(e, SemanticError::DuplicateMember { name, .. } if name == "x"),
+        ),
+        (
+            "struct A {}\nimpl A { Missing x { return 1; } }",
+            |e| matches!(e, SemanticError::UnknownType { name, .. } if name == "Missing"),
+        ),
+        ("struct A {}\nimpl A { i32 x { return true; } }", |e| {
+            matches!(
+                e,
+                SemanticError::TypeMismatch { .. } | SemanticError::ReturnTypeMismatch { .. }
+            )
+        }),
+    ];
+    for (src, expected) in cases {
+        let error = error(src);
+        assert!(expected(&error), "{src}: {error:?}");
+    }
 }

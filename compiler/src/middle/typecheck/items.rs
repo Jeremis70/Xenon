@@ -26,6 +26,9 @@ pub(super) enum Member {
     Method { def: DefId, receiver: ReceiverKind },
     /// A function called on the struct itself, `Name.function(..)`.
     AssocFn(DefId),
+    /// A value computed on every read by the function `getter`, which
+    /// receives a reference to the struct.
+    Property { getter: DefId },
 }
 
 /// How a method receives the value it is called on.
@@ -38,19 +41,54 @@ pub(super) enum ReceiverKind {
 }
 
 /// The members of one struct by name, each with where it is declared.
-/// Fields, methods, and associated functions share this one namespace.
+/// Fields, methods, associated functions, and properties share this one
+/// namespace.
 pub(super) type Members<'a> = HashMap<&'a str, (Member, Span)>;
 
-/// A function of the program: a free function, or a member of an `impl`.
+/// A function of the program: a free function, a member function of an
+/// `impl`, or the getter of a property.
 #[derive(Debug)]
 pub(super) struct FnItem<'a> {
-    pub(super) function: &'a ast::Function,
+    /// The name as written: of the function, or of the property.
+    pub(super) name: &'a str,
+    /// How a member takes the value it is used on; a getter takes it by
+    /// reference.
+    pub(super) receiver: Option<ast::Receiver>,
+    /// The parameters after the receiver.
+    pub(super) params: &'a [ast::Binding],
+    /// The results written after `->`. Empty for a getter, whose single
+    /// result is `property_ty`.
+    pub(super) returns: &'a [ast::Binding],
+    /// The type of the property this is the getter of.
+    pub(super) property_ty: Option<&'a ast::TypeExpr>,
+    pub(super) body: &'a [ast::Stmt],
+    pub(super) attributes: &'a [ast::Attribute],
+    pub(super) span: Span,
     /// The struct whose `impl` declares the function, if any.
     pub(super) owner: Option<StructId>,
     /// The name of the function in the compiled program. A member is
     /// `Struct.name`, which no free function can be called: a name has no
     /// `.`.
     pub(super) symbol: String,
+}
+
+impl<'a> FnItem<'a> {
+    /// The item of the function `function`, declared in the `impl` of
+    /// `owner` if it has one.
+    fn function(function: &'a ast::Function, owner: Option<StructId>, symbol: String) -> Self {
+        Self {
+            name: &function.name,
+            receiver: function.receiver,
+            params: &function.params,
+            returns: &function.returns,
+            property_ty: None,
+            body: &function.body,
+            attributes: &function.attributes,
+            span: function.span,
+            owner,
+            symbol,
+        }
+    }
 }
 
 /// The struct name the backend needs for itself: it renames a function
@@ -183,11 +221,7 @@ impl<'a> StructItems<'a> {
         let mut items: IndexVec<DefId, FnItem<'a>> = program
             .functions
             .iter()
-            .map(|function| FnItem {
-                function,
-                owner: None,
-                symbol: function.name.clone(),
-            })
+            .map(|function| FnItem::function(function, None, function.name.clone()))
             .collect();
         for block in &program.impls {
             let Some(&owner) = self.ids.get(block.target.as_str()) else {
@@ -197,12 +231,30 @@ impl<'a> StructItems<'a> {
                 });
             };
             for member in &block.members {
-                let ast::ImplMember::Function(function) = member;
-                let def = items.push(FnItem {
-                    function,
-                    owner: Some(owner),
-                    symbol: format!("{}.{}", block.target, function.name),
-                });
+                let function = match member {
+                    ast::ImplMember::Function(function) => function,
+                    ast::ImplMember::Property(property) => {
+                        let getter = items.push(FnItem {
+                            name: &property.name,
+                            receiver: Some(ast::Receiver::Reference(property.name_span)),
+                            params: &[],
+                            returns: &[],
+                            property_ty: Some(&property.ty),
+                            body: &property.body,
+                            attributes: &[],
+                            span: property.span,
+                            owner: Some(owner),
+                            // `.set` is left for the day properties can be
+                            // assigned.
+                            symbol: format!("{}.{}.get", block.target, property.name),
+                        });
+                        let member = Member::Property { getter };
+                        self.add_member(owner, &property.name, property.span, member)?;
+                        continue;
+                    }
+                };
+                let symbol = format!("{}.{}", block.target, function.name);
+                let def = items.push(FnItem::function(function, Some(owner), symbol));
                 let member = match function.receiver {
                     Some(ast::Receiver::Value(_)) => Member::Method {
                         def,

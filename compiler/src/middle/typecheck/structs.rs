@@ -12,6 +12,7 @@ use crate::middle::thir::{Expr, ExprKind};
 use crate::source::Span;
 use crate::types::{StructId, StructTy, Type};
 
+use super::expr::Access;
 use super::items::{Member, ReceiverKind};
 use super::{FnCtxt, GlobalCtxt};
 
@@ -84,7 +85,8 @@ impl FnCtxt<'_, '_> {
         })
     }
 
-    /// Checks `base.name`, a place if `base` is one.
+    /// Checks `base.name`: a stored field, a place if `base` is one, or a
+    /// computed property, a value.
     ///
     /// Like tuple elements, members are not reached through a pointer:
     /// `p.width` on a `*Rect` is an error; write `(*p).width`.
@@ -92,6 +94,7 @@ impl FnCtxt<'_, '_> {
         &mut self,
         base: &ast::Expr,
         name: &str,
+        access: Access,
         span: Span,
     ) -> SemanticResult<Expr> {
         let globals = self.globals;
@@ -102,10 +105,11 @@ impl FnCtxt<'_, '_> {
                 Some(Member::AssocFn(_) | Member::Method { .. }) => {
                     not_called(name, &struct_ty, span)
                 }
+                Some(Member::Property { .. }) => needs_receiver(name, &struct_ty, span),
                 _ => no_such_member(name, &struct_ty.name, span),
             });
         }
-        let base = self.check_receiver(base)?;
+        let base = self.check_base(base, access)?;
         let Type::Struct(struct_ty) = &base.ty else {
             return Err(no_such_member(name, &base.ty.to_string(), span));
         };
@@ -126,6 +130,15 @@ impl FnCtxt<'_, '_> {
                     span,
                 })
             }
+            // A read runs the getter on a reference to the value.
+            Some(Member::Property { getter }) => match access {
+                Access::Value => self.call(*getter, name, Some(reference_to(base)), &[], span),
+                Access::Place => Err(SemanticError::PropertyNotAssignable {
+                    name: name.to_owned(),
+                    ty: struct_ty.name.to_string(),
+                    span,
+                }),
+            },
             Some(Member::Method { .. } | Member::AssocFn(_)) => {
                 Err(not_called(name, struct_ty, span))
             }
@@ -149,15 +162,13 @@ impl FnCtxt<'_, '_> {
         if let Some(struct_ty) = self.named_struct(receiver) {
             return match globals.lookup_member(struct_ty.id, name) {
                 Some(Member::AssocFn(def)) => self.call(*def, name, None, args, span),
-                Some(Member::Method { .. }) => Err(SemanticError::MethodNeedsReceiver {
-                    name: name.to_owned(),
-                    ty: struct_ty.name.to_string(),
-                    span,
-                }),
+                Some(Member::Method { .. } | Member::Property { .. }) => {
+                    Err(needs_receiver(name, &struct_ty, span))
+                }
                 _ => Err(no_such_member(name, &struct_ty.name, span)),
             };
         }
-        let receiver = self.check_receiver(receiver)?;
+        let receiver = self.check_base(receiver, Access::Value)?;
         let Type::Struct(struct_ty) = &receiver.ty else {
             return Err(no_such_member(name, &receiver.ty.to_string(), span));
         };
@@ -168,19 +179,15 @@ impl FnCtxt<'_, '_> {
             }) => {
                 let receiver = match kind {
                     ReceiverKind::Value => receiver,
-                    // The receiver need not be a place: MIR construction
-                    // gives a value a temporary to refer to.
-                    ReceiverKind::Reference => Expr {
-                        ty: IndirectionKind::Reference.pointer_to(receiver.ty.clone()),
-                        span: receiver.span,
-                        kind: ExprKind::AddressOf {
-                            kind: IndirectionKind::Reference,
-                            place: Box::new(receiver),
-                        },
-                    },
+                    ReceiverKind::Reference => reference_to(receiver),
                 };
                 self.call(*def, name, Some(receiver), args, span)
             }
+            Some(Member::Property { .. }) => Err(SemanticError::PropertyCalled {
+                name: name.to_owned(),
+                ty: struct_ty.name.to_string(),
+                span,
+            }),
             Some(Member::Field(_) | Member::AssocFn(_)) => Err(SemanticError::NotAMethod {
                 name: name.to_owned(),
                 ty: struct_ty.name.to_string(),
@@ -200,14 +207,29 @@ impl FnCtxt<'_, '_> {
             _ => None,
         }
     }
+}
 
-    /// Checks the expression before a `.name`, as a place if it is one.
-    fn check_receiver(&mut self, base: &ast::Expr) -> SemanticResult<Expr> {
-        if base.is_place() {
-            self.check_place(base)
-        } else {
-            self.check_expr(base, None)
-        }
+/// A `&T` to `value`, for a `&self` method or a getter.
+///
+/// `value` need not be a place: MIR construction gives a value a temporary
+/// to refer to.
+fn reference_to(value: Expr) -> Expr {
+    Expr {
+        ty: IndirectionKind::Reference.pointer_to(value.ty.clone()),
+        span: value.span,
+        kind: ExprKind::AddressOf {
+            kind: IndirectionKind::Reference,
+            place: Box::new(value),
+        },
+    }
+}
+
+/// The error for a method or property used on the name of its struct.
+fn needs_receiver(name: &str, ty: &StructTy, span: Span) -> SemanticError {
+    SemanticError::MethodNeedsReceiver {
+        name: name.to_owned(),
+        ty: ty.name.to_string(),
+        span,
     }
 }
 
