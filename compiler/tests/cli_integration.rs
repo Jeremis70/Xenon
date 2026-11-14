@@ -315,6 +315,13 @@ fn compile_and_run(src: &str) -> i32 {
 /// Compiles `src` and runs the resulting binary, returning how it ended.
 #[cfg(feature = "llvm-backend")]
 fn run_status(src: &str) -> std::process::ExitStatus {
+    run_status_with(src, &[])
+}
+
+/// Compiles `src` with the extra `compile` arguments `args` and runs the
+/// resulting binary, returning how it ended.
+#[cfg(feature = "llvm-backend")]
+fn run_status_with(src: &str, args: &[&str]) -> std::process::ExitStatus {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("prog.xe");
     let out_dir = dir.path().join("build");
@@ -329,6 +336,7 @@ fn run_status(src: &str) -> std::process::ExitStatus {
             "--out-dir",
             out_dir.to_str().expect("utf8 path"),
         ])
+        .args(args)
         .assert()
         .success();
 
@@ -673,4 +681,24 @@ fn lossy_casts_trap_at_runtime() {
         ));
         assert_eq!(status.code(), Some(0), "`{call}` should not trap");
     }
+}
+
+/// Every relocation model links and runs, including code LLVM lowers to
+/// absolute addressing in non-PIC mode (the wide `fptosi` of `f32 as i256`
+/// reads a constant-pool table), which cannot go into a PIE.
+#[cfg(all(feature = "llvm-backend", target_os = "linux"))]
+#[test]
+fn every_relocation_model_links_and_runs() {
+    let src = concat!(
+        "#[entry] fn main() -> u8 { return (to_i256(three()) as u8) + 4; }\n",
+        "fn to_i256(f32 x) -> i256 { return x as i256; }\n",
+        "fn three() -> f32 { let f32 t = 3.0; return t; }\n",
+    );
+    for model in ["static", "pic", "pie", "dynamic-no-pic"] {
+        for opt in ["0", "3"] {
+            let status = run_status_with(src, &["--relocation-model", model, "-O", opt]);
+            assert_eq!(status.code(), Some(7), "{model} at -O{opt}");
+        }
+    }
+    assert_eq!(run_status(src).code(), Some(7), "default relocation model");
 }

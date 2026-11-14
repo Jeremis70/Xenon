@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
-use crate::backend::contract::{ArtifactKind, OutputRequest};
+use crate::backend::contract::{self, ArtifactKind, OutputRequest};
 use crate::backend::link::link_executable;
-use crate::driver::config::{CheckEmitKind, CompileEmitKind, OptLevel, StopAfter};
+use crate::driver::config::{CheckEmitKind, CompileEmitKind, OptLevel, RelocationModel, StopAfter};
 use crate::driver::diagnostics::Emitter;
 use crate::driver::session::Session;
 use crate::frontend::ast::Program;
@@ -147,7 +147,7 @@ fn run_compile(session: &Session) -> Result<(), Failure> {
         emit_native(session, &mir, &target, &outputs)?;
     }
     if wants_link {
-        link_executable(&obj_path, &exe_path)
+        link_executable(&obj_path, &exe_path, relocation_model(session))
             .map_err(|error| internal("link", format!("link error: {error}")))?;
     }
 
@@ -289,6 +289,16 @@ fn lower_to_runtime_mir(session: &Session, target: &TargetSpec) -> Result<MirPro
     Ok(mir)
 }
 
+/// The relocation model `--relocation-model` selects, `pic` by default.
+fn relocation_model(session: &Session) -> contract::RelocationModel {
+    match session.relocation_model {
+        None | Some(RelocationModel::Pic) => contract::RelocationModel::Pic,
+        Some(RelocationModel::Static) => contract::RelocationModel::Static,
+        Some(RelocationModel::Pie) => contract::RelocationModel::Pie,
+        Some(RelocationModel::DynamicNoPic) => contract::RelocationModel::DynamicNoPic,
+    }
+}
+
 #[cfg(feature = "llvm-backend")]
 fn emit_native(
     session: &Session,
@@ -307,7 +317,15 @@ fn emit_native(
     };
     let backend = LlvmBackend;
     backend
-        .emit(mir, target, CodegenOptions { optimization }, outputs)
+        .emit(
+            mir,
+            target,
+            CodegenOptions {
+                optimization,
+                relocation_model: relocation_model(session),
+            },
+            outputs,
+        )
         .map_err(|error| {
             internal(
                 "backend",
