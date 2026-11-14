@@ -5,7 +5,9 @@ fn main() -> u8
 {
     let i32 x = 0;
     let *i32 y = @x;
-    while x < 10
+    let u8 a = 5;
+    let u10 count = 5 + a as u10;
+    while x < count
     {
         x++;
     }
@@ -26,8 +28,6 @@ fn main() -> u8
 fn fibonacci(i32 n) -> i32
 {
     return 0 if n <= 0;
-    // Invariant: (a, b) = (fib(count - 1), fib(count)). Stopping once `b`
-    // holds fib(n) never computes fib(n + 1), which may overflow.
     let i32 a, i32 b = 0, 1;
     let i32 count = 1;
     while count < n
