@@ -99,18 +99,18 @@ jobs:
         with:
           cache-on-failure: true
 
-      - name: Install LLVM 22 (Linux)
+      - name: Install LLVM 23 (Linux)
         run: |
           wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | gpg --dearmor | sudo tee /usr/share/keyrings/apt.llvm.org.gpg > /dev/null
-          echo "deb [signed-by=/usr/share/keyrings/apt.llvm.org.gpg] https://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-22 main" | sudo tee /etc/apt/sources.list.d/llvm-toolchain-22.list > /dev/null
+          echo "deb [signed-by=/usr/share/keyrings/apt.llvm.org.gpg] https://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-23 main" | sudo tee /etc/apt/sources.list.d/llvm-toolchain-23.list > /dev/null
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends llvm-22 llvm-22-dev libpolly-22-dev clang-22 libclang-22-dev lld-22
+          sudo apt-get install -y --no-install-recommends llvm-23 llvm-23-dev libpolly-23-dev clang-23 libclang-23-dev lld-23
 
       - name: Configure LLVM env (Linux)
         shell: bash
         run: |
-          LLVM_PATH=/usr/lib/llvm-22
-          echo "LLVM_SYS_221_PREFIX=${LLVM_PATH}" >> "$GITHUB_ENV"
+          LLVM_PATH=/usr/lib/llvm-23
+          echo "LLVM_SYS_231_PREFIX=${LLVM_PATH}" >> "$GITHUB_ENV"
           echo "${LLVM_PATH}/bin" >> "$GITHUB_PATH"
           echo "LD_LIBRARY_PATH=${LLVM_PATH}/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
           echo "LIBCLANG_PATH=${LLVM_PATH}/lib" >> "$GITHUB_ENV"
@@ -118,8 +118,9 @@ jobs:
       - name: Verify llvm-config
         shell: bash
         run: |
-          which llvm-config-22
-          llvm-config-22 --version
+          which llvm-config-23
+          llvm-config-23 --version
+          case "$(llvm-config-23 --version)" in 23.*) ;; *) echo "::error::expected LLVM 23, found $(llvm-config-23 --version)"; exit 1 ;; esac
 
       - name: Run Clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
@@ -184,24 +185,24 @@ jobs:
           shared-key: "${{ matrix.os }}-${{ matrix.rust }}"
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - name: Install LLVM 22 (Linux)
+      - name: Install LLVM 23 (Linux)
         if: runner.os == 'Linux'
         run: |
           wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
-          sudo add-apt-repository "deb http://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-22 main"
+          sudo add-apt-repository "deb http://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-23 main"
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends llvm-22 llvm-22-dev libpolly-22-dev clang-22 libclang-22-dev lld-22
+          sudo apt-get install -y --no-install-recommends llvm-23 llvm-23-dev libpolly-23-dev clang-23 libclang-23-dev lld-23
 
-      - name: Install LLVM 22 (macOS)
+      - name: Install LLVM 23 (macOS)
         if: runner.os == 'macOS'
-        run: brew install llvm@22
+        run: brew install llvm
 
       - name: Configure LLVM env (Linux)
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          LLVM_PATH=/usr/lib/llvm-22
-          echo "LLVM_SYS_221_PREFIX=${LLVM_PATH}" >> "$GITHUB_ENV"
+          LLVM_PATH=/usr/lib/llvm-23
+          echo "LLVM_SYS_231_PREFIX=${LLVM_PATH}" >> "$GITHUB_ENV"
           echo "${LLVM_PATH}/bin" >> "$GITHUB_PATH"
           echo "LD_LIBRARY_PATH=${LLVM_PATH}/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
           echo "LIBCLANG_PATH=${LLVM_PATH}/lib" >> "$GITHUB_ENV"
@@ -210,10 +211,10 @@ jobs:
         if: runner.os == 'macOS'
         shell: bash
         run: |
-          LLVM_PATH="$(brew --prefix llvm@22)"
+          LLVM_PATH="$(brew --prefix llvm)"
           SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
 
-          echo "LLVM_SYS_221_PREFIX=${LLVM_PATH}" >> "$GITHUB_ENV"
+          echo "LLVM_SYS_231_PREFIX=${LLVM_PATH}" >> "$GITHUB_ENV"
           echo "${LLVM_PATH}/bin" >> "$GITHUB_PATH"
           echo "LIBCLANG_PATH=${LLVM_PATH}/lib" >> "$GITHUB_ENV"
 
@@ -231,8 +232,9 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          which llvm-config-22
-          llvm-config-22 --version
+          which llvm-config-23
+          llvm-config-23 --version
+          case "$(llvm-config-23 --version)" in 23.*) ;; *) echo "::error::expected LLVM 23, found $(llvm-config-23 --version)"; exit 1 ;; esac
 
       - name: Verify llvm-config (macOS)
         if: runner.os == 'macOS'
@@ -240,6 +242,7 @@ jobs:
         run: |
           which llvm-config
           llvm-config --version
+          case "$(llvm-config --version)" in 23.*) ;; *) echo "::error::expected LLVM 23, found $(llvm-config --version)"; exit 1 ;; esac
           clang --version
 
       # -------------------------
@@ -275,7 +278,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: msys2 {0}
         run: |
-          echo "LLVM_SYS_221_PREFIX=/mingw64" >> "$GITHUB_ENV"
+          echo "LLVM_SYS_231_PREFIX=/mingw64" >> "$GITHUB_ENV"
           echo "LIBCLANG_PATH=/mingw64/bin" >> "$GITHUB_ENV"
           echo "PKG_CONFIG_PATH=/mingw64/lib/pkgconfig" >> "$GITHUB_ENV"
 
@@ -291,6 +294,7 @@ jobs:
           cargo --version
           which llvm-config
           llvm-config --version
+          case "$(llvm-config --version)" in 23.*) ;; *) echo "::error::expected LLVM 23, found $(llvm-config --version)"; exit 1 ;; esac
 
       # -------------------------
       # Tests
@@ -343,24 +347,24 @@ jobs:
           shared-key: "${{ matrix.os }}-${{ matrix.rust }}"
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - name: Install LLVM 22 (Linux)
+      - name: Install LLVM 23 (Linux)
         if: runner.os == 'Linux'
         run: |
           wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
-          sudo add-apt-repository "deb http://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-22 main"
+          sudo add-apt-repository "deb http://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-23 main"
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends llvm-22 llvm-22-dev libpolly-22-dev clang-22 libclang-22-dev lld-22
+          sudo apt-get install -y --no-install-recommends llvm-23 llvm-23-dev libpolly-23-dev clang-23 libclang-23-dev lld-23
 
-      - name: Install LLVM 22 (macOS)
+      - name: Install LLVM 23 (macOS)
         if: runner.os == 'macOS'
-        run: brew install llvm@22
+        run: brew install llvm
 
       - name: Configure LLVM env (Linux)
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          LLVM_PATH=/usr/lib/llvm-22
-          echo "LLVM_SYS_221_PREFIX=${LLVM_PATH}" >> "$GITHUB_ENV"
+          LLVM_PATH=/usr/lib/llvm-23
+          echo "LLVM_SYS_231_PREFIX=${LLVM_PATH}" >> "$GITHUB_ENV"
           echo "${LLVM_PATH}/bin" >> "$GITHUB_PATH"
           echo "LD_LIBRARY_PATH=${LLVM_PATH}/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
           echo "LIBCLANG_PATH=${LLVM_PATH}/lib" >> "$GITHUB_ENV"
@@ -369,10 +373,10 @@ jobs:
         if: runner.os == 'macOS'
         shell: bash
         run: |
-          LLVM_PATH="$(brew --prefix llvm@22)"
+          LLVM_PATH="$(brew --prefix llvm)"
           SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
 
-          echo "LLVM_SYS_221_PREFIX=${LLVM_PATH}" >> "$GITHUB_ENV"
+          echo "LLVM_SYS_231_PREFIX=${LLVM_PATH}" >> "$GITHUB_ENV"
           echo "${LLVM_PATH}/bin" >> "$GITHUB_PATH"
           echo "LIBCLANG_PATH=${LLVM_PATH}/lib" >> "$GITHUB_ENV"
 
@@ -390,8 +394,9 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          which llvm-config-22
-          llvm-config-22 --version
+          which llvm-config-23
+          llvm-config-23 --version
+          case "$(llvm-config-23 --version)" in 23.*) ;; *) echo "::error::expected LLVM 23, found $(llvm-config-23 --version)"; exit 1 ;; esac
 
       - name: Verify llvm-config (macOS)
         if: runner.os == 'macOS'
@@ -399,6 +404,7 @@ jobs:
         run: |
           which llvm-config
           llvm-config --version
+          case "$(llvm-config --version)" in 23.*) ;; *) echo "::error::expected LLVM 23, found $(llvm-config --version)"; exit 1 ;; esac
           clang --version
 
       # -------------------------
@@ -434,7 +440,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: msys2 {0}
         run: |
-          echo "LLVM_SYS_221_PREFIX=/mingw64" >> "$GITHUB_ENV"
+          echo "LLVM_SYS_231_PREFIX=/mingw64" >> "$GITHUB_ENV"
           echo "LIBCLANG_PATH=/mingw64/bin" >> "$GITHUB_ENV"
           echo "PKG_CONFIG_PATH=/mingw64/lib/pkgconfig" >> "$GITHUB_ENV"
 
@@ -450,6 +456,7 @@ jobs:
           cargo --version
           which llvm-config
           llvm-config --version
+          case "$(llvm-config --version)" in 23.*) ;; *) echo "::error::expected LLVM 23, found $(llvm-config --version)"; exit 1 ;; esac
 
       # -------------------------
       # Tests
@@ -479,26 +486,27 @@ jobs:
         with:
           cache-on-failure: true
 
-      - name: Install LLVM 22 (Linux)
+      - name: Install LLVM 23 (Linux)
         run: |
           wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
-          sudo add-apt-repository "deb http://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-22 main"
+          sudo add-apt-repository "deb http://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-23 main"
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends llvm-22 llvm-22-dev libpolly-22-dev clang-22 libclang-22-dev lld-22
+          sudo apt-get install -y --no-install-recommends llvm-23 llvm-23-dev libpolly-23-dev clang-23 libclang-23-dev lld-23
 
       - name: Configure LLVM env (Linux)
         shell: bash
         run: |
-          LLVM_PATH=/usr/lib/llvm-22
-          echo "LLVM_SYS_221_PREFIX=${LLVM_PATH}" >> "$GITHUB_ENV"
+          LLVM_PATH=/usr/lib/llvm-23
+          echo "LLVM_SYS_231_PREFIX=${LLVM_PATH}" >> "$GITHUB_ENV"
           echo "${LLVM_PATH}/bin" >> "$GITHUB_PATH"
           echo "LD_LIBRARY_PATH=${LLVM_PATH}/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
 
       - name: Verify llvm-config
         shell: bash
         run: |
-          which llvm-config-22
-          llvm-config-22 --version
+          which llvm-config-23
+          llvm-config-23 --version
+          case "$(llvm-config-23 --version)" in 23.*) ;; *) echo "::error::expected LLVM 23, found $(llvm-config-23 --version)"; exit 1 ;; esac
 
       - name: Build documentation
         run: cargo doc --no-deps --workspace --all-features

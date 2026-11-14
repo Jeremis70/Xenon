@@ -22,7 +22,7 @@ Alpha. Expect breaking changes.
 ## Build and run
 
 Prerequisites: a recent Rust toolchain (stable), LLVM development libraries, and
-`llvm-config` on your `PATH`. LLVM 22.1 is the version used by CI.
+`llvm-config` on your `PATH`. LLVM 23.1 is the version used by CI.
 
 - Build:
 	- `cargo build -p xenonc`
