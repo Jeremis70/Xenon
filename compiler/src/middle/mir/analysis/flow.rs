@@ -327,9 +327,12 @@ struct InitWalker<'a> {
 impl Visitor for InitWalker<'_> {
     fn visit_local(&mut self, local: &Local, context: PlaceContext, location: Location) {
         match context {
-            // Writing one element keeps the others, which must hold values.
+            // Writing one element keeps the others, which must hold values;
+            // so must whatever a reference refers to.
             PlaceContext::NonMutatingUse(_)
-            | PlaceContext::MutatingUse(MutatingUseContext::Projection) => {
+            | PlaceContext::MutatingUse(
+                MutatingUseContext::Projection | MutatingUseContext::Borrow,
+            ) => {
                 if !self.state[*local]
                     && let Some(reads) = &mut self.uninitialized_reads
                 {
@@ -340,7 +343,7 @@ impl Visitor for InitWalker<'_> {
             // A fresh or dead storage slot holds no value.
             PlaceContext::NonUse(_) => self.state[*local] = false,
             // Call destinations are initialized on the return edge, see
-            // `edge_definition`; taking an address neither reads nor writes.
+            // `edge_definition`; taking a pointer neither reads nor writes.
             PlaceContext::MutatingUse(MutatingUseContext::Call | MutatingUseContext::AddressOf) => {
             }
         }

@@ -188,7 +188,9 @@ struct DefCounter {
 impl Visitor for DefCounter {
     fn visit_local(&mut self, local: &Local, context: PlaceContext, _location: Location) {
         match context {
-            PlaceContext::MutatingUse(MutatingUseContext::AddressOf) => {
+            PlaceContext::MutatingUse(
+                MutatingUseContext::AddressOf | MutatingUseContext::Borrow,
+            ) => {
                 self.address_taken[*local] = true;
             }
             PlaceContext::MutatingUse(

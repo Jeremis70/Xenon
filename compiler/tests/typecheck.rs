@@ -1221,3 +1221,197 @@ fn zero_sized_fields_and_empty_struct_equality() {
     )
     .expect("should check");
 }
+
+// ── Methods ───────────────────────────────────────────────────────────────────
+
+const RECT_IMPL: &str = "struct Rect { f64 width; f64 height; }\n\
+    impl Rect {\n\
+        fn scaled(self, f64 k) -> Rect { return Rect(width = self.width * k, height = self.height * k); }\n\
+        fn scale(&self, f64 k) { self.width *= k; self.height *= k; }\n\
+        fn unit() -> Rect { return Rect(width = 1.0, height = 1.0); }\n\
+    }\n";
+
+fn method_error(src: &str) -> SemanticError {
+    error(&format!("{RECT_IMPL}{src}"))
+}
+
+#[test]
+fn method_desugars_to_call_with_receiver() {
+    let dump = thir(&format!(
+        "{RECT_IMPL}fn f(Rect r, &Rect s) -> Rect {{ r.scale(2.0); s.scale(3.0); return r.scaled(4.0); }}"
+    ));
+    // The methods are functions named after their struct.
+    assert!(
+        dump.contains("fn Rect.scaled(self@b0: Rect, k@b1: f64) -> Rect"),
+        "{dump}"
+    );
+    assert!(
+        dump.contains("fn Rect.scale(self@b0: &Rect, k@b1: f64)"),
+        "{dump}"
+    );
+    assert!(dump.contains("(*self@b0).0"), "{dump}");
+    // `&self` takes the address of the receiver; `self` takes its value.
+    assert!(dump.contains("Rect.scale(&r@b0, 2.0_f64)"), "{dump}");
+    assert!(dump.contains("Rect.scale(&(*s@b1), 3.0_f64)"), "{dump}");
+    assert!(dump.contains("return Rect.scaled(r@b0, 4.0_f64)"), "{dump}");
+}
+
+#[test]
+fn associated_function_call() {
+    let dump = thir(&format!(
+        "{RECT_IMPL}fn f() -> f64 {{ return Rect.unit().scaled(2.0).width; }}"
+    ));
+    assert!(
+        dump.contains("return Rect.scaled(Rect.unit(), 2.0_f64).0"),
+        "{dump}"
+    );
+    // A `&self` method works on a value that is no place.
+    check(&format!("{RECT_IMPL}fn f() {{ Rect.unit().scale(2.0); }}")).expect("should check");
+}
+
+#[test]
+fn methods_and_free_functions_have_separate_names() {
+    check(&format!(
+        "{RECT_IMPL}fn scale(f64 k) -> f64 {{ return k; }}\n\
+         fn f(Rect r) -> f64 {{ r.scale(scale(2.0)); return r.width; }}"
+    ))
+    .expect("should check");
+    // A method is not in scope as a function, nor a function as a method.
+    let error = method_error("fn f() { scaled(2.0); }");
+    assert!(
+        matches!(error, SemanticError::UndefinedFunction { .. }),
+        "{error}"
+    );
+}
+
+#[test]
+fn several_impl_blocks_share_one_namespace() {
+    check(
+        "impl A { fn one(self) -> i32 { return self.two(); } }\n\
+         struct A { i32 x; }\n\
+         impl A { fn two(self) -> i32 { return self.x; } }",
+    )
+    .expect("should check");
+    let cases: [ErrorCase; 3] = [
+        (
+            "struct A {}\nimpl A { fn f() {} }\nimpl A { fn f(self) {} }",
+            |e| matches!(e, SemanticError::DuplicateMember { name, .. } if name == "f"),
+        ),
+        (
+            "struct A { i32 x; }\nimpl A { fn x(self) {} }",
+            |e| matches!(e, SemanticError::DuplicateMember { name, .. } if name == "x"),
+        ),
+        (
+            "impl Missing { fn f() {} }",
+            |e| matches!(e, SemanticError::UnknownImplTarget { name, .. } if name == "Missing"),
+        ),
+    ];
+    for (src, expected) in cases {
+        let error = error(src);
+        assert!(expected(&error), "{src}: {error:?}");
+    }
+    let error = error("impl i32 { fn f() {} }");
+    assert!(
+        matches!(error, SemanticError::UnknownImplTarget { .. }),
+        "{error}"
+    );
+}
+
+#[test]
+fn method_call_errors() {
+    let cases: [ErrorCase; 11] = [
+        (
+            "fn f() { Rect.scale(2.0); }",
+            |e| matches!(e, SemanticError::MethodNeedsReceiver { name, .. } if name == "scale"),
+        ),
+        (
+            "fn f(Rect r) { r.unit(); }",
+            |e| matches!(e, SemanticError::NotAMethod { name, .. } if name == "unit"),
+        ),
+        (
+            "fn f(Rect r) { r.width(); }",
+            |e| matches!(e, SemanticError::NotAMethod { name, .. } if name == "width"),
+        ),
+        (
+            "fn f(Rect r) { r.nope(); }",
+            |e| matches!(e, SemanticError::NoSuchMember { name, .. } if name == "nope"),
+        ),
+        (
+            "fn f() { Rect.nope(); }",
+            |e| matches!(e, SemanticError::NoSuchMember { name, .. } if name == "nope"),
+        ),
+        (
+            "fn f(i32 x) { x.scale(2.0); }",
+            |e| matches!(e, SemanticError::NoSuchMember { name, found, .. } if name == "scale" && found == "i32"),
+        ),
+        (
+            "fn f(*Rect p) { p.scale(2.0); }",
+            |e| matches!(e, SemanticError::NoSuchMember { found, .. } if found == "*Rect"),
+        ),
+        ("fn f(Rect r) { r.scale(); }", |e| {
+            matches!(
+                e,
+                SemanticError::ArgumentCountMismatch {
+                    expected: 1,
+                    got: 0,
+                    ..
+                }
+            )
+        }),
+        ("fn f(Rect r) { r.scale(true); }", |e| {
+            matches!(e, SemanticError::TypeMismatch { .. })
+        }),
+        (
+            "fn f(Rect r) -> f64 { return r.scale; }",
+            |e| matches!(e, SemanticError::MethodNotCalled { name, .. } if name == "scale"),
+        ),
+        (
+            "fn f() { Missing.unit(); }",
+            |e| matches!(e, SemanticError::UndefinedVariable { name, .. } if name == "Missing"),
+        ),
+    ];
+    for (body, expected) in cases {
+        let error = method_error(body);
+        assert!(expected(&error), "{body}: {error:?}");
+    }
+    assert_eq!(
+        method_error("fn f() { Rect.scale(2.0); }").to_string(),
+        "`scale` is a method: call it on a value of type `Rect`"
+    );
+    check(&format!("{RECT_IMPL}fn f(*Rect p) {{ (*p).scale(2.0); }}")).expect("should check");
+}
+
+#[test]
+fn self_outside_a_method_is_rejected() {
+    for src in [
+        "fn f() -> i32 { return self.x; }",
+        "struct A { i32 x; }\nimpl A { fn f() -> i32 { return self.x; } }",
+        "fn f() { self.go(); }",
+    ] {
+        let error = error(src);
+        assert!(
+            matches!(error, SemanticError::SelfOutsideMethod { .. }),
+            "{src}: {error:?}"
+        );
+    }
+    assert_eq!(
+        error("fn f() { self.go(); }").to_string(),
+        "`self` is only available in a method"
+    );
+}
+
+#[test]
+fn local_named_like_struct_hides_associated_functions() {
+    // `Rect` is the parameter here, so `Rect.unit()` is a method call on it.
+    let error = method_error("fn f(Rect Rect) { Rect.unit(); }");
+    assert!(matches!(error, SemanticError::NotAMethod { .. }), "{error}");
+}
+
+#[test]
+fn reserved_struct_name() {
+    let error = error("struct _xe {}");
+    assert!(
+        matches!(error, SemanticError::ReservedName { .. }),
+        "{error}"
+    );
+}

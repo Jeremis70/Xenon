@@ -52,7 +52,7 @@ use std::sync::Arc;
 
 use crate::error::{SemanticError, SemanticResult};
 use crate::frontend::ast;
-use crate::index::{Idx, IndexVec};
+use crate::index::IndexVec;
 use crate::middle::ids::{BindingId, DefId};
 use crate::middle::target::TargetSpec;
 use crate::middle::thir::{self, BindingKind, ThirProgram};
@@ -60,7 +60,7 @@ use crate::source::Span;
 use crate::types::Type;
 
 pub use entry::{is_entry_return_type, validate_entry_point};
-use items::StructItems;
+use items::{FnItem, StructItems};
 use scope::Scopes;
 
 /// Type-checks `program` for `target` and returns its THIR.
@@ -69,10 +69,9 @@ use scope::Scopes;
 /// literal range checks depend on.
 pub fn check_program(program: &ast::Program, target: &TargetSpec) -> SemanticResult<ThirProgram> {
     let globals = GlobalCtxt::collect(program, target)?;
-    let mut functions = IndexVec::with_capacity(program.functions.len());
-    for (index, function) in program.functions.iter().enumerate() {
-        let def_id = DefId::new(index);
-        functions.push(FnCtxt::new(&globals, def_id).check_function(function)?);
+    let mut functions = IndexVec::with_capacity(globals.items.len());
+    for def_id in globals.items.indices() {
+        functions.push(FnCtxt::new(&globals, def_id).check_function()?);
     }
     Ok(ThirProgram {
         functions,
@@ -80,6 +79,10 @@ pub fn check_program(program: &ast::Program, target: &TargetSpec) -> SemanticRes
         structs: Arc::new(globals.structs.table),
     })
 }
+
+/// The name of the receiver of a method. The parser spells the keyword
+/// `self` as a variable of this name, which no declaration can use.
+const SELF_NAME: &str = "self";
 
 /// The attribute marking the program entry point.
 const ENTRY_ATTRIBUTE: &str = "entry";
@@ -104,18 +107,45 @@ struct GlobalCtxt<'a> {
     /// The function marked `#[entry]`, if any.
     entry: Option<DefId>,
     structs: StructItems<'a>,
+    /// Every function, free or member of an `impl`.
+    items: IndexVec<DefId, FnItem<'a>>,
 }
 
 impl<'a> GlobalCtxt<'a> {
-    /// Assigns a [`DefId`] to every function, in source order, and checks
-    /// its attributes.
+    /// Collects the structs, then assigns a [`DefId`] to every function:
+    /// free functions in source order, then the members of `impl` blocks.
+    /// Checks names and attributes.
     fn collect(program: &'a ast::Program, target: &'a TargetSpec) -> SemanticResult<Self> {
-        let mut signatures: IndexVec<DefId, Signature> =
-            IndexVec::with_capacity(program.functions.len());
+        let mut structs = StructItems::collect(program)?;
+        let items = structs.collect_functions(program)?;
+        let mut signatures: IndexVec<DefId, Signature> = IndexVec::with_capacity(items.len());
         let mut by_name = HashMap::with_capacity(program.functions.len());
         let mut entry: Option<DefId> = None;
-        let structs = StructItems::collect(program)?;
-        for function in &program.functions {
+        for item in items.iter() {
+            let function = item.function;
+            let resolve_all = |bindings: &[ast::Binding]| -> SemanticResult<Vec<Type>> {
+                bindings.iter().map(|b| structs.resolve(&b.ty)).collect()
+            };
+            // A method receives the value it is called on first.
+            let mut params = Vec::with_capacity(function.params.len() + 1);
+            if let (Some(owner), Some(receiver)) = (item.owner, function.receiver) {
+                params.push(structs.receiver_ty(owner, receiver));
+            }
+            params.extend(resolve_all(&function.params)?);
+            let results = resolve_all(&function.returns)?;
+            let def_id = signatures.push(Signature {
+                params,
+                return_ty: match results.as_slice() {
+                    [] => Type::unit(),
+                    [single] => single.clone(),
+                    results => Type::Tuple(results.to_vec()),
+                },
+                results,
+            });
+            // Members are named within their struct, which checked them.
+            if item.owner.is_some() {
+                continue;
+            }
             // A call `Name(..)` must mean one thing.
             if let Some(id) = structs.ids.get(function.name.as_str()) {
                 let decl = &program.structs[id.as_u32() as usize];
@@ -130,28 +160,14 @@ impl<'a> GlobalCtxt<'a> {
                     span: second,
                 });
             }
-            let resolve_all = |bindings: &[ast::Binding]| -> SemanticResult<Vec<Type>> {
-                bindings.iter().map(|b| structs.resolve(&b.ty)).collect()
-            };
-            let results = resolve_all(&function.returns)?;
-            let def_id = signatures.push(Signature {
-                params: resolve_all(&function.params)?,
-                return_ty: match results.as_slice() {
-                    [] => Type::unit(),
-                    [single] => single.clone(),
-                    results => Type::Tuple(results.to_vec()),
-                },
-                results,
-            });
             match by_name.entry(function.name.as_str()) {
                 Entry::Vacant(entry) => {
                     entry.insert(def_id);
                 }
                 Entry::Occupied(entry) => {
-                    let first: &ast::Function = &program.functions[entry.get().index()];
                     return Err(SemanticError::DuplicateFunction {
                         name: function.name.clone(),
-                        first_span: first.span,
+                        first_span: items[*entry.get()].function.span,
                         span: function.span,
                     });
                 }
@@ -167,7 +183,7 @@ impl<'a> GlobalCtxt<'a> {
                     && first != def_id
                 {
                     return Err(SemanticError::MultipleEntryPoints {
-                        first_span: program.functions[first.index()].span,
+                        first_span: items[first].function.span,
                         span: function.span,
                     });
                 }
@@ -180,6 +196,7 @@ impl<'a> GlobalCtxt<'a> {
             by_name,
             entry,
             structs,
+            items,
         })
     }
 
@@ -265,16 +282,23 @@ impl<'g, 'a> FnCtxt<'g, 'a> {
         self.globals.target
     }
 
-    fn check_function(mut self, function: &ast::Function) -> SemanticResult<thir::Function> {
+    fn check_function(mut self) -> SemanticResult<thir::Function> {
         self.scopes.push();
         let globals = self.globals;
+        let item = &globals.items[self.def_id];
+        let function = item.function;
         let signature = &globals.signatures[self.def_id];
-        let params = function
-            .params
-            .iter()
-            .zip(&signature.params)
-            .map(|(param, ty)| self.declare(param, ty.clone(), BindingKind::Param))
-            .collect();
+        let mut param_tys = signature.params.iter();
+        let mut params = Vec::with_capacity(signature.params.len());
+        if let Some(receiver) = function.receiver {
+            let (ast::Receiver::Value(span) | ast::Receiver::Reference(span)) = receiver;
+            let ty = param_tys.next().expect("a method has a receiver type");
+            let name = Some(SELF_NAME.to_owned());
+            params.push(self.declare_named(name, ty.clone(), BindingKind::Param, span));
+        }
+        for (param, ty) in function.params.iter().zip(param_tys) {
+            params.push(self.declare(param, ty.clone(), BindingKind::Param));
+        }
         let results = function.returns.iter().zip(&signature.results);
         for (result, ty) in results.filter(|(r, _)| r.name.is_some()) {
             // A reference can only be bound at its declaration, and a named
@@ -292,7 +316,7 @@ impl<'g, 'a> FnCtxt<'g, 'a> {
         self.scopes.pop();
 
         Ok(thir::Function {
-            name: function.name.clone(),
+            name: item.symbol.clone(),
             params,
             return_ty: self.return_ty,
             named_returns: self.named_returns,
@@ -305,14 +329,26 @@ impl<'g, 'a> FnCtxt<'g, 'a> {
     /// Creates a binding for `binding`, whose resolved type is `ty`, and
     /// brings it into scope.
     fn declare(&mut self, binding: &ast::Binding, ty: Type, kind: BindingKind) -> BindingId {
+        self.declare_named(binding.name.clone(), ty, kind, binding.span)
+    }
+
+    /// Creates a binding called `name`, if it has a name, and brings it
+    /// into scope.
+    fn declare_named(
+        &mut self,
+        name: Option<String>,
+        ty: Type,
+        kind: BindingKind,
+        span: Span,
+    ) -> BindingId {
         let id = self.bindings.push(thir::Binding {
-            name: binding.name.clone(),
+            name: name.clone(),
             ty,
             kind,
-            span: binding.span,
+            span,
         });
-        if let Some(name) = &binding.name {
-            self.scopes.insert(name.clone(), id);
+        if let Some(name) = name {
+            self.scopes.insert(name, id);
         }
         id
     }

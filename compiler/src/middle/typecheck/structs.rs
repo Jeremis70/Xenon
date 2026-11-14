@@ -7,17 +7,19 @@
 
 use crate::error::{SemanticError, SemanticResult};
 use crate::frontend::ast;
+use crate::middle::ops::IndirectionKind;
 use crate::middle::thir::{Expr, ExprKind};
 use crate::source::Span;
 use crate::types::{StructId, StructTy, Type};
 
-use super::items::Member;
+use super::items::{Member, ReceiverKind};
 use super::{FnCtxt, GlobalCtxt};
 
 impl GlobalCtxt<'_> {
     /// What `name` denotes on a value of struct `id`, if anything.
     pub(super) fn lookup_member(&self, id: StructId, name: &str) -> Option<&Member> {
-        self.structs.members.get(id)?.get(name)
+        let (member, _) = self.structs.members.get(id)?.get(name)?;
+        Some(member)
     }
 
     /// The struct named `name`, if the program defines one.
@@ -92,20 +94,21 @@ impl FnCtxt<'_, '_> {
         name: &str,
         span: Span,
     ) -> SemanticResult<Expr> {
-        let base = if base.is_place() {
-            self.check_place(base)?
-        } else {
-            self.check_expr(base, None)?
-        };
-        let no_such_member = || SemanticError::NoSuchMember {
-            name: name.to_owned(),
-            found: base.ty.to_string(),
-            span,
-        };
-        let Type::Struct(struct_ty) = &base.ty else {
-            return Err(no_such_member());
-        };
         let globals = self.globals;
+        if let Some(struct_ty) = self.named_struct(base) {
+            // Only functions are reached through the name of a struct, and
+            // a function is called.
+            return Err(match globals.lookup_member(struct_ty.id, name) {
+                Some(Member::AssocFn(_) | Member::Method { .. }) => {
+                    not_called(name, &struct_ty, span)
+                }
+                _ => no_such_member(name, &struct_ty.name, span),
+            });
+        }
+        let base = self.check_receiver(base)?;
+        let Type::Struct(struct_ty) = &base.ty else {
+            return Err(no_such_member(name, &base.ty.to_string(), span));
+        };
         match globals.lookup_member(struct_ty.id, name) {
             Some(Member::Field(index)) => {
                 let ty = globals
@@ -123,7 +126,106 @@ impl FnCtxt<'_, '_> {
                     span,
                 })
             }
-            None => Err(no_such_member()),
+            Some(Member::Method { .. } | Member::AssocFn(_)) => {
+                Err(not_called(name, struct_ty, span))
+            }
+            None => Err(no_such_member(name, &struct_ty.name, span)),
         }
+    }
+
+    /// Checks `receiver.name(args)`: a method called on a value, or an
+    /// associated function called on the name of its struct.
+    ///
+    /// A method is an ordinary function whose first argument is the value
+    /// it is called on, or a reference to it for a `&self` method.
+    pub(super) fn check_method_call(
+        &mut self,
+        receiver: &ast::Expr,
+        name: &str,
+        args: &[ast::Expr],
+        span: Span,
+    ) -> SemanticResult<Expr> {
+        let globals = self.globals;
+        if let Some(struct_ty) = self.named_struct(receiver) {
+            return match globals.lookup_member(struct_ty.id, name) {
+                Some(Member::AssocFn(def)) => self.call(*def, name, None, args, span),
+                Some(Member::Method { .. }) => Err(SemanticError::MethodNeedsReceiver {
+                    name: name.to_owned(),
+                    ty: struct_ty.name.to_string(),
+                    span,
+                }),
+                _ => Err(no_such_member(name, &struct_ty.name, span)),
+            };
+        }
+        let receiver = self.check_receiver(receiver)?;
+        let Type::Struct(struct_ty) = &receiver.ty else {
+            return Err(no_such_member(name, &receiver.ty.to_string(), span));
+        };
+        match globals.lookup_member(struct_ty.id, name) {
+            Some(Member::Method {
+                def,
+                receiver: kind,
+            }) => {
+                let receiver = match kind {
+                    ReceiverKind::Value => receiver,
+                    // The receiver need not be a place: MIR construction
+                    // gives a value a temporary to refer to.
+                    ReceiverKind::Reference => Expr {
+                        ty: IndirectionKind::Reference.pointer_to(receiver.ty.clone()),
+                        span: receiver.span,
+                        kind: ExprKind::AddressOf {
+                            kind: IndirectionKind::Reference,
+                            place: Box::new(receiver),
+                        },
+                    },
+                };
+                self.call(*def, name, Some(receiver), args, span)
+            }
+            Some(Member::Field(_) | Member::AssocFn(_)) => Err(SemanticError::NotAMethod {
+                name: name.to_owned(),
+                ty: struct_ty.name.to_string(),
+                span,
+            }),
+            None => Err(no_such_member(name, &struct_ty.name, span)),
+        }
+    }
+
+    /// The struct `expr` names, if it is the name of a struct and not of
+    /// a variable: a variable hides a struct of the same name.
+    fn named_struct(&self, expr: &ast::Expr) -> Option<StructTy> {
+        match &expr.kind {
+            ast::ExprKind::Ident(name) if self.scopes.lookup(name).is_none() => {
+                self.globals.struct_named(name)
+            }
+            _ => None,
+        }
+    }
+
+    /// Checks the expression before a `.name`, as a place if it is one.
+    fn check_receiver(&mut self, base: &ast::Expr) -> SemanticResult<Expr> {
+        if base.is_place() {
+            self.check_place(base)
+        } else {
+            self.check_expr(base, None)
+        }
+    }
+}
+
+/// The error for `.name` on something of type `found` that has no such
+/// member.
+fn no_such_member(name: &str, found: &str, span: Span) -> SemanticError {
+    SemanticError::NoSuchMember {
+        name: name.to_owned(),
+        found: found.to_owned(),
+        span,
+    }
+}
+
+/// The error for a method or associated function named without a call.
+fn not_called(name: &str, ty: &StructTy, span: Span) -> SemanticError {
+    SemanticError::MethodNotCalled {
+        name: name.to_owned(),
+        ty: ty.name.to_string(),
+        span,
     }
 }

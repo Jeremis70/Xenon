@@ -12,18 +12,50 @@ use std::collections::hash_map::Entry;
 use crate::error::{SemanticError, SemanticResult};
 use crate::frontend::ast;
 use crate::index::IndexVec;
+use crate::middle::ids::DefId;
+use crate::source::Span;
 use crate::types::{FieldDef, StructDef, StructId, StructTable, Type};
 
-/// What a name after `.` denotes on a value of a struct type.
+/// What a name after `.` denotes on a struct.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Member {
     /// The stored field with this index, in declaration order.
     Field(u32),
+    /// A function called on a value of the struct, which it receives as
+    /// its first argument.
+    Method { def: DefId, receiver: ReceiverKind },
+    /// A function called on the struct itself, `Name.function(..)`.
+    AssocFn(DefId),
 }
 
-/// The members of one struct, by name. Fields, and later methods and
-/// properties, share this one namespace.
-pub(super) type Members<'a> = HashMap<&'a str, Member>;
+/// How a method receives the value it is called on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ReceiverKind {
+    /// `self`: a copy of the value.
+    Value,
+    /// `&self`: a reference to the value.
+    Reference,
+}
+
+/// The members of one struct by name, each with where it is declared.
+/// Fields, methods, and associated functions share this one namespace.
+pub(super) type Members<'a> = HashMap<&'a str, (Member, Span)>;
+
+/// A function of the program: a free function, or a member of an `impl`.
+#[derive(Debug)]
+pub(super) struct FnItem<'a> {
+    pub(super) function: &'a ast::Function,
+    /// The struct whose `impl` declares the function, if any.
+    pub(super) owner: Option<StructId>,
+    /// The name of the function in the compiled program. A member is
+    /// `Struct.name`, which no free function can be called: a name has no
+    /// `.`.
+    pub(super) symbol: String,
+}
+
+/// The struct name the backend needs for itself: it renames a function
+/// called `main` to `_xe.main`, which would be a member of this struct.
+const RESERVED_STRUCT_NAME: &str = "_xe";
 
 /// Every struct of a program.
 #[derive(Debug, Default)]
@@ -52,6 +84,12 @@ impl<'a> StructItems<'a> {
     /// Gives `decl` its [`StructId`]; its fields come later.
     fn declare(&mut self, decl: &'a ast::StructDecl, program: &ast::Program) -> SemanticResult<()> {
         let name = decl.name.as_str();
+        if name == RESERVED_STRUCT_NAME {
+            return Err(SemanticError::ReservedName {
+                name: decl.name.clone(),
+                span: decl.name_span,
+            });
+        }
         // Anything but "unknown" means the name spells a built-in type, or
         // a malformed one such as an integer that is too wide.
         if !matches!(
@@ -99,18 +137,7 @@ impl<'a> StructItems<'a> {
                     span: field.span,
                 });
             }
-            self.add_member(
-                id,
-                &field.name,
-                field.span,
-                Member::Field(index as u32),
-                |name| {
-                    decl.fields
-                        .iter()
-                        .find(|other| other.name == name)
-                        .map(|other| other.span)
-                },
-            )?;
+            self.add_member(id, &field.name, field.span, Member::Field(index as u32))?;
             fields.push(FieldDef {
                 name: field.name.clone(),
                 ty,
@@ -122,27 +149,83 @@ impl<'a> StructItems<'a> {
         Ok(())
     }
 
-    /// Adds `member` to the namespace of struct `id` under `name`.
-    /// `span_of` gives where a member already using a name is declared.
+    /// Adds `member`, declared at `span`, to the namespace of struct `id`
+    /// under `name`.
     pub(super) fn add_member(
         &mut self,
         id: StructId,
         name: &'a str,
-        span: crate::source::Span,
+        span: Span,
         member: Member,
-        span_of: impl FnOnce(&str) -> Option<crate::source::Span>,
     ) -> SemanticResult<()> {
         match self.members[id].entry(name) {
             Entry::Vacant(entry) => {
-                entry.insert(member);
+                entry.insert((member, span));
                 Ok(())
             }
-            Entry::Occupied(_) => Err(SemanticError::DuplicateMember {
+            Entry::Occupied(entry) => Err(SemanticError::DuplicateMember {
                 name: name.to_owned(),
                 ty: self.table.ty(id).to_string(),
-                first_span: span_of(name).unwrap_or(span),
+                first_span: entry.get().1,
                 span,
             }),
+        }
+    }
+
+    /// Lists every function of `program`, free functions first and then
+    /// the members of each `impl` in source order, and adds the members to
+    /// the namespace of their struct. A function's position is its
+    /// [`DefId`].
+    pub(super) fn collect_functions(
+        &mut self,
+        program: &'a ast::Program,
+    ) -> SemanticResult<IndexVec<DefId, FnItem<'a>>> {
+        let mut items: IndexVec<DefId, FnItem<'a>> = program
+            .functions
+            .iter()
+            .map(|function| FnItem {
+                function,
+                owner: None,
+                symbol: function.name.clone(),
+            })
+            .collect();
+        for block in &program.impls {
+            let Some(&owner) = self.ids.get(block.target.as_str()) else {
+                return Err(SemanticError::UnknownImplTarget {
+                    name: block.target.clone(),
+                    span: block.target_span,
+                });
+            };
+            for member in &block.members {
+                let ast::ImplMember::Function(function) = member;
+                let def = items.push(FnItem {
+                    function,
+                    owner: Some(owner),
+                    symbol: format!("{}.{}", block.target, function.name),
+                });
+                let member = match function.receiver {
+                    Some(ast::Receiver::Value(_)) => Member::Method {
+                        def,
+                        receiver: ReceiverKind::Value,
+                    },
+                    Some(ast::Receiver::Reference(_)) => Member::Method {
+                        def,
+                        receiver: ReceiverKind::Reference,
+                    },
+                    None => Member::AssocFn(def),
+                };
+                self.add_member(owner, &function.name, function.span, member)?;
+            }
+        }
+        Ok(items)
+    }
+
+    /// The type a method of struct `owner` gives its receiver.
+    pub(super) fn receiver_ty(&self, owner: StructId, receiver: ast::Receiver) -> Type {
+        let ty = self.table.ty(owner);
+        match receiver {
+            ast::Receiver::Value(_) => ty,
+            ast::Receiver::Reference(_) => Type::Reference(Box::new(ty)),
         }
     }
 

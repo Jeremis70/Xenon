@@ -430,3 +430,27 @@ fn struct_field_access_uses_struct_gep() {
     );
     assert!(ir.contains("insertvalue %Rect"), "{ir}");
 }
+
+#[test]
+fn methods_have_qualified_symbols() {
+    let ir = ir_for(
+        "struct Rect { f64 width; }\n\
+         impl Rect {\n\
+             fn scale(&self, f64 k) { self.width *= k; }\n\
+             fn width_of(self) -> f64 { return self.width; }\n\
+             fn unit() -> Rect { return Rect(width = 1.0); }\n\
+         }\n\
+         fn scale(f64 k) -> f64 { return k; }\n\
+         fn f(Rect r) -> f64 { r.scale(scale(2.0)); return Rect.unit().width_of(); }\n",
+    );
+    assert!(
+        ir.contains("define {} @Rect.scale(ptr %0, double %1)"),
+        "{ir}"
+    );
+    assert!(
+        ir.contains("define double @Rect.width_of(%Rect %0)"),
+        "{ir}"
+    );
+    assert!(ir.contains("define %Rect @Rect.unit()"), "{ir}");
+    assert!(ir.contains("define double @scale(double %0)"), "{ir}");
+}

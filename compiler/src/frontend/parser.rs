@@ -1,7 +1,8 @@
 use crate::error::{ParseError, ParseResult, TypeError};
 use crate::frontend::ast::{
-    Attribute, BinOp, Binding, Expr, ExprKind, FieldDecl, Function, IncDecOp, NamedArg, Pattern,
-    Program, Stmt, StmtKind, StructDecl, TypeExpr, TypeExprKind, UnaryOp,
+    Attribute, BinOp, Binding, Expr, ExprKind, FieldDecl, Function, ImplBlock, ImplMember,
+    IncDecOp, MethodCall, NamedArg, Pattern, Program, Receiver, Stmt, StmtKind, StructDecl,
+    TypeExpr, TypeExprKind, UnaryOp,
 };
 use crate::frontend::precedence::{AS_BP, OpInfo, UNARY_BP, infix_info};
 use crate::frontend::tokens::{Span, Token, TokenKind};
@@ -132,6 +133,7 @@ impl<'a> Parser<'a> {
     pub fn parse_program(&mut self) -> ParseResult<Program> {
         let mut functions = Vec::new();
         let mut structs = Vec::new();
+        let mut impls = Vec::new();
         while self.peek().is_some() {
             let attributes = self.parse_attributes()?;
             if !attributes.is_empty() && !self.at(TokenKind::Fn) {
@@ -143,11 +145,35 @@ impl<'a> Parser<'a> {
             }
             if self.at(TokenKind::Struct) {
                 structs.push(self.parse_struct()?);
+            } else if self.at(TokenKind::Impl) {
+                impls.push(self.parse_impl()?);
             } else {
-                functions.push(self.parse_function(attributes)?);
+                functions.push(self.parse_function(attributes, false)?);
             }
         }
-        Ok(Program { functions, structs })
+        Ok(Program {
+            functions,
+            structs,
+            impls,
+        })
+    }
+
+    /// Parses `impl <name> { <functions> }`.
+    fn parse_impl(&mut self) -> ParseResult<ImplBlock> {
+        let start = self.expect(TokenKind::Impl)?.span.start;
+        let target_token = self.expect(TokenKind::Ident)?;
+        self.expect(TokenKind::LBrace)?;
+        let mut members = Vec::new();
+        while !self.at(TokenKind::RBrace) {
+            members.push(ImplMember::Function(self.parse_function(Vec::new(), true)?));
+        }
+        self.expect(TokenKind::RBrace)?;
+        Ok(ImplBlock {
+            target: target_token.ident_value()?.to_string(),
+            target_span: target_token.span,
+            members,
+            span: self.span_since(start),
+        })
     }
 
     /// Parses `struct <name> { <type> <name>; .. }`.
@@ -191,13 +217,24 @@ impl<'a> Parser<'a> {
         Ok(attrs)
     }
 
-    fn parse_function(&mut self, attributes: Vec<Attribute>) -> ParseResult<Function> {
+    /// Parses a function. `in_impl` allows a `self` or `&self` receiver as
+    /// its first parameter.
+    fn parse_function(
+        &mut self,
+        attributes: Vec<Attribute>,
+        in_impl: bool,
+    ) -> ParseResult<Function> {
         let fn_token = self.expect(TokenKind::Fn)?;
         let start = fn_token.span.start;
         let name = self.expect(TokenKind::Ident)?.ident_value()?.to_string();
 
         self.expect(TokenKind::LParen)?;
-        let params = self.parse_params()?;
+        let receiver = if in_impl {
+            self.parse_receiver()?
+        } else {
+            None
+        };
+        let params = self.parse_params(receiver.is_some())?;
         self.expect(TokenKind::RParen)?;
 
         // Without `->`, the function returns `()`.
@@ -215,8 +252,31 @@ impl<'a> Parser<'a> {
             returns,
             body,
             attributes,
+            receiver,
             span: self.span_since(start),
         })
+    }
+
+    /// Parses the `self` or `&self` that may start the parameters of a
+    /// method.
+    fn parse_receiver(&mut self) -> ParseResult<Option<Receiver>> {
+        let Some(first) = self.peek() else {
+            return Ok(None);
+        };
+        let by_reference = first.kind == TokenKind::Ampersand
+            && self
+                .tokens
+                .get(self.position + 1)
+                .is_some_and(|next| next.kind == TokenKind::SelfValue);
+        if by_reference {
+            self.advance();
+            let self_token = self.expect(TokenKind::SelfValue)?;
+            return Ok(Some(Receiver::Reference(first.span.to(self_token.span))));
+        }
+        if self.eat(TokenKind::SelfValue) {
+            return Ok(Some(Receiver::Value(first.span)));
+        }
+        Ok(None)
     }
 
     fn parse_type(&mut self) -> ParseResult<TypeExpr> {
@@ -447,6 +507,7 @@ impl<'a> Parser<'a> {
             | TokenKind::Break
             | TokenKind::Continue
             | TokenKind::Ident
+            | TokenKind::SelfValue
             | TokenKind::Underscore
             | TokenKind::LParen
             | TokenKind::Star => self.parse_simple_statement(start),
@@ -561,6 +622,9 @@ impl<'a> Parser<'a> {
     /// A lone name parses as a type, since any name may be one: in
     /// `let x = 5;` it is the type that is missing, not the name.
     fn missing_binding_name(&self, ty: &TypeExpr) -> ParseError {
+        if self.at(TokenKind::SelfValue) {
+            return self.error("`self` is a keyword and cannot name a variable");
+        }
         match &ty.kind {
             TypeExprKind::Named(name) => {
                 ParseError::new(format!("expected a type before `{name}`"), ty.span)
@@ -800,6 +864,9 @@ impl<'a> Parser<'a> {
     fn parse_return_type(&mut self) -> ParseResult<Binding> {
         let start = self.peek().map(|t| t.span.start).unwrap_or(0);
         let ty = self.parse_type()?;
+        if self.at(TokenKind::SelfValue) {
+            return Err(self.missing_binding_name(&ty));
+        }
         Ok(match self.peek() {
             Some(t) if t.kind == TokenKind::Ident => {
                 let name_token = self.expect(TokenKind::Ident)?;
@@ -823,7 +890,9 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_params(&mut self) -> ParseResult<Vec<Binding>> {
+    /// Parses the parameters up to the `)`. `after_receiver` tells that a
+    /// receiver was parsed, so the first parameter follows a comma.
+    fn parse_params(&mut self, after_receiver: bool) -> ParseResult<Vec<Binding>> {
         let mut params = Vec::new();
         loop {
             match self.peek() {
@@ -831,8 +900,17 @@ impl<'a> Parser<'a> {
                 None => break,
                 _ => {}
             }
-            if !params.is_empty() {
+            if after_receiver || !params.is_empty() {
                 self.expect(TokenKind::Comma)?;
+            }
+            // A receiver was already taken where one is allowed.
+            let reference = usize::from(self.at(TokenKind::Ampersand));
+            if self
+                .tokens
+                .get(self.position + reference)
+                .is_some_and(|t| t.kind == TokenKind::SelfValue)
+            {
+                return Err(self.error("`self` is only allowed as the first parameter of a method"));
             }
             params.push(self.parse_typed_binding()?);
         }
@@ -993,6 +1071,12 @@ impl<'a> Parser<'a> {
                 kind: ExprKind::Bool(false),
                 span: token.span,
             }),
+            // `self` is the receiver of the method being defined: a
+            // variable the user cannot declare.
+            TokenKind::SelfValue => Ok(Expr {
+                kind: ExprKind::Ident("self".to_owned()),
+                span: token.span,
+            }),
             TokenKind::Ident => {
                 let name = token.ident_value()?.to_string();
                 if self.at(TokenKind::LParen) {
@@ -1058,6 +1142,24 @@ impl<'a> Parser<'a> {
             Some(t) if matches!(t.kind, TokenKind::Int | TokenKind::Float) => t,
             Some(t) if t.kind == TokenKind::Ident => {
                 self.advance();
+                if self.at(TokenKind::LParen) {
+                    let (args, named) = self.parse_args()?;
+                    if !named.is_empty() {
+                        return Err(ParseError::new(
+                            "named arguments are only allowed when building a struct",
+                            named[0].name_span,
+                        ));
+                    }
+                    return Ok(Expr {
+                        span: self.span_since(base.span.start),
+                        kind: ExprKind::MethodCall(Box::new(MethodCall {
+                            receiver: base,
+                            name: t.ident_value()?.to_string(),
+                            name_span: t.span,
+                            args,
+                        })),
+                    });
+                }
                 return Ok(Expr {
                     span: base.span.to(t.span),
                     kind: ExprKind::Member {
@@ -1135,6 +1237,20 @@ impl<'a> Parser<'a> {
     /// Parses the arguments of the call `name(..)`: all positional, or all
     /// named as in `Rect(width = 1, height = 2)`.
     fn parse_call(&mut self, name: String, start: usize) -> ParseResult<Expr> {
+        let (args, named) = self.parse_args()?;
+        let kind = if named.is_empty() {
+            ExprKind::Call { name, args }
+        } else {
+            ExprKind::NamedCall { name, args: named }
+        };
+        Ok(Expr {
+            kind,
+            span: self.span_since(start),
+        })
+    }
+
+    /// Parses `( arguments )`: one of the two lists is empty.
+    fn parse_args(&mut self) -> ParseResult<(Vec<Expr>, Vec<NamedArg>)> {
         self.expect(TokenKind::LParen)?;
         let mut args = Vec::new();
         let mut named = Vec::new();
@@ -1175,15 +1291,7 @@ impl<'a> Parser<'a> {
             }
         }
         self.expect(TokenKind::RParen)?;
-        let kind = if named.is_empty() {
-            ExprKind::Call { name, args }
-        } else {
-            ExprKind::NamedCall { name, args: named }
-        };
-        Ok(Expr {
-            kind,
-            span: self.span_since(start),
-        })
+        Ok((args, named))
     }
 
     /// Parses `{ stmts }`.

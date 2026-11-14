@@ -1,6 +1,7 @@
 use num_bigint::BigInt;
 use xenonc::frontend::ast::{
-    BinOp, Binding, ExprKind, Function, IncDecOp, Stmt, StmtKind, TypeExpr, TypeExprKind,
+    BinOp, Binding, ExprKind, Function, ImplMember, IncDecOp, Program, Receiver, Stmt, StmtKind,
+    TypeExpr, TypeExprKind,
 };
 use xenonc::frontend::lexer::lex;
 use xenonc::frontend::parser::Parser;
@@ -1437,4 +1438,158 @@ fn mixed_named_and_positional_args_rejected() {
             "{src}"
         );
     }
+}
+
+// Impl blocks
+
+fn parse_program(src: &str) -> Program {
+    let tokens = lex(src).expect("lexing should succeed");
+    Parser::new(&tokens)
+        .parse_program()
+        .expect("parsing should succeed")
+}
+
+/// The functions of the first impl block of `src`.
+fn impl_functions(src: &str) -> Vec<Function> {
+    let mut program = parse_program(src);
+    program
+        .impls
+        .remove(0)
+        .members
+        .into_iter()
+        .map(|member| match member {
+            ImplMember::Function(function) => function,
+        })
+        .collect()
+}
+
+#[test]
+fn impl_block_parses() {
+    let src =
+        "struct Rect {}\nimpl Rect { fn a() {} fn b(i32 x) -> i32 { return x; } }\nimpl Rect {}";
+    let program = parse_program(src);
+    assert!(program.functions.is_empty());
+    assert_eq!(program.impls.len(), 2);
+    let block = &program.impls[0];
+    assert_eq!(block.target, "Rect");
+    assert_eq!(&src[block.target_span.start..block.target_span.end], "Rect");
+    assert!(src[block.span.start..block.span.end].starts_with("impl Rect { fn a()"));
+    let names: Vec<_> = impl_functions(src).into_iter().map(|f| f.name).collect();
+    assert_eq!(names, ["a", "b"]);
+    assert!(program.impls[1].members.is_empty());
+}
+
+#[test]
+fn receiver_forms_parse() {
+    let functions = impl_functions(
+        "impl Rect { fn a(self) {} fn b(&self, f64 k) {} fn c() {} fn d(self, i32 x, i32 y) {} }",
+    );
+    assert!(matches!(functions[0].receiver, Some(Receiver::Value(_))));
+    assert!(functions[0].params.is_empty());
+    assert!(matches!(
+        functions[1].receiver,
+        Some(Receiver::Reference(_))
+    ));
+    assert_eq!(functions[1].params.len(), 1);
+    assert!(functions[2].receiver.is_none());
+    assert_eq!(functions[3].params.len(), 2);
+    // A free function has no receiver.
+    assert!(parse_function("fn f(i32 x) {}").receiver.is_none());
+}
+
+#[test]
+fn method_call_parses() {
+    let expr = returned("fn f(){ return r.scaled(2, x).area(); }");
+    let ExprKind::MethodCall(outer) = &expr else {
+        panic!("expected MethodCall, got {expr:?}");
+    };
+    assert_eq!(outer.name, "area");
+    assert!(outer.args.is_empty());
+    let ExprKind::MethodCall(inner) = &outer.receiver.kind else {
+        panic!("expected MethodCall, got {:?}", outer.receiver);
+    };
+    assert_eq!(inner.name, "scaled");
+    assert_eq!(inner.args.len(), 2);
+    assert!(matches!(&inner.receiver.kind, ExprKind::Ident(name) if name == "r"));
+
+    // A call is a statement, a value, and never a place.
+    let body = parse_body("fn f(){ r.scale(2); t.0.reset(); }");
+    assert!(
+        matches!(&body[0].kind, StmtKind::Expr(e) if matches!(e.kind, ExprKind::MethodCall(_)))
+    );
+    assert!(matches!(&body[1].kind, StmtKind::Expr(_)));
+    // Nor is a member of its result.
+    let (message, _) = parse_error("fn f(){ Rect.unit().width = 1; }");
+    assert!(message.contains("invalid assignment target"), "{message}");
+    let (message, _) = parse_error("fn f(){ r.scale(2) = 1; }");
+    assert!(message.contains("invalid assignment target"), "{message}");
+    let (message, _) = parse_error("fn f(){ r.scale(k = 2); }");
+    assert_eq!(
+        message,
+        "named arguments are only allowed when building a struct"
+    );
+}
+
+#[test]
+fn self_is_an_expression_and_a_statement_start() {
+    let functions = impl_functions(
+        "impl Rect { fn f(&self) -> f64 { self.width = 1.0; self.reset(); return self.width; } }",
+    );
+    let body = &functions[0].body;
+    assert!(matches!(&body[0].kind, StmtKind::Assign { target, .. }
+        if matches!(&target.kind, ExprKind::Member { base, .. }
+            if matches!(&base.kind, ExprKind::Ident(name) if name == "self"))));
+    assert!(matches!(&body[1].kind, StmtKind::Expr(_)));
+    assert!(matches!(&body[2].kind, StmtKind::Return(Some(_))));
+}
+
+#[test]
+fn self_parameter_outside_impl_rejected() {
+    let message = "`self` is only allowed as the first parameter of a method";
+    for src in [
+        "fn f(self) {}",
+        "fn f(&self) {}",
+        "impl Rect { fn f(i32 x, self) {} }",
+        "impl Rect { fn f(self, &self) {} }",
+    ] {
+        assert_eq!(parse_error(src).0, message, "{src}");
+    }
+}
+
+#[test]
+fn self_as_binding_name_rejected() {
+    let message = "`self` is a keyword and cannot name a variable";
+    for src in [
+        "fn f() { let i32 self = 1; }",
+        "fn f(i32 self) {}",
+        "impl Rect { fn f(Rect self) {} }",
+        "fn f() -> i32 self { return; }",
+        "struct A { i32 self; }",
+    ] {
+        assert_eq!(parse_error(src).0, message, "{src}");
+    }
+}
+
+#[test]
+fn malformed_impl_blocks_are_rejected() {
+    for src in [
+        "impl { }",
+        "impl Rect { i32 x; }",
+        "impl Rect { fn f() {} ",
+        "impl Rect { #[entry] fn f() {} }",
+        "#[entry] impl Rect {}",
+        "impl Rect { struct A {} }",
+        "fn f() { impl Rect {} }",
+    ] {
+        let tokens = lex(src).expect("lexing should succeed");
+        assert!(Parser::new(&tokens).parse_program().is_err(), "{src}");
+    }
+}
+
+#[test]
+fn expression_nodes_stay_small() {
+    // The parser recurses once per nesting level with several expressions
+    // on each frame, so the size of a node bounds how deep source can nest.
+    let size = std::mem::size_of::<ExprKind>();
+    assert!(size <= 56, "ExprKind is {size} bytes");
 }

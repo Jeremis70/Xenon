@@ -4,6 +4,7 @@ use num_bigint::BigInt;
 
 use crate::error::{SemanticError, SemanticResult};
 use crate::frontend::ast::{self, ExprKind as Ast};
+use crate::middle::ids::DefId;
 use crate::middle::ops::{IndirectionKind, UnOp};
 use crate::middle::thir::{Expr, ExprKind, Literal};
 use crate::source::Span;
@@ -11,7 +12,7 @@ use crate::types::Type;
 
 use super::literal::{LiteralClass, literal_class};
 use super::tuple::tuple_expr;
-use super::{Expectation, FnCtxt};
+use super::{Expectation, FnCtxt, SELF_NAME};
 
 impl FnCtxt<'_, '_> {
     /// Checks `expr`, using `expected` to type untyped literals and to pick
@@ -39,6 +40,9 @@ impl FnCtxt<'_, '_> {
             Ast::Ident(_) | Ast::Deref(_) => self.check_place(expr),
             Ast::Field { base, index } => self.check_field(base, *index, span),
             Ast::Member { base, name, .. } => self.check_member(base, name, span),
+            Ast::MethodCall(call) => {
+                self.check_method_call(&call.receiver, &call.name, &call.args, span)
+            }
             Ast::NamedCall { name, args } => {
                 if let Some(ty) = self.globals.struct_named(name) {
                     return self.check_construct(ty, args, span);
@@ -249,13 +253,16 @@ impl FnCtxt<'_, '_> {
         let span = expr.span;
         match &expr.kind {
             Ast::Ident(name) => {
-                let binding =
-                    self.scopes
-                        .lookup(name)
-                        .ok_or_else(|| SemanticError::UndefinedVariable {
+                let binding = self.scopes.lookup(name).ok_or_else(|| {
+                    if name == SELF_NAME {
+                        SemanticError::SelfOutsideMethod { span }
+                    } else {
+                        SemanticError::UndefinedVariable {
                             name: name.clone(),
                             span,
-                        })?;
+                        }
+                    }
+                })?;
                 let storage = Expr {
                     kind: ExprKind::Binding(binding),
                     ty: self.bindings[binding].ty.clone(),
@@ -401,22 +408,41 @@ impl FnCtxt<'_, '_> {
                     name: name.to_owned(),
                     span,
                 })?;
+        self.call(callee, name, None, args, span)
+    }
+
+    /// Builds the call of `callee`, written `name`, checking `args` against
+    /// its parameters. A method call passes its already checked `receiver`
+    /// first, in front of the arguments the user wrote.
+    pub(super) fn call(
+        &mut self,
+        callee: DefId,
+        name: &str,
+        receiver: Option<Expr>,
+        args: &[ast::Expr],
+        span: Span,
+    ) -> SemanticResult<Expr> {
+        let globals = self.globals;
         let signature = &globals.signatures[callee];
-        if args.len() != signature.params.len() {
+        let params = &signature.params[usize::from(receiver.is_some())..];
+        if args.len() != params.len() {
             return Err(SemanticError::ArgumentCountMismatch {
                 name: name.to_owned(),
-                expected: signature.params.len(),
+                expected: params.len(),
                 got: args.len(),
                 span,
             });
         }
-        let args = args
-            .iter()
-            .zip(&signature.params)
-            .map(|(arg, param_ty)| self.check_expr_has_type(arg, param_ty))
-            .collect::<SemanticResult<_>>()?;
+        let mut checked = Vec::with_capacity(signature.params.len());
+        checked.extend(receiver);
+        for (arg, param_ty) in args.iter().zip(params) {
+            checked.push(self.check_expr_has_type(arg, param_ty)?);
+        }
         Ok(Expr {
-            kind: ExprKind::Call { callee, args },
+            kind: ExprKind::Call {
+                callee,
+                args: checked,
+            },
             ty: signature.return_ty.clone(),
             span,
         })
