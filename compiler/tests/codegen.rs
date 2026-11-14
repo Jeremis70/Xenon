@@ -328,3 +328,16 @@ fn relocation_model_sets_module_pic_flags() {
         assert!(!ir.contains("PIC Level"), "{model:?}: {ir}");
     }
 }
+
+/// The compiler links the LLVM major version CI installs. `llvm-sys` does not
+/// enforce it when LLVM is linked dynamically, and LLVM 22 aborts on
+/// float/integer casts wider than 128 bits on non-x86 targets, so a
+/// mismatched toolchain must fail here rather than in user programs.
+#[test]
+fn linked_llvm_is_version_23() {
+    let (major, minor, patch) = inkwell::support::get_llvm_version();
+    assert_eq!(
+        major, 23,
+        "xenonc is built for LLVM 23 but linked LLVM {major}.{minor}.{patch}"
+    );
+}
