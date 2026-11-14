@@ -454,3 +454,16 @@ fn methods_have_qualified_symbols() {
     assert!(ir.contains("define %Rect @Rect.unit()"), "{ir}");
     assert!(ir.contains("define double @scale(double %0)"), "{ir}");
 }
+
+#[test]
+fn getters_have_get_suffix_symbol() {
+    let ir = ir_for(
+        "struct Rect { f64 width; f64 height; }\n\
+         impl Rect { f64 area { return self.width * self.height; } }\n\
+         fn f(Rect r) -> f64 { return r.area; }\n",
+    );
+    assert!(ir.contains("define double @Rect.area.get(ptr %0)"), "{ir}");
+    assert!(ir.contains("call double @Rect.area.get(ptr"), "{ir}");
+    // A property takes no room in the struct.
+    assert!(ir.contains("%Rect = type { double, double }"), "{ir}");
+}

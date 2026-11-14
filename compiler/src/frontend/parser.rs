@@ -1,8 +1,8 @@
 use crate::error::{ParseError, ParseResult, TypeError};
 use crate::frontend::ast::{
     Attribute, BinOp, Binding, Expr, ExprKind, FieldDecl, Function, ImplBlock, ImplMember,
-    IncDecOp, MethodCall, NamedArg, Pattern, Program, Receiver, Stmt, StmtKind, StructDecl,
-    TypeExpr, TypeExprKind, UnaryOp,
+    IncDecOp, MethodCall, NamedArg, Pattern, Program, PropertyDecl, Receiver, Stmt, StmtKind,
+    StructDecl, TypeExpr, TypeExprKind, UnaryOp,
 };
 use crate::frontend::precedence::{AS_BP, OpInfo, UNARY_BP, infix_info};
 use crate::frontend::tokens::{Span, Token, TokenKind};
@@ -165,7 +165,11 @@ impl<'a> Parser<'a> {
         self.expect(TokenKind::LBrace)?;
         let mut members = Vec::new();
         while !self.at(TokenKind::RBrace) {
-            members.push(ImplMember::Function(self.parse_function(Vec::new(), true)?));
+            members.push(if self.at(TokenKind::Fn) {
+                ImplMember::Function(self.parse_function(Vec::new(), true)?)
+            } else {
+                ImplMember::Property(self.parse_property()?)
+            });
         }
         self.expect(TokenKind::RBrace)?;
         Ok(ImplBlock {
@@ -215,6 +219,20 @@ impl<'a> Parser<'a> {
             });
         }
         Ok(attrs)
+    }
+
+    /// Parses the property `<type> <name> { <body> }`.
+    fn parse_property(&mut self) -> ParseResult<PropertyDecl> {
+        let binding = self.parse_typed_binding()?;
+        let name_span = self.prev_span();
+        let body = self.parse_block()?;
+        Ok(PropertyDecl {
+            ty: binding.ty,
+            name: binding.name.unwrap_or_default(),
+            name_span,
+            body,
+            span: self.span_since(binding.span.start),
+        })
     }
 
     /// Parses a function. `in_impl` allows a `self` or `&self` receiver as

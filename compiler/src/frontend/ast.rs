@@ -542,6 +542,26 @@ impl PartialEq for ImplBlock {
 pub enum ImplMember {
     /// A method if it has a [`Receiver`], otherwise an associated function.
     Function(Function),
+    /// A computed property.
+    Property(PropertyDecl),
+}
+
+/// `<type> <name> { <body> }` in an `impl`: a member read like a field,
+/// `r.name`, whose value the body computes from `self` on every read. It
+/// takes no room in the struct.
+#[derive(Debug, Clone)]
+pub struct PropertyDecl {
+    pub ty: TypeExpr,
+    pub name: String,
+    pub name_span: Span,
+    pub body: Vec<Stmt>,
+    pub span: Span,
+}
+
+impl PartialEq for PropertyDecl {
+    fn eq(&self, other: &Self) -> bool {
+        self.ty == other.ty && self.name == other.name && self.body == other.body
+    }
 }
 
 /// Every item of a program, each kind in source order.

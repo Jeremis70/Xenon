@@ -121,18 +121,20 @@ impl<'a> GlobalCtxt<'a> {
         let mut signatures: IndexVec<DefId, Signature> = IndexVec::with_capacity(items.len());
         let mut by_name = HashMap::with_capacity(program.functions.len());
         let mut entry: Option<DefId> = None;
-        for item in items.iter() {
-            let function = item.function;
+        for function in items.iter() {
             let resolve_all = |bindings: &[ast::Binding]| -> SemanticResult<Vec<Type>> {
                 bindings.iter().map(|b| structs.resolve(&b.ty)).collect()
             };
             // A method receives the value it is called on first.
             let mut params = Vec::with_capacity(function.params.len() + 1);
-            if let (Some(owner), Some(receiver)) = (item.owner, function.receiver) {
+            if let (Some(owner), Some(receiver)) = (function.owner, function.receiver) {
                 params.push(structs.receiver_ty(owner, receiver));
             }
-            params.extend(resolve_all(&function.params)?);
-            let results = resolve_all(&function.returns)?;
+            params.extend(resolve_all(function.params)?);
+            let results = match function.property_ty {
+                Some(ty) => vec![structs.resolve(ty)?],
+                None => resolve_all(function.returns)?,
+            };
             let def_id = signatures.push(Signature {
                 params,
                 return_ty: match results.as_slice() {
@@ -143,11 +145,11 @@ impl<'a> GlobalCtxt<'a> {
                 results,
             });
             // Members are named within their struct, which checked them.
-            if item.owner.is_some() {
+            if function.owner.is_some() {
                 continue;
             }
             // A call `Name(..)` must mean one thing.
-            if let Some(id) = structs.ids.get(function.name.as_str()) {
+            if let Some(id) = structs.ids.get(function.name) {
                 let decl = &program.structs[id.as_u32() as usize];
                 let (first, second) = if decl.span.start < function.span.start {
                     (decl.name_span, function.span)
@@ -155,24 +157,24 @@ impl<'a> GlobalCtxt<'a> {
                     (function.span, decl.name_span)
                 };
                 return Err(SemanticError::NameConflict {
-                    name: function.name.clone(),
+                    name: function.name.to_owned(),
                     first_span: first,
                     span: second,
                 });
             }
-            match by_name.entry(function.name.as_str()) {
+            match by_name.entry(function.name) {
                 Entry::Vacant(entry) => {
                     entry.insert(def_id);
                 }
                 Entry::Occupied(entry) => {
                     return Err(SemanticError::DuplicateFunction {
-                        name: function.name.clone(),
-                        first_span: items[*entry.get()].function.span,
+                        name: function.name.to_owned(),
+                        first_span: items[*entry.get()].span,
                         span: function.span,
                     });
                 }
             }
-            for attribute in &function.attributes {
+            for attribute in function.attributes {
                 if attribute.name != ENTRY_ATTRIBUTE {
                     return Err(SemanticError::UnknownAttribute {
                         name: attribute.name.clone(),
@@ -183,7 +185,7 @@ impl<'a> GlobalCtxt<'a> {
                     && first != def_id
                 {
                     return Err(SemanticError::MultipleEntryPoints {
-                        first_span: items[first].function.span,
+                        first_span: items[first].span,
                         span: function.span,
                     });
                 }
@@ -285,8 +287,7 @@ impl<'g, 'a> FnCtxt<'g, 'a> {
     fn check_function(mut self) -> SemanticResult<thir::Function> {
         self.scopes.push();
         let globals = self.globals;
-        let item = &globals.items[self.def_id];
-        let function = item.function;
+        let function = &globals.items[self.def_id];
         let signature = &globals.signatures[self.def_id];
         let mut param_tys = signature.params.iter();
         let mut params = Vec::with_capacity(signature.params.len());
@@ -312,11 +313,11 @@ impl<'g, 'a> FnCtxt<'g, 'a> {
             let id = self.declare(result, ty.clone(), BindingKind::NamedReturn);
             self.named_returns.push(id);
         }
-        let body = self.check_block(&function.body, function.span)?;
+        let body = self.check_block(function.body, function.span)?;
         self.scopes.pop();
 
         Ok(thir::Function {
-            name: item.symbol.clone(),
+            name: function.symbol.clone(),
             params,
             return_ty: self.return_ty,
             named_returns: self.named_returns,

@@ -198,7 +198,7 @@ pub enum SemanticError {
     UnknownImplTarget { name: String, span: Span },
     #[error("`self` is only available in a method")]
     SelfOutsideMethod { span: Span },
-    #[error("`{name}` is a method: call it on a value of type `{ty}`")]
+    #[error("`{name}` is used on a value of type `{ty}`, not on `{ty}` itself")]
     MethodNeedsReceiver {
         name: String,
         ty: String,
@@ -212,6 +212,20 @@ pub enum SemanticError {
     },
     #[error("`{name}` is a function of `{ty}`: call it, as in `.{name}(..)`")]
     MethodNotCalled {
+        name: String,
+        ty: String,
+        span: Span,
+    },
+    #[error(
+        "`{name}` is a computed property of `{ty}`: it cannot be assigned or have its address taken"
+    )]
+    PropertyNotAssignable {
+        name: String,
+        ty: String,
+        span: Span,
+    },
+    #[error("`{name}` is a property of `{ty}`: read it without parentheses, as `.{name}`")]
+    PropertyCalled {
         name: String,
         ty: String,
         span: Span,
@@ -311,6 +325,8 @@ impl SemanticError {
             | SemanticError::MethodNeedsReceiver { span, .. }
             | SemanticError::NotAMethod { span, .. }
             | SemanticError::MethodNotCalled { span, .. }
+            | SemanticError::PropertyNotAssignable { span, .. }
+            | SemanticError::PropertyCalled { span, .. }
             | SemanticError::ReservedName { span, .. }
             | SemanticError::DuplicateFunction { span, .. } => Some(*span),
             SemanticError::NoEntryPoint => None,

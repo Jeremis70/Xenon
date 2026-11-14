@@ -1457,8 +1457,9 @@ fn impl_functions(src: &str) -> Vec<Function> {
         .remove(0)
         .members
         .into_iter()
-        .map(|member| match member {
-            ImplMember::Function(function) => function,
+        .filter_map(|member| match member {
+            ImplMember::Function(function) => Some(function),
+            ImplMember::Property(_) => None,
         })
         .collect()
 }
@@ -1592,4 +1593,41 @@ fn expression_nodes_stay_small() {
     // on each frame, so the size of a node bounds how deep source can nest.
     let size = std::mem::size_of::<ExprKind>();
     assert!(size <= 56, "ExprKind is {size} bytes");
+}
+
+#[test]
+fn property_declaration_parses() {
+    let src = "impl Rect {\n    f64 area { return self.width * self.height; }\n    fn f() {}\n    (i32, *Rect) pair { return (1, @self); }\n}";
+    let program = parse_program(src);
+    let members = &program.impls[0].members;
+    assert_eq!(members.len(), 3);
+    let ImplMember::Property(area) = &members[0] else {
+        panic!("expected a property, got {:?}", members[0]);
+    };
+    assert_eq!(area.name, "area");
+    assert_eq!(area.ty, Type::Float64);
+    assert_eq!(area.body.len(), 1);
+    assert_eq!(&src[area.name_span.start..area.name_span.end], "area");
+    assert_eq!(
+        &src[area.span.start..area.span.end],
+        "f64 area { return self.width * self.height; }"
+    );
+    assert!(matches!(&members[1], ImplMember::Function(f) if f.name == "f"));
+    assert!(matches!(&members[2], ImplMember::Property(p) if p.name == "pair"));
+}
+
+#[test]
+fn malformed_properties_are_rejected() {
+    for src in [
+        "impl Rect { f64 area; }",
+        "impl Rect { f64 area() { return 1.0; } }",
+        "impl Rect { f64 { return 1.0; } }",
+        "impl Rect { area { return 1.0; } }",
+        "impl Rect { f64 self { return 1.0; } }",
+        "impl Rect { f64 area = 1.0; }",
+        "f64 area { return 1.0; }",
+    ] {
+        let tokens = lex(src).expect("lexing should succeed");
+        assert!(Parser::new(&tokens).parse_program().is_err(), "{src}");
+    }
 }

@@ -728,3 +728,16 @@ fn pointer_to_uninitialized_local_still_allowed() {
          fn f() -> i32 x { init(@x); x = 2; return; }",
     );
 }
+
+#[test]
+fn property_must_return_on_every_path() {
+    let kind =
+        error("struct A { i32 x; }\nimpl A { i32 big { if self.x > 9 { return self.x; } } }");
+    assert!(matches!(kind, AnalysisErrorKind::MissingReturn), "{kind:?}");
+    // A property reads through `&self`, so its value must be initialized.
+    let kind = error(
+        "struct A { i32 x; }\nimpl A { i32 twice { return self.x * 2; } }\n\
+         fn f() -> A a { let i32 t = a.twice; a = A(x = t); return; }",
+    );
+    assert!(kind.to_string().contains("`a`"), "{kind:?}");
+}

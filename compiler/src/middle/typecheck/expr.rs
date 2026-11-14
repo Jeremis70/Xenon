@@ -14,7 +14,27 @@ use super::literal::{LiteralClass, literal_class};
 use super::tuple::tuple_expr;
 use super::{Expectation, FnCtxt, SELF_NAME};
 
+/// What the context needs of an element or member access `base.x`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Access {
+    /// Its value. The result is still a place when it can be: an element
+    /// of a variable is read in place rather than copied.
+    Value,
+    /// A memory location, to assign to or take the address of. Every
+    /// `base` along the way must be one too, which a computed property is
+    /// not.
+    Place,
+}
+
 impl FnCtxt<'_, '_> {
+    /// Checks the `base` of an element or member access.
+    pub(super) fn check_base(&mut self, base: &ast::Expr, access: Access) -> SemanticResult<Expr> {
+        match access {
+            Access::Place => self.check_place(base),
+            Access::Value => self.check_expr(base, None),
+        }
+    }
+
     /// Checks `expr`, using `expected` to type untyped literals and to pick
     /// the flavor of `@place`.
     ///
@@ -38,8 +58,8 @@ impl FnCtxt<'_, '_> {
             }),
             Ast::Address(value) => self.address_literal(value, expected, span),
             Ast::Ident(_) | Ast::Deref(_) => self.check_place(expr),
-            Ast::Field { base, index } => self.check_field(base, *index, span),
-            Ast::Member { base, name, .. } => self.check_member(base, name, span),
+            Ast::Field { base, index } => self.check_field(base, *index, Access::Value, span),
+            Ast::Member { base, name, .. } => self.check_member(base, name, Access::Value, span),
             Ast::MethodCall(call) => {
                 self.check_method_call(&call.receiver, &call.name, &call.args, span)
             }
@@ -291,9 +311,11 @@ impl FnCtxt<'_, '_> {
                     span,
                 })
             }
-            Ast::Field { base, index } if base.is_place() => self.check_field(base, *index, span),
+            Ast::Field { base, index } if base.is_place() => {
+                self.check_field(base, *index, Access::Place, span)
+            }
             Ast::Member { base, name, .. } if base.is_place() => {
-                self.check_member(base, name, span)
+                self.check_member(base, name, Access::Place, span)
             }
             _ => Err(SemanticError::NotAPlaceExpression { span }),
         }

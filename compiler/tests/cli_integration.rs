@@ -868,3 +868,45 @@ fn backend_runs_methods() {
     ));
     assert_eq!(code, 63);
 }
+
+#[cfg(feature = "llvm-backend")]
+#[test]
+fn backend_runs_properties() {
+    // Each check adds a distinct bit when it holds.
+    let code = compile_and_run(concat!(
+        "struct Rect { i32 width; i32 height; }\n",
+        "impl Rect {\n",
+        "    i32 area { return self.width * self.height; }\n",
+        "    i32 perimeter { return 2 * (self.width + self.height); }\n",
+        "    bool square { return self.width == self.height; }\n",
+        "    Rect flipped { return Rect(width = self.height, height = self.width); }\n",
+        "    i32 double_area { return self.area * 2; }\n",
+        "    fn scaled(self, i32 k) -> Rect {\n",
+        "        return Rect(width = self.width * k, height = self.height * k);\n",
+        "    }\n",
+        "    fn scale(&self, i32 k) { self.width *= k; self.height *= k; }\n",
+        "    fn unit() -> Rect { return Rect(width = 1, height = 1); }\n",
+        "}\n",
+        "fn area_of(&Rect r) -> i32 { return r.area; }\n",
+        "#[entry]\n",
+        "fn main() -> u8 {\n",
+        "    let u8 total = 0;\n",
+        "    let Rect r = Rect(width = 3, height = 4);\n",
+        "    total += 1 if r.area == 12 and r.perimeter == 14 and not r.square;\n",
+        "    // A property follows the fields it reads.\n",
+        "    r.width = 5;\n",
+        "    total += 2 if r.area == 20 and r.double_area == 40;\n",
+        "    // On a value that is no variable, and chained.\n",
+        "    total += 4 if Rect.unit().area == 1 and Rect.unit().scaled(3).area == 9;\n",
+        "    total += 8 if r.flipped.width == 4 and r.flipped.flipped == r;\n",
+        "    // The argument is read before the method changes the receiver.\n",
+        "    r.scale(r.area);\n",
+        "    total += 16 if r.width == 100 and r.height == 80;\n",
+        "    // Through a reference and a pointer.\n",
+        "    let *Rect p = @r;\n",
+        "    total += 32 if area_of(@r) == 8000 and (*p).area == 8000 and Rect.unit().square;\n",
+        "    return total;\n",
+        "}\n",
+    ));
+    assert_eq!(code, 63);
+}

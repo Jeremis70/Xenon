@@ -23,6 +23,7 @@ use crate::middle::thir::{BindingKind, Expr, ExprKind, Stmt, StmtKind};
 use crate::source::Span;
 use crate::types::Type;
 
+use super::expr::Access;
 use super::{Expectation, FnCtxt};
 
 /// The destination of one value of a destructuring `let`.
@@ -78,13 +79,10 @@ impl FnCtxt<'_, '_> {
         &mut self,
         base: &ast::Expr,
         index: u32,
+        access: Access,
         span: Span,
     ) -> SemanticResult<Expr> {
-        let base = if base.is_place() {
-            self.check_place(base)?
-        } else {
-            self.check_expr(base, None)?
-        };
+        let base = self.check_base(base, access)?;
         Ok(auto_deref(field(base, index, span)?))
     }
 
