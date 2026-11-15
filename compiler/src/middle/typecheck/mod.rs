@@ -35,6 +35,7 @@
 //! - `tuple`: tuple expressions, element access, destructuring `let`,
 //!   parallel assignment, and bare `return`.
 
+mod array;
 mod cast;
 mod entry;
 mod expr;

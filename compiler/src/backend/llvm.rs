@@ -491,12 +491,26 @@ impl<'ctx, 'a> MirCodegen<'ctx, 'a> {
         }
     }
 
-    /// Builds a value of the tuple or struct type `ty` from its elements.
+    /// Builds a value of the tuple, struct, or array type `ty` from its elements.
     fn tuple(
         &self,
         ty: &Type,
         elems: Vec<BasicValueEnum<'ctx>>,
     ) -> Result<BasicValueEnum<'ctx>, BackendError> {
+        if matches!(ty, Type::Array(..)) {
+            let array_ty = self.llvm_type(ty)?.into_array_type();
+            if ty.is_zero_sized(&self.structs) {
+                return Ok(array_ty.const_zero().into());
+            }
+            let mut value: AggregateValueEnum<'ctx> = array_ty.get_poison().into();
+            for (index, elem) in elems.into_iter().enumerate() {
+                value = self
+                    .builder
+                    .build_insert_value(value, elem, index as u32, "array")
+                    .map_err(llvm_error("insert array element"))?;
+            }
+            return Ok(value.into_array_value().into());
+        }
         let struct_ty = self.llvm_type(ty)?.into_struct_type();
         // A struct without data has no room for its elements, which have
         // no data either.
@@ -1074,6 +1088,24 @@ impl<'ctx, 'a> MirCodegen<'ctx, 'a> {
                         .field_ty(ty, *index)
                         .ok_or_else(|| invalid_mir(format!("no element {index} in `{ty}`")))?;
                 }
+                ProjectionElem::Index(index) => {
+                    let value = self
+                        .operand(&Operand::Copy((*index).into()), body)?
+                        .into_int_value();
+                    pointer = self.array_element_ptr(pointer, ty, value)?;
+                    ty = match ty {
+                        Type::Array(elem, _) => elem,
+                        _ => return Err(invalid_mir(format!("cannot index `{ty}`"))),
+                    };
+                }
+                ProjectionElem::ConstantIndex(index) => {
+                    let value = self.context.i64_type().const_int(u64::from(*index), false);
+                    pointer = self.array_element_ptr(pointer, ty, value)?;
+                    ty = match ty {
+                        Type::Array(elem, _) => elem,
+                        _ => return Err(invalid_mir(format!("cannot index `{ty}`"))),
+                    };
+                }
             }
         }
         Ok(pointer)
@@ -1084,6 +1116,24 @@ impl<'ctx, 'a> MirCodegen<'ctx, 'a> {
             .get(&def_id)
             .copied()
             .ok_or_else(|| invalid_mir(format!("unknown function {def_id}")))
+    }
+
+    fn array_element_ptr(
+        &self,
+        pointer: PointerValue<'ctx>,
+        ty: &Type,
+        index: IntValue<'ctx>,
+    ) -> Result<PointerValue<'ctx>, BackendError> {
+        // Construction guards dynamic indices and verification checks constant ones.
+        unsafe {
+            self.builder.build_in_bounds_gep(
+                self.llvm_type(ty)?,
+                pointer,
+                &[self.context.i32_type().const_zero(), index],
+                "element",
+            )
+        }
+        .map_err(llvm_error("array element address"))
     }
 
     fn int_type(&self, width: u32) -> Result<IntType<'ctx>, BackendError> {
@@ -1110,6 +1160,7 @@ impl<'ctx, 'a> MirCodegen<'ctx, 'a> {
             Type::Pointer(_) | Type::Reference(_) => {
                 self.context.ptr_type(AddressSpace::default()).into()
             }
+            Type::Array(elem, len) => self.llvm_type(elem)?.array_type(*len).into(),
             Type::Tuple(elems) => {
                 let fields = elems
                     .iter()

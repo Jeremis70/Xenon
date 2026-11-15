@@ -25,6 +25,8 @@ pub enum TypeExprKind {
     Reference(Box<TypeExpr>),
     /// `(T, U, ..)`; empty for the unit type `()`.
     Tuple(Vec<TypeExpr>),
+    /// `[N]T`
+    Array(Box<TypeExpr>, u32),
     /// A user-defined type, by name.
     Named(String),
 }
@@ -46,6 +48,9 @@ impl PartialEq<Type> for TypeExpr {
             (TypeExprKind::Tuple(elems), Type::Tuple(others)) => {
                 elems.len() == others.len() && elems.iter().zip(others).all(|(a, b)| a == b)
             }
+            (TypeExprKind::Array(elem, len), Type::Array(other, other_len)) => {
+                len == other_len && **elem == **other
+            }
             _ => false,
         }
     }
@@ -57,6 +62,7 @@ impl std::fmt::Display for TypeExpr {
             TypeExprKind::Primitive(ty) => write!(f, "{ty}"),
             TypeExprKind::Pointer(inner) => write!(f, "*{inner}"),
             TypeExprKind::Reference(inner) => write!(f, "&{inner}"),
+            TypeExprKind::Array(elem, len) => write!(f, "[{len}]{elem}"),
             TypeExprKind::Tuple(elems) => {
                 f.write_str("(")?;
                 for (index, elem) in elems.iter().enumerate() {
@@ -209,6 +215,13 @@ pub enum ExprKind {
     /// Tuple expression: `(a, b)`, `(a,)`, the unit value `()`, or a bare
     /// list `a, b` where a statement allows one.
     Tuple(Vec<Expr>),
+    /// A homogeneous array literal `[a, b, ..]`.
+    Array(Vec<Expr>),
+    /// `base[i]`, or the assignment-only selection `base[i, j, ..]`.
+    Index {
+        base: Box<Expr>,
+        indices: Vec<Expr>,
+    },
     /// Tuple element access `t.0`. A place when `base` is one.
     Field {
         base: Box<Expr>,
@@ -328,6 +341,7 @@ impl Expr {
         match &self.kind {
             ExprKind::Ident(_) | ExprKind::Deref(_) => true,
             ExprKind::Field { base, .. } | ExprKind::Member { base, .. } => base.is_place(),
+            ExprKind::Index { base, indices } => indices.len() == 1 && base.is_place(),
             _ => false,
         }
     }
@@ -338,6 +352,7 @@ impl Expr {
         match &self.kind {
             ExprKind::Wildcard => true,
             ExprKind::Tuple(elems) => !elems.is_empty() && elems.iter().all(Expr::is_assign_target),
+            ExprKind::Index { base, indices } => !indices.is_empty() && base.is_place(),
             _ => self.is_place(),
         }
     }

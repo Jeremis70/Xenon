@@ -177,6 +177,7 @@ impl Expr {
         match &self.kind {
             ExprKind::Binding(_) | ExprKind::Deref(_) => true,
             ExprKind::Field { base, .. } => base.is_place(),
+            ExprKind::Index { base, .. } => base.is_place(),
             _ => false,
         }
     }
@@ -185,7 +186,8 @@ impl Expr {
 /// The kinds of [`Expr`].
 ///
 /// Place expressions ([`Binding`](ExprKind::Binding),
-/// [`Deref`](ExprKind::Deref), and a [`Field`](ExprKind::Field) of a place)
+/// [`Deref`](ExprKind::Deref), and a [`Field`](ExprKind::Field) or
+/// [`Index`](ExprKind::Index) of a place)
 /// denote memory locations; using one as a value reads it. Every other
 /// expression produces a value.
 #[derive(Debug, Clone, PartialEq)]
@@ -205,6 +207,10 @@ pub enum ExprKind {
     /// Builds a tuple from its elements, evaluated left to right. `()` is
     /// the empty tuple.
     Tuple(Vec<Expr>),
+    /// Builds a fixed-size array, evaluating elements left to right.
+    Array(Vec<Expr>),
+    /// An array element, with an integer index. A place when `base` is one.
+    Index { base: Box<Expr>, index: Box<Expr> },
     /// Builds a struct, the expression's type, from all of its fields.
     ///
     /// Each value is paired with the index of its field. The values are in
@@ -221,8 +227,8 @@ pub enum ExprKind {
     /// A binary operation whose operands already have the types MIR typing
     /// requires (identical, except for shift amounts).
     ///
-    /// The one exception is `==` / `!=` on two tuples of the same type: MIR
-    /// has no tuple comparison, so MIR construction evaluates both operands
+    /// The one exception is `==` / `!=` on aggregates of the same type: MIR
+    /// has no aggregate comparison, so MIR construction evaluates both operands
     /// into temporaries and compares them element by element.
     Binary {
         op: BinOp,

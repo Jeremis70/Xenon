@@ -389,6 +389,10 @@ macro_rules! make_mir_visitor {
                 let Place { local, projection } = place;
                 self.visit_local(local, local_context, location);
                 for elem in iter_items!(projection, $($mutability)?) {
+                    if let ProjectionElem::Index(index) = elem {
+                        self.visit_local(index,
+                            PlaceContext::NonMutatingUse(NonMutatingUseContext::Copy), location);
+                    }
                     self.visit_projection_elem(elem, location);
                 }
             }

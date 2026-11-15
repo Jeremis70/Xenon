@@ -222,12 +222,15 @@ pub enum AssertKind {
     ShiftOutOfRange,
     /// A cast whose target type cannot represent the value exactly.
     LossyCast,
+    /// An array index is negative or not smaller than its length.
+    BoundsCheck,
 }
 
 impl AssertKind {
     /// The panic message reported to the user when the assertion fails.
     pub fn description(&self) -> &'static str {
         match self {
+            AssertKind::BoundsCheck => "array index out of bounds",
             AssertKind::Overflow(BinOp::Add) => "attempt to add with overflow",
             AssertKind::Overflow(BinOp::Sub) => "attempt to subtract with overflow",
             AssertKind::Overflow(BinOp::Mul) => "attempt to multiply with overflow",
@@ -274,6 +277,18 @@ impl Place {
         self
     }
 
+    /// Selects an array element using a snapshotted integer local.
+    pub fn index(mut self, index: Local) -> Self {
+        self.projection.push(ProjectionElem::Index(index));
+        self
+    }
+
+    /// Selects a statically in-bounds array element.
+    pub fn constant_index(mut self, index: u32) -> Self {
+        self.projection.push(ProjectionElem::ConstantIndex(index));
+        self
+    }
+
     /// Returns the local if the place has no projections.
     pub fn as_local(&self) -> Option<Local> {
         self.projection.is_empty().then_some(self.local)
@@ -296,15 +311,17 @@ impl From<Local> for Place {
 
 /// One step of a [`Place`] projection.
 ///
-/// Arrays will add `Index(Local)` and `ConstantIndex`. Each new element only
-/// needs typing, verification, and backend support; analyses see it through
-/// [`super::visit`] automatically.
+/// Index locals are reported as reads by [`super::visit`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ProjectionElem {
     /// Follows a pointer or reference to its pointee.
     Deref,
     /// Selects element `index` of a tuple.
     Field(u32),
+    /// Selects an array element; construction must guard its bounds.
+    Index(Local),
+    /// Selects an array element with a compile-time index.
+    ConstantIndex(u32),
 }
 
 // ---------------------------------------------------------------------------
@@ -426,7 +443,7 @@ fn zero_value(ty: &Type, structs: &StructTable) -> Option<ConstValue> {
         ConstValue::Float(0.0)
     } else if matches!(ty, Type::Pointer(_)) {
         ConstValue::Address(BigInt::ZERO)
-    } else if matches!(ty, Type::Struct(_)) && ty.is_zero_sized(structs) {
+    } else if matches!(ty, Type::Struct(_) | Type::Array(..)) && ty.is_zero_sized(structs) {
         // Not spelled out field by field: the fields of a struct without
         // data can still form an enormous tree.
         ConstValue::ZeroSized
@@ -455,10 +472,10 @@ pub enum ConstValue {
     Float(f64),
     /// A machine address; must fit the target pointer width.
     Address(BigInt),
-    /// The elements of a tuple or the fields of a struct, typed by the
+    /// The elements of a tuple or array, or fields of a struct, typed by the
     /// constant's type.
     Tuple(Vec<ConstValue>),
-    /// The only value of a zero-sized struct, whatever its fields.
+    /// The only value of a zero-sized struct or array.
     ZeroSized,
 }
 
@@ -504,6 +521,8 @@ pub enum AggregateKind {
     Tuple,
     /// A struct whose fields, in declaration order, are the operands.
     Struct(StructTy),
+    /// An array with the given element type and length.
+    Array(Box<Type>, u32),
 }
 
 impl Rvalue {
@@ -530,6 +549,8 @@ impl fmt::Display for Place {
             text = match elem {
                 ProjectionElem::Deref => format!("(*{text})"),
                 ProjectionElem::Field(index) => format!("{text}.{index}"),
+                ProjectionElem::Index(index) => format!("{text}[{index}]"),
+                ProjectionElem::ConstantIndex(index) => format!("{text}[{index}]"),
             };
         }
         f.write_str(&text)
@@ -552,6 +573,16 @@ fn write_const_value(f: &mut fmt::Formatter<'_>, value: &ConstValue, ty: &Type) 
         ConstValue::Address(value) => write!(f, "@{value:#x}: {ty}"),
         ConstValue::ZeroSized => write!(f, "{ty}()"),
         ConstValue::Tuple(values) => {
+            if let Type::Array(elem, _) = ty {
+                f.write_str("[")?;
+                for (index, value) in values.iter().enumerate() {
+                    if index > 0 {
+                        f.write_str(", ")?;
+                    }
+                    write_const_value(f, value, elem)?;
+                }
+                return f.write_str("]");
+            }
             // A struct's field types are not at hand here: its name and the
             // bare values have to do.
             if let Type::Struct(struct_ty) = ty {
@@ -622,10 +653,11 @@ impl fmt::Display for Rvalue {
             Rvalue::AddressOf(IndirectionKind::Pointer, place) => write!(f, "@raw {place}"),
             Rvalue::AddressOf(IndirectionKind::Reference, place) => write!(f, "@ref {place}"),
             Rvalue::Aggregate(kind, operands) => {
+                let array = matches!(kind, AggregateKind::Array(..));
                 if let AggregateKind::Struct(struct_ty) = kind {
                     f.write_str(&struct_ty.name)?;
                 }
-                f.write_str("(")?;
+                f.write_str(if array { "[" } else { "(" })?;
                 for (index, operand) in operands.iter().enumerate() {
                     if index > 0 {
                         f.write_str(", ")?;
@@ -633,7 +665,13 @@ impl fmt::Display for Rvalue {
                     write!(f, "{operand}")?;
                 }
                 let one_tuple = operands.len() == 1 && *kind == AggregateKind::Tuple;
-                f.write_str(if one_tuple { ",)" } else { ")" })
+                f.write_str(if array {
+                    "]"
+                } else if one_tuple {
+                    ",)"
+                } else {
+                    ")"
+                })
             }
         }
     }

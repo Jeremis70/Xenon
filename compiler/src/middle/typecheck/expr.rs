@@ -80,6 +80,14 @@ impl FnCtxt<'_, '_> {
                 })
             }
             Ast::Tuple(elems) => self.check_tuple(elems, expected, span),
+            Ast::Array(elems) => self.check_array(elems, expected, span),
+            Ast::Index { base, indices } => {
+                if indices.len() != 1 {
+                    return Err(SemanticError::MultiIndexAsValue { span });
+                }
+                let base = self.check_base(base, Access::Value)?;
+                self.check_index(base, &indices[0], span)
+            }
             Ast::Wildcard => Err(SemanticError::WildcardAsValue { span }),
             Ast::AddressOf(operand) => {
                 let place = self.check_place(operand)?;
@@ -314,6 +322,10 @@ impl FnCtxt<'_, '_> {
             Ast::Field { base, index } if base.is_place() => {
                 self.check_field(base, *index, Access::Place, span)
             }
+            Ast::Index { base, indices } if base.is_place() && indices.len() == 1 => {
+                let base = self.check_base(base, Access::Place)?;
+                self.check_index(base, &indices[0], span)
+            }
             Ast::Member { base, name, .. } if base.is_place() => {
                 self.check_member(base, name, Access::Place, span)
             }
@@ -479,6 +491,7 @@ pub(super) fn needs_context(expr: &ast::Expr) -> bool {
     match &expr.kind {
         Ast::Address(_) | Ast::AddressOf(_) => true,
         Ast::Tuple(elems) => elems.iter().any(needs_context),
+        Ast::Array(elems) => elems.is_empty() || elems.iter().any(needs_context),
         Ast::IfElse {
             then_branch,
             else_branch,

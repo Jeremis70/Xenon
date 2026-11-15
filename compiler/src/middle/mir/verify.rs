@@ -420,7 +420,9 @@ impl Checker<'_> {
                     self.report(VerifyErrorKind::UnknownStruct(struct_ty.id));
                 }
             }
-            Type::Pointer(inner) | Type::Reference(inner) => self.check_structs_exist(inner),
+            Type::Pointer(inner) | Type::Reference(inner) | Type::Array(inner, _) => {
+                self.check_structs_exist(inner)
+            }
             Type::Tuple(elems) => elems.iter().for_each(|elem| self.check_structs_exist(elem)),
             _ => {}
         }
@@ -446,7 +448,9 @@ impl Checker<'_> {
                 .is_indirect()
                 .then(|| (value, self.target.address_bounds())),
             ConstValue::ZeroSized => {
-                if !(matches!(ty, Type::Struct(_)) && ty.is_zero_sized(self.program.structs())) {
+                if !(matches!(ty, Type::Struct(_) | Type::Array(..))
+                    && ty.is_zero_sized(self.program.structs()))
+                {
                     self.report(VerifyErrorKind::ConstantKindMismatch(ty.clone()));
                 }
                 return;

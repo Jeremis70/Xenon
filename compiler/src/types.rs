@@ -46,6 +46,8 @@ pub enum Type {
     /// Anonymous positional product `(T1, T2, ..)`. The empty tuple `()` is
     /// the unit type, the return type of functions that return nothing.
     Tuple(Vec<Type>),
+    /// A fixed-size homogeneous array, written `[N]T`.
+    Array(Box<Type>, u32),
 
     /// A user-defined `struct`. Its fields live in the program's
     /// [`StructTable`].
@@ -157,10 +159,11 @@ impl StructTable {
         }
     }
 
-    /// The element types of a tuple or struct `ty`, in order; `None` for
+    /// The element types of a tuple, struct, or array `ty`, in order; `None` for
     /// other types and unknown structs.
     pub fn field_tys(&self, ty: &Type) -> Option<Vec<Type>> {
         match ty {
+            Type::Array(elem, len) => Some(vec![(**elem).clone(); *len as usize]),
             Type::Tuple(elems) => Some(elems.clone()),
             Type::Struct(struct_ty) => {
                 let def = self.get(struct_ty.id)?;
@@ -206,8 +209,8 @@ impl Type {
     }
 
     /// Returns `true` for types with a single value and no bits: `i0` and
-    /// `u0`, which only hold `0`, and tuples and structs of such types,
-    /// including `()` and structs without fields.
+    /// `u0`, which only hold `0`, and aggregates of such types,
+    /// including `()`, structs without fields, and empty arrays.
     pub fn is_zero_sized(&self, structs: &StructTable) -> bool {
         self.is_zero_sized_with(structs, &mut HashMap::new())
     }
@@ -222,6 +225,7 @@ impl Type {
     ) -> bool {
         match self {
             Type::Int(0) | Type::UInt(0) => true,
+            Type::Array(elem, len) => *len == 0 || elem.is_zero_sized_with(structs, known),
             Type::Tuple(elems) => elems
                 .iter()
                 .all(|elem| elem.is_zero_sized_with(structs, known)),
@@ -241,16 +245,17 @@ impl Type {
         }
     }
 
-    /// Returns `true` for tuples and structs, the types made of elements.
+    /// Returns `true` for tuples, structs, and arrays, the types made of elements.
     pub fn is_aggregate(&self) -> bool {
-        matches!(self, Type::Tuple(_) | Type::Struct(_))
+        matches!(self, Type::Tuple(_) | Type::Struct(_) | Type::Array(..))
     }
 
-    /// Returns `true` for a reference type or a tuple containing one. A
+    /// Returns `true` for a reference type or a tuple or array containing one. A
     /// struct never contains one: its fields cannot have reference types.
     pub fn contains_reference(&self) -> bool {
         match self {
             Type::Reference(_) => true,
+            Type::Array(elem, _) => elem.contains_reference(),
             Type::Tuple(elems) => elems.iter().any(Type::contains_reference),
             _ => false,
         }
@@ -418,6 +423,7 @@ impl std::fmt::Display for Type {
             Type::Bool => write!(f, "bool"),
             Type::Pointer(inner) => write!(f, "*{inner}"),
             Type::Reference(inner) => write!(f, "&{inner}"),
+            Type::Array(elem, len) => write!(f, "[{len}]{elem}"),
             Type::Tuple(elems) => {
                 f.write_str("(")?;
                 for (index, elem) in elems.iter().enumerate() {

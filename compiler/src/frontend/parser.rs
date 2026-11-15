@@ -301,6 +301,18 @@ impl<'a> Parser<'a> {
         let token = self.peek().ok_or_else(|| self.error("expected type"))?;
         let start = token.span.start;
         let kind = match token.kind {
+            TokenKind::LBracket => {
+                self.advance();
+                let length = self.expect(TokenKind::Int)?;
+                let length = u32::try_from(length.int_value()?).map_err(|_| {
+                    ParseError::new(
+                        "array length must be an integer from 0 to 4294967295",
+                        length.span,
+                    )
+                })?;
+                self.expect(TokenKind::RBracket)?;
+                TypeExprKind::Array(Box::new(self.parse_type()?), length)
+            }
             TokenKind::Star => {
                 self.advance();
                 TypeExprKind::Pointer(Box::new(self.parse_type()?))
@@ -527,6 +539,7 @@ impl<'a> Parser<'a> {
             | TokenKind::Ident
             | TokenKind::SelfValue
             | TokenKind::Underscore
+            | TokenKind::LBracket
             | TokenKind::LParen
             | TokenKind::Star => self.parse_simple_statement(start),
             _ => Err(self.error("expected statement")),
@@ -975,6 +988,21 @@ impl<'a> Parser<'a> {
         let mut left = self.nud(token)?;
 
         while let Some(t) = self.peek() {
+            if t.kind == TokenKind::LBracket {
+                self.advance();
+                let indices = self.parse_bracket_elements()?;
+                if indices.is_empty() {
+                    return Err(self.error("indexing requires at least one index"));
+                }
+                left = Expr {
+                    span: self.span_since(left.span.start),
+                    kind: ExprKind::Index {
+                        base: Box::new(left),
+                        indices,
+                    },
+                };
+                continue;
+            }
             // `.N` binds tighter than every prefix and infix operator.
             if t.kind == TokenKind::Period {
                 self.advance();
@@ -1014,6 +1042,10 @@ impl<'a> Parser<'a> {
     fn nud(&mut self, token: &'a Token) -> ParseResult<Expr> {
         let start = token.span.start;
         match token.kind {
+            TokenKind::LBracket => Ok(Expr {
+                kind: ExprKind::Array(self.parse_bracket_elements()?),
+                span: self.span_since(start),
+            }),
             TokenKind::Minus | TokenKind::Not | TokenKind::Tilde => {
                 let op = UnaryOp::from_token(&token.kind)
                     .ok_or_else(|| self.error(format!("not a unary operator: {:?}", token.kind)))?;
@@ -1145,6 +1177,18 @@ impl<'a> Parser<'a> {
                 token.span,
             )),
         }
+    }
+
+    fn parse_bracket_elements(&mut self) -> ParseResult<Vec<Expr>> {
+        let mut elems = Vec::new();
+        while !self.at(TokenKind::RBracket) {
+            elems.push(self.parse_expression()?);
+            if !self.eat(TokenKind::Comma) {
+                break;
+            }
+        }
+        self.expect(TokenKind::RBracket)?;
+        Ok(elems)
     }
 
     /// Parses what follows the `.` of `base.name` or `base.N`: a member
