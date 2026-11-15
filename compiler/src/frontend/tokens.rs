@@ -234,8 +234,10 @@ enum RawKind {
 
     // ---------- Float literals (before plain integer regex) ----------
     // A float needs digits before its `.`: `.5` is not a float, so that
-    // `t.5` lexes as `Period Int`.
-    #[regex(r"[0-9]+\.[0-9]*(?:[eE][+-]?[0-9]+)?", parse_float)]
+    // `t.5` lexes as `Period Int`. An exponent needs digits after the `.`:
+    // `0.e1` is the float `0.` and the name `e1`, so that `t.0.e1` reads a
+    // member.
+    #[regex(r"[0-9]+\.(?:[0-9]+(?:[eE][+-]?[0-9]+)?)?", parse_float)]
     FloatLit((f64, String)),
 
     // ---------- Delimiters ----------

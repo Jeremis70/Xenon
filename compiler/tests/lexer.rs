@@ -193,3 +193,18 @@ fn lex_struct_keywords() {
         ]
     );
 }
+
+#[test]
+fn float_exponent_needs_fraction_digits() {
+    let kinds = |src: &str| -> Vec<TokenKind> {
+        lex(src)
+            .expect("lexing should succeed")
+            .iter()
+            .map(|t| t.kind)
+            .collect()
+    };
+    assert_eq!(kinds("1.5e3 2.0E-4 3."), vec![TokenKind::Float; 3]);
+    // `0.e1` is the float `0.` and the name `e1`, so that `t.0.e1` reads
+    // a member.
+    assert_eq!(kinds("0.e1"), vec![TokenKind::Float, TokenKind::Ident]);
+}

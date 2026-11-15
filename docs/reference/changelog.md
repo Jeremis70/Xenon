@@ -44,6 +44,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   reports "expected a type before `x`".
 - Only `i` or `u` followed by digits is an integer type. Names such as
   `item`, `user`, and `u` no longer report a missing or invalid bit width.
+- A float exponent needs digits after the point: `1.5e3` is a float, `1.e3`
+  is not, so that `t.0.e3` reads the member `e3` of a tuple element.
+- Assigning the same element twice in one parallel assignment is also
+  rejected through a reference variable (`t.0, t.0 = 1, 2` with `&(i32,
+  i32) t`); it was only detected on plain variables.
 - Taking a reference `&T` to a variable requires the variable to be
   assigned already. Taking a pointer `*T` does not.
 

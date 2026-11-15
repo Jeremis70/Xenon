@@ -91,9 +91,11 @@ impl<'a> FnItem<'a> {
     }
 }
 
-/// The struct name the backend needs for itself: it renames a function
-/// called `main` to `_xe.main`, which would be a member of this struct.
-const RESERVED_STRUCT_NAME: &str = "_xe";
+/// The struct names the backend needs for itself. A member of a struct is
+/// compiled as `Struct.member`, and the backend already owns two such
+/// prefixes: it renames a function called `main` to `_xe.main`, and LLVM
+/// reserves every name starting with `llvm.` for its intrinsics.
+const RESERVED_STRUCT_NAMES: [&str; 2] = ["_xe", "llvm"];
 
 /// Every struct of a program.
 #[derive(Debug, Default)]
@@ -122,7 +124,7 @@ impl<'a> StructItems<'a> {
     /// Gives `decl` its [`StructId`]; its fields come later.
     fn declare(&mut self, decl: &'a ast::StructDecl, program: &ast::Program) -> SemanticResult<()> {
         let name = decl.name.as_str();
-        if name == RESERVED_STRUCT_NAME {
+        if RESERVED_STRUCT_NAMES.contains(&name) {
             return Err(SemanticError::ReservedName {
                 name: decl.name.clone(),
                 span: decl.name_span,
