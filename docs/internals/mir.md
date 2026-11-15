@@ -30,15 +30,19 @@ A `Body` is one function:
   `Unreachable`, and `EndOfBody` (allowed only in the `Built` phase).
 - **Places**: a local plus projections: `Deref`, as in `(*_1)`, and
   `Field(i)`, a tuple element or the struct field with that index in
-  declaration order, as in `_1.0` or `(*_1).1`. Arrays will add index
-  projections.
+  declaration order, as in `_1.0` or `(*_1).1`. Arrays use `Index(Local)`
+  with a snapshotted integer local, or `ConstantIndex(u32)` for statically
+  in-bounds elements. Visitors report index locals as reads.
 - **Operands**: `copy place` or `const value`. Constants include tuples,
   such as `const (0_i32, false)` and the unit value `const ()`.
 - **Rvalues**: `Use`, `UnaryOp`, `BinaryOp`, `Overflows`, `Cast`,
   `CastLoses`, `AddressOf`, and `Aggregate`, which builds a whole tuple or
-  struct at once: `_2 = (copy _1, const true)` or `_2 = Rect(copy _1, copy _3)`.
+  struct or array at once: `_2 = (copy _1, const true)`,
+  `_2 = Rect(copy _1, copy _3)`, or `_2 = [copy _1, copy _3]`.
   A tuple's type is derived from its operands; a struct aggregate names its
   struct, and its operands are the fields in declaration order.
+  An array aggregate records its element type and length; every operand
+  must have that element type.
 - **Struct definitions** live in the program's `StructTable`
   (`MirProgram::structs`), not in the type: `Type::Struct` only carries the
   `StructId` and the name. Whatever depends on the fields takes the table:
@@ -50,7 +54,7 @@ A `Body` is one function:
   normalization makes that check an explicit `CastLoses` guard, a `bool`
   that never traps, after which the `Cast` is the raw conversion: truncate
   or extend, round to nearest, or copy the bits.
-- **Tuples and structs have no operators.** `BinaryOp` is only defined on
+- **Tuples, structs, and arrays have no operators.** `BinaryOp` is only defined on
   scalars; MIR construction expands their `==` and `!=` (see below).
 
 Example dump:
@@ -163,11 +167,18 @@ locals that are not initialized on every incoming path. Arguments begin
 initialized; `StorageLive` and `StorageDead` clear a local's initialized
 state. Call destinations become initialized only on the normal-return edge.
 Indirect places track initialization of their base pointer, not the memory
-they point to. Tuples and structs are initialized as a whole (by an
+they point to. Tuples, structs, and arrays are initialized as a whole (by an
 `Aggregate`, a call, or a constant); a store to one element requires the
 whole value to be initialized already, so partial initialization is never
 tracked. Taking a reference (`@ref _1`) reads the local, which must be
 initialized; taking a pointer (`@raw _1`) neither reads nor writes it.
+
+Array indexing is lowered with explicit `Assert(BoundsCheck)` terminators
+already in Built MIR. The base location and index are evaluated once;
+the index must be non-negative and smaller than the length before the
+projection is used, including for address-of and assignment. These checks
+are unconditional, not controlled by arithmetic overflow mode. LLVM uses
+native array types and guarded element-address GEPs.
 
 `analysis::analyze_liveness` is a reusable backward local analysis. Results
 are owned by the caller rather than cached on `Body`, so a MIR mutation cannot
@@ -185,7 +196,7 @@ pointer width.
 
 `analysis::check_known_panics` reads Checked MIR and reports every reachable
 operation that traps whenever it executes: division or remainder by zero,
-signed `MIN / -1`, integer overflow, out-of-range shifts, and casts that
+signed `MIN / -1`, integer overflow, out-of-range shifts, array bounds checks, and casts that
 cannot represent their value exactly (`300_i32 as u8`, `2.5_f64 as i32`). These are
 errors, whatever the overflow mode, so diagnostics do not depend on the
 optimization level. Constants propagate through locals defined exactly once
