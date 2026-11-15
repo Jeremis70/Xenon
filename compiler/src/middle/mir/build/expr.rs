@@ -296,7 +296,8 @@ impl Builder<'_> {
     ) -> LowerResult<Rvalue> {
         let (block, lhs_place) = unpack!(self.as_stored_tuple(block, lhs, has_side_effects(rhs)));
         let (block, rhs_place) = unpack!(self.as_stored_tuple(block, rhs, false));
-        let equal = self.elements_equal(block, lhs_place, rhs_place, &lhs.ty, span);
+        let (block, equal) =
+            unpack!(self.elements_equal(block, lhs_place, rhs_place, &lhs.ty, span));
         Ok(Flow::Continue(
             block,
             match op {
@@ -330,42 +331,42 @@ impl Builder<'_> {
     /// element for tuples, structs, and arrays, and returns the `bool` result.
     fn elements_equal(
         &mut self,
-        block: BasicBlock,
+        mut block: BasicBlock,
         lhs: Place,
         rhs: Place,
         ty: &Type,
         span: Span,
-    ) -> Operand {
+    ) -> LowerResult<Operand> {
         let source_info = self.source_info(span);
         // Values without data are always equal. Their fields are not
         // compared one by one: there can be an enormous tree of them.
         if ty.is_aggregate() && ty.is_zero_sized(self.structs) {
-            return Operand::constant(Constant::bool(true));
+            return Ok(Flow::Continue(
+                block,
+                Operand::constant(Constant::bool(true)),
+            ));
+        }
+        if let Type::Array(elem, len) = ty {
+            return self.array_elements_equal(block, lhs, rhs, elem, *len, span);
         }
         let Some(elems) = self.structs.field_tys(ty) else {
             let equal = self.cfg.new_temp(Type::Bool, span);
             let rvalue = Rvalue::binary(BinOp::Eq, Operand::Copy(lhs), Operand::Copy(rhs));
             self.cfg
                 .push_assign(block, source_info, equal.into(), rvalue);
-            return Operand::Copy(equal.into());
+            return Ok(Flow::Continue(block, Operand::Copy(equal.into())));
         };
         let mut all_equal: Option<Operand> = None;
         for (index, elem_ty) in elems.iter().enumerate() {
             let index = index as u32;
-            let element = |place: Place| {
-                if matches!(ty, Type::Array(..)) {
-                    place.constant_index(index)
-                } else {
-                    place.field(index)
-                }
-            };
-            let equal = self.elements_equal(
+            let (next, equal) = unpack!(self.elements_equal(
                 block,
-                element(lhs.clone()),
-                element(rhs.clone()),
+                lhs.clone().field(index),
+                rhs.clone().field(index),
                 elem_ty,
                 span,
-            );
+            ));
+            block = next;
             all_equal = Some(match all_equal {
                 None => equal,
                 Some(previous) => {
@@ -378,7 +379,75 @@ impl Builder<'_> {
             });
         }
         // `()` has a single value, so two units are always equal.
-        all_equal.unwrap_or_else(|| Operand::constant(Constant::bool(true)))
+        Ok(Flow::Continue(
+            block,
+            all_equal.unwrap_or_else(|| Operand::constant(Constant::bool(true))),
+        ))
+    }
+
+    fn array_elements_equal(
+        &mut self,
+        block: BasicBlock,
+        lhs: Place,
+        rhs: Place,
+        elem: &Type,
+        len: u32,
+        span: Span,
+    ) -> LowerResult<Operand> {
+        let source_info = self.source_info(span);
+        let index = self.cfg.new_temp(Type::UInt(32), span);
+        let all_equal = self.cfg.new_temp(Type::Bool, span);
+        self.cfg.push_assign(
+            block,
+            source_info,
+            index.into(),
+            Rvalue::Use(Operand::constant(Constant::int(0, Type::UInt(32)))),
+        );
+        self.cfg.push_assign(
+            block,
+            source_info,
+            all_equal.into(),
+            Rvalue::Use(Operand::constant(Constant::bool(true))),
+        );
+        let head = self.cfg.new_block();
+        let body = self.cfg.new_block();
+        let exit = self.cfg.new_block();
+        self.cfg
+            .terminate(block, source_info, TerminatorKind::Goto { target: head });
+        let in_bounds = self.cfg.new_temp(Type::Bool, span);
+        self.cfg.push_assign(
+            head,
+            source_info,
+            in_bounds.into(),
+            Rvalue::binary(
+                BinOp::Lt,
+                Operand::Copy(index.into()),
+                Operand::constant(Constant::int(len, Type::UInt(32))),
+            ),
+        );
+        self.switch_bool(head, Operand::Copy(in_bounds.into()), body, exit, span);
+        let (body, equal) =
+            unpack!(self.elements_equal(body, lhs.index(index), rhs.index(index), elem, span));
+        self.cfg.push_assign(
+            body,
+            source_info,
+            all_equal.into(),
+            Rvalue::binary(BinOp::BitAnd, Operand::Copy(all_equal.into()), equal),
+        );
+        // The body only runs for index < len, so even len == u32::MAX cannot overflow.
+        self.cfg.push_assign(
+            body,
+            source_info,
+            index.into(),
+            Rvalue::binary(
+                BinOp::Add,
+                Operand::Copy(index.into()),
+                Operand::constant(Constant::int(1, Type::UInt(32))),
+            ),
+        );
+        self.cfg
+            .terminate(body, source_info, TerminatorKind::Goto { target: head });
+        Ok(Flow::Continue(exit, Operand::Copy(all_equal.into())))
     }
 
     /// Lowers `expr` into a new temporary.

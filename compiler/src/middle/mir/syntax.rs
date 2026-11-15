@@ -395,7 +395,7 @@ impl Constant {
     }
 
     /// The zero value of `ty`: `false`, `0`, `0.0`, the null pointer, or a
-    /// tuple or struct of zero values.
+    /// tuple, struct, or array of zero values.
     ///
     /// Returns `None` for types without a zero value, such as references,
     /// which must never be null, and tuples containing them.
@@ -406,13 +406,24 @@ impl Constant {
         })
     }
 
-    /// The elements of a tuple or struct constant, each with its type;
-    /// `None` if it is not a well-formed constant of such a type.
+    /// The explicit elements of a tuple, struct, or array constant, each
+    /// with its type; `None` for malformed or compact zero constants.
     pub fn elems(&self, structs: &StructTable) -> Option<Vec<Constant>> {
-        let (ConstValue::Tuple(values), Some(tys)) = (&self.value, structs.field_tys(&self.ty))
-        else {
+        let ConstValue::Tuple(values) = &self.value else {
             return None;
         };
+        if let Type::Array(elem, len) = &self.ty {
+            return (values.len() == *len as usize).then(|| {
+                values
+                    .iter()
+                    .map(|value| Constant {
+                        ty: (**elem).clone(),
+                        value: value.clone(),
+                    })
+                    .collect()
+            });
+        }
+        let tys = structs.field_tys(&self.ty)?;
         (values.len() == tys.len()).then(|| {
             tys.into_iter()
                 .zip(values)
@@ -447,6 +458,9 @@ fn zero_value(ty: &Type, structs: &StructTable) -> Option<ConstValue> {
         // Not spelled out field by field: the fields of a struct without
         // data can still form an enormous tree.
         ConstValue::ZeroSized
+    } else if let Type::Array(elem, _) = ty {
+        zero_value(elem, structs)?;
+        ConstValue::ArrayZero
     } else if ty.is_aggregate() {
         let elems = structs.field_tys(ty)?;
         ConstValue::Tuple(
@@ -477,6 +491,8 @@ pub enum ConstValue {
     Tuple(Vec<ConstValue>),
     /// The only value of a zero-sized struct or array.
     ZeroSized,
+    /// An all-zero array, without expanding its elements.
+    ArrayZero,
 }
 
 // ---------------------------------------------------------------------------
@@ -572,6 +588,7 @@ fn write_const_value(f: &mut fmt::Formatter<'_>, value: &ConstValue, ty: &Type) 
         ConstValue::Float(value) => write!(f, "{value:?}_{ty}"),
         ConstValue::Address(value) => write!(f, "@{value:#x}: {ty}"),
         ConstValue::ZeroSized => write!(f, "{ty}()"),
+        ConstValue::ArrayZero => write!(f, "zero::<{ty}>"),
         ConstValue::Tuple(values) => {
             if let Type::Array(elem, _) = ty {
                 f.write_str("[")?;
@@ -613,6 +630,7 @@ fn write_untyped_value(f: &mut fmt::Formatter<'_>, value: &ConstValue) -> fmt::R
         ConstValue::Float(value) => write!(f, "{value:?}"),
         ConstValue::Address(value) => write!(f, "@{value:#x}"),
         ConstValue::ZeroSized => f.write_str("()"),
+        ConstValue::ArrayZero => f.write_str("zero_array"),
         ConstValue::Tuple(values) => {
             f.write_str("(")?;
             for (index, value) in values.iter().enumerate() {

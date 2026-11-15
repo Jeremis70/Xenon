@@ -11,6 +11,39 @@ use xenonc::middle::typecheck::check_program;
 
 const TARGET: TargetSpec = TargetSpec::new(64);
 
+#[test]
+fn array_equality_mir_size_is_independent_of_length() {
+    for length in [4, 1024, u32::MAX] {
+        let program = build(&format!(
+            "fn equal(&[{length}]u8 a, &[{length}]u8 b)->bool {{ return a == b; }}"
+        ));
+        let body = program.bodies().next().expect("comparison body");
+        let statements: usize = body
+            .basic_blocks()
+            .iter()
+            .map(|block| block.statements.len())
+            .sum();
+        assert!(
+            statements < 40,
+            "length {length} generated {statements} MIR statements"
+        );
+        assert!(
+            body.basic_blocks().len() < 12,
+            "comparison should use a bounded CFG"
+        );
+    }
+}
+
+#[test]
+fn array_zero_values_remain_compact_at_maximum_length() {
+    let dump = mir("fn f()->[4294967295]u8 { return loop { break; }; }");
+    assert!(
+        dump.len() < 4096,
+        "an array zero value must not expand its elements"
+    );
+    assert!(dump.contains("const zero::<[4294967295]u8>"), "{dump}");
+}
+
 /// Runs the front end and type checking on `src`, then builds and verifies
 /// its MIR.
 fn build(src: &str) -> MirProgram {

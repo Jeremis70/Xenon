@@ -1040,7 +1040,7 @@ impl<'ctx, 'a> MirCodegen<'ctx, 'a> {
                     .map_err(llvm_error("address constant conversion"))?
                     .into()
             }
-            ConstValue::ZeroSized => ty.const_zero(),
+            ConstValue::ZeroSized | ConstValue::ArrayZero => ty.const_zero(),
             ConstValue::Tuple(_) => {
                 let elems = constant
                     .elems(&self.structs)
@@ -1124,6 +1124,17 @@ impl<'ctx, 'a> MirCodegen<'ctx, 'a> {
         ty: &Type,
         index: IntValue<'ctx>,
     ) -> Result<PointerValue<'ctx>, BackendError> {
+        // Bounds checks have established a non-negative index. GEP sign-extends
+        // narrow indices, so explicitly zero-extend them to the target width.
+        let index = self
+            .builder
+            .build_int_cast_sign_flag(
+                index,
+                self.int_type(self.target.pointer_width())?,
+                false,
+                "index",
+            )
+            .map_err(llvm_error("array index width conversion"))?;
         // Construction guards dynamic indices and verification checks constant ones.
         unsafe {
             self.builder.build_in_bounds_gep(

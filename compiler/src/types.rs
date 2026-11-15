@@ -159,11 +159,10 @@ impl StructTable {
         }
     }
 
-    /// The element types of a tuple, struct, or array `ty`, in order; `None` for
+    /// The element types of a tuple or struct `ty`, in order; `None` for
     /// other types and unknown structs.
     pub fn field_tys(&self, ty: &Type) -> Option<Vec<Type>> {
         match ty {
-            Type::Array(elem, len) => Some(vec![(**elem).clone(); *len as usize]),
             Type::Tuple(elems) => Some(elems.clone()),
             Type::Struct(struct_ty) => {
                 let def = self.get(struct_ty.id)?;
