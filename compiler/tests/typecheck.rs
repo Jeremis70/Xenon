@@ -14,6 +14,67 @@ use xenonc::types::{MAX_INT_WIDTH, Type};
 const TARGET: TargetSpec = TargetSpec::new(64);
 
 #[test]
+fn arrays_infer_literal_types_from_typed_elements() {
+    for comparison in [
+        "[x, 0] == [0, 0]",
+        "[0, 0] == [x, 0]",
+        "[x, x] == [0, 0]",
+        "([x, 0] if c else [0, 0]) == [0, 0]",
+        "([x, 0], true) == ([0, 0], true)",
+    ] {
+        check(&format!(
+            "fn f(u8 x, bool c)->bool {{ return {comparison}; }}"
+        ))
+        .expect("typed array elements should provide context for untyped literals");
+    }
+}
+
+#[test]
+fn arrays_index_reference_valued_calls_transparently() {
+    check(
+        "fn id(&[2]u8 a)->&[2]u8 { return @a; }
+         fn f()->u8 { let [2]u8 a = [1, 2]; return id(@a)[0]; }",
+    )
+    .expect("reference-valued array calls should be indexable");
+    assert!(matches!(
+        error(
+            "fn id(*[2]u8 a)->*[2]u8 { return a; }
+               fn f()->u8 { let [2]u8 a = [1, 2]; return id(@a)[0]; }"
+        ),
+        SemanticError::IndexOfNonArray { .. }
+    ));
+}
+
+#[test]
+fn arrays_reject_overlapping_parallel_assignment_targets() {
+    for (source, target) in [
+        ("fn f([2]u8 a) { a, a[0] = [3, 4], 5; }", "a[0]"),
+        ("fn f([2]u8 a) { a[0], a = 5, [3, 4]; }", "a"),
+        ("fn f([2]u8 a) { a[1], a[1] = 3, 4; }", "a[1]"),
+        ("fn f(&[2]u8 a) { a, a[0] = [3, 4], 5; }", "a[0]"),
+        ("fn f([2][2]u8 a) { a[0], a[0][1] = [3, 4], 5; }", "a[0][1]"),
+        ("fn f([2]u8 a, u8 i) { a, a[i] = [3, 4], 5; }", "a[?]"),
+        ("fn f([2]u8 a, u8 i) { a[i], a = 5, [3, 4]; }", "a"),
+        (
+            "fn f([2][2]u8 a, u8 i) { a[0], a[0][i] = [3, 4], 5; }",
+            "a[0][?]",
+        ),
+    ] {
+        assert!(
+            matches!(
+                error(source),
+                SemanticError::DuplicateAssignTarget { target: found, .. } if found == target
+            ),
+            "{source}"
+        );
+    }
+    check("fn f([2]u8 a) { a[0], a[1] = 3, 4; a[0, 0] = 5; }")
+        .expect("distinct parallel indices and repeated broadcast indices remain valid");
+    check("fn f([2]u8 a, u8 i, u8 j) { a[i], a[j] = 3, 4; }")
+        .expect("potentially overlapping dynamic indices are not proven duplicates");
+}
+
+#[test]
 fn arrays_typecheck_nested_literals_places_and_references() {
     let dump = thir(
         "struct Cell { [2]u8 values; }

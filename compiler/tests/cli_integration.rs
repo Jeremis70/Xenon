@@ -51,6 +51,36 @@ fn backend_runs_arrays_with_copy_equality_and_nested_places() {
 
 #[cfg(feature = "llvm-backend")]
 #[test]
+fn array_comparison_loops_preserve_values_and_evaluation_order() {
+    let source = "
+        struct Cell { [2]u8 values; bool flag; }
+        fn id(&[2]u8 a)->&[2]u8 { return @a; }
+        fn left(&[2]u8 a, &u32 log)->[2]u8 { log = log * 10 + 1; return a; }
+        fn right(&[2]u8 a, &u32 log)->[2]u8 { log = log * 10 + 2; a[0] = 3; return a; }
+        #[entry] fn main()->u8 {
+            let [2]u8 a = [1, 2];
+            let u32 log = 0;
+            if left(@a, @log) == right(@a, @log) { return 1; }
+            if log != 12 { return 2; }
+            a = [1, 2];
+            if a == right(@a, @log) { return 3; }
+            if log != 122 { return 4; }
+            if id(@a)[0] != 3 { return 5; }
+            let [2]u8 zero = loop { break; };
+            if zero != [0, 0] { return 6; }
+            let Cell cell = loop { break; };
+            if cell != Cell(values = [0, 0], flag = false) { return 7; }
+            let u8 x = 0;
+            if [x, 0] != [0, 0] { return 8; }
+            return 9;
+        }";
+    for args in [vec![], vec!["-O", "3"]] {
+        assert_eq!(run_status_with(source, &args).code(), Some(9));
+    }
+}
+
+#[cfg(feature = "llvm-backend")]
+#[test]
 fn arrays_snapshot_assignment_targets_and_broadcast_values_once() {
     let source = "
         fn base(&[5]u8 a, &u32 log)->*[5]u8 { log = log * 10 + 1; return @a; }

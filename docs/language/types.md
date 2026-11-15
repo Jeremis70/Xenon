@@ -208,6 +208,9 @@ let [0]bool empty = [];
 Array literals must have exactly the declared number of elements, all of
 the element type. Numeric literals take that type from context. Arrays
 can be parameters, results, tuple elements, and struct fields.
+Without an expected array type, a typed element supplies the type of the
+other elements; for example, `[x, 0] == [0, 0]` compares `u8` arrays when
+`x` is a `u8`.
 
 Indexing is zero-based and accepts any integer type. An element of a place
 is readable, assignable, and addressable:
@@ -220,7 +223,8 @@ grid[1][0] = 7;
 ```
 
 Pointers require an explicit dereference (`(*p)[i]`); references to arrays
-are transparent (`r[i]`). An element of reference type also automatically
+are transparent (`r[i]`), including reference-valued calls (`id(@a)[i]`).
+An element of reference type also automatically
 denotes its referent. Array assignment, argument passing, and returns copy
 the value, like structs; copying pointer or reference elements copies their
 addresses, not their referents.
