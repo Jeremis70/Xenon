@@ -1796,3 +1796,29 @@ fn for_step_must_fit() {
     ));
     assert!(check("fn f(i32 a, i32 b) { for i in a to b by -7 { } }").is_ok());
 }
+
+#[test]
+fn for_array_rules() {
+    assert!(check("fn f([4]u8 a) { for x in a { let u8 b = x; } }").is_ok());
+    assert!(check("fn f([4]u8 a) { for u8 x in a { } for _ in a { } }").is_ok());
+    assert!(check("fn f([2][3]u8 g) { for row in g { for x in row { let u8 b = x; } } }").is_ok());
+    assert!(check("fn f(&[4]u8 a) { for x in a { let u8 b = x; } }").is_ok());
+    assert!(matches!(
+        error("fn f([4]u8 a) { for i32 x in a { } }"),
+        SemanticError::LoopVariableType { .. }
+    ));
+    assert!(matches!(
+        error("fn f(u8 a) { for x in a { } }"),
+        SemanticError::NotIterable { .. }
+    ));
+    assert!(matches!(
+        error("fn f([4]u8 a) { for x in a { x = 1; } }"),
+        SemanticError::AssignToLoopName { .. }
+    ));
+    assert!(matches!(
+        error("fn f([2][3]u8 g) { for row in g { row[0] = 1; } }"),
+        SemanticError::AssignToLoopName { .. }
+    ));
+    // The array itself stays assignable while it is walked.
+    assert!(check("fn f([4]u8 a) { for x in a { a[0] = x; } }").is_ok());
+}

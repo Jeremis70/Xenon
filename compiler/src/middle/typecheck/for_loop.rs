@@ -9,15 +9,16 @@ use num_bigint::BigInt;
 use crate::error::{SemanticError, SemanticResult};
 use crate::frontend::ast::{self, ExprKind as Ast};
 use crate::middle::ids::BindingId;
-use crate::middle::ops::BinOp;
+use crate::middle::ops::{BinOp, IndirectionKind};
 use crate::middle::thir::{
-    BindingKind, Block, ConditionPlacement, Expr, ExprKind, LoopCondition, Stmt, StmtKind,
+    BindingKind, Block, ConditionPlacement, Expr, ExprKind, Literal, LoopCondition, Stmt, StmtKind,
 };
 use crate::source::Span;
 use crate::types::{MAX_INT_WIDTH, Type};
 
 use super::expr::needs_context;
 use super::operator::{binary, widen};
+use super::tuple::auto_deref;
 use super::{Expectation, FnCtxt, LoopFrame};
 
 impl FnCtxt<'_, '_> {
@@ -37,10 +38,7 @@ impl FnCtxt<'_, '_> {
         }
         match &header.iterable {
             ast::ForIterable::Range(range) => self.check_for_range(header, range, body, span, out),
-            ast::ForIterable::Value(value) => Err(SemanticError::NotYetSupported {
-                what: "`for` over a value",
-                span: value.span,
-            }),
+            ast::ForIterable::Value(value) => self.check_for_array(header, value, body, span, out),
         }
     }
 
@@ -78,7 +76,123 @@ impl FnCtxt<'_, '_> {
         let condition = self.compare(op, counter, end, span);
         let increment = self.range_increment(counter, end, range, &direction, span)?;
         let stmt = self.counted_loop(condition, increment, body, span, |this, stmts| {
-            this.declare_loop_variable(header, ty, counter, stmts);
+            let value = this.read(counter, header.name_span);
+            this.declare_loop_variable(header, ty, value, stmts);
+            Ok(())
+        })?;
+        out.push(stmt);
+        Ok(())
+    }
+
+    /// Checks a `for` loop over an array:
+    ///
+    /// ```text
+    /// let index = 0;
+    /// while index < len { let x = array[index]; body } step { index += 1; }
+    /// ```
+    ///
+    /// The array is walked in place, as the hand-written loop would: each
+    /// element is read at the start of its iteration, so a write made by
+    /// the body is seen by the iterations after it. Which array is walked
+    /// is decided once, before the loop.
+    fn check_for_array(
+        &mut self,
+        header: &ast::ForHeader,
+        value: &ast::Expr,
+        body: &[ast::Stmt],
+        span: Span,
+        out: &mut Vec<Stmt>,
+    ) -> SemanticResult<()> {
+        // A written loop-variable type gives an array literal its element
+        // type, as a declared type would: `for u8 x in [1, 2, 3]`.
+        let written = match &header.ty {
+            Some(written) => Some((self.globals.resolve(written)?, written.span)),
+            None => None,
+        };
+        let expected = match (&written, &value.kind) {
+            (Some((ty, _)), Ast::Array(elems)) => u32::try_from(elems.len())
+                .ok()
+                .map(|len| Type::Array(Box::new(ty.clone()), len)),
+            _ => None,
+        };
+        let array = auto_deref(self.check_expr(value, expected.as_ref())?);
+        let Type::Array(elem, len) = &array.ty else {
+            return Err(SemanticError::NotIterable {
+                ty: array.ty,
+                span: value.span,
+            });
+        };
+        let (elem, len) = ((**elem).clone(), *len);
+        if let Some((found, span)) = written
+            && found != elem
+        {
+            return Err(SemanticError::LoopVariableType {
+                expected: elem,
+                found,
+                span,
+            });
+        }
+
+        let array = match &array.kind {
+            // A variable is read where it is.
+            ExprKind::Binding(_) => array,
+            // Any other place is located once and reached through a
+            // reference, without copying the array.
+            _ if array.is_place() => {
+                let reference = Expr {
+                    ty: Type::Reference(Box::new(array.ty.clone())),
+                    span: value.span,
+                    kind: ExprKind::AddressOf {
+                        kind: IndirectionKind::Reference,
+                        place: Box::new(array),
+                    },
+                };
+                let reference = self.let_temp(reference, out);
+                auto_deref(self.read(reference, value.span))
+            }
+            // A value has no location: it is stored once.
+            _ => {
+                let stored = self.let_temp(array, out);
+                self.read(stored, value.span)
+            }
+        };
+
+        if len == 0 {
+            // Nothing to walk, and no element to read: the body is checked
+            // but never runs, so no loop is emitted. An element access here
+            // would be reported as an index that is always out of bounds.
+            let never = Expr {
+                kind: ExprKind::Literal(Literal::Bool(false)),
+                ty: Type::Bool,
+                span,
+            };
+            self.counted_loop(never, Vec::new(), body, span, |this, _| {
+                if header.name.is_some() {
+                    let name = header.name.clone();
+                    this.declare_named(name, elem, BindingKind::LoopName, header.name_span);
+                }
+                Ok(())
+            })?;
+            return Ok(());
+        }
+
+        // The index has the type element accesses compare with the length.
+        let index_ty = Type::UInt(self.target().pointer_width().max(32));
+        let zero = self.int_literal(BigInt::ZERO, index_ty.clone(), span)?;
+        let index = self.let_temp(zero, out);
+        let len = self.int_literal(BigInt::from(len), index_ty, span)?;
+        let condition = binary(BinOp::Lt, Type::Bool, self.read(index, span), len, span);
+        let increment = vec![self.advance(index, &BigInt::from(1), false, span)];
+        let stmt = self.counted_loop(condition, increment, body, span, |this, stmts| {
+            let element = Expr {
+                kind: ExprKind::Index {
+                    base: Box::new(array),
+                    index: Box::new(this.read(index, header.name_span)),
+                },
+                ty: elem.clone(),
+                span: header.name_span,
+            };
+            this.declare_loop_variable(header, elem, element, stmts);
             Ok(())
         })?;
         out.push(stmt);
@@ -204,19 +318,18 @@ impl FnCtxt<'_, '_> {
     }
 
     /// Declares the loop variable of `header`, unless it is `_`, as a copy
-    /// of `value` made at the start of each iteration.
+    /// of `init` made at the start of each iteration.
     fn declare_loop_variable(
         &mut self,
         header: &ast::ForHeader,
         ty: Type,
-        value: BindingId,
+        init: Expr,
         stmts: &mut Vec<Stmt>,
     ) {
         if header.name.is_none() {
             return;
         }
         let span = header.name_span;
-        let init = self.read(value, span);
         let binding = self.declare_named(header.name.clone(), ty, BindingKind::LoopName, span);
         stmts.push(Stmt {
             kind: StmtKind::Let {

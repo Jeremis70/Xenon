@@ -139,6 +139,14 @@ pub enum SemanticError {
     ZeroRangeStep { span: Span },
     #[error("a `by` step other than 1 is not supported for `{ty}`")]
     RangeStepUnsupported { ty: Type, span: Span },
+    #[error("cannot loop over a value of type `{ty}`")]
+    NotIterable { ty: Type, span: Span },
+    #[error("loop variable is `{found}` but the elements are `{expected}`")]
+    LoopVariableType {
+        expected: Type,
+        found: Type,
+        span: Span,
+    },
     #[error("cannot assign to loop variable `{name}`")]
     AssignToLoopName { name: String, span: Span },
     /// Temporary: a loop form that parses but is not checked yet.
@@ -346,6 +354,8 @@ impl SemanticError {
             | SemanticError::RangeTypeUnknown { span }
             | SemanticError::NonIntegerRange { span, .. }
             | SemanticError::ZeroRangeStep { span }
+            | SemanticError::NotIterable { span, .. }
+            | SemanticError::LoopVariableType { span, .. }
             | SemanticError::RangeStepUnsupported { span, .. }
             | SemanticError::AssignToLoopName { span, .. }
             | SemanticError::MultipleEntryPoints { span, .. }
