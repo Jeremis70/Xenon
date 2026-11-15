@@ -1,8 +1,9 @@
 use crate::error::{ParseError, ParseResult, TypeError};
 use crate::frontend::ast::{
-    Attribute, BinOp, Binding, Expr, ExprKind, FieldDecl, Function, ImplBlock, ImplMember,
-    IncDecOp, MethodCall, NamedArg, Pattern, Program, PropertyDecl, Receiver, Stmt, StmtKind,
-    StructDecl, TypeExpr, TypeExprKind, UnaryOp,
+    Attribute, BinOp, Binding, Expr, ExprKind, FieldDecl, ForClause, ForHeader, ForIterable,
+    Function, ImplBlock, ImplMember, IncDecOp, MethodCall, NamedArg, Pattern, Program,
+    PropertyDecl, RangeExpr, RangeStep, Receiver, Stmt, StmtKind, StructDecl, TypeExpr,
+    TypeExprKind, UnaryOp,
 };
 use crate::frontend::precedence::{AS_BP, OpInfo, UNARY_BP, infix_info};
 use crate::frontend::tokens::{Span, Token, TokenKind};
@@ -558,6 +559,24 @@ impl<'a> Parser<'a> {
                     kind: StmtKind::Expr(Box::new(loop_expr)),
                 })
             }
+            TokenKind::For => {
+                self.advance();
+                let header = self.parse_for_header()?;
+                let body = self.parse_block()?;
+                Ok(Stmt {
+                    kind: StmtKind::For { header, body },
+                    span: self.span_since(start),
+                })
+            }
+            TokenKind::Repeat => {
+                self.advance();
+                let count = Box::new(self.parse_expression()?);
+                let body = self.parse_block()?;
+                Ok(Stmt {
+                    kind: StmtKind::Repeat { count, body },
+                    span: self.span_since(start),
+                })
+            }
             TokenKind::Return
             | TokenKind::Break
             | TokenKind::Continue
@@ -706,6 +725,99 @@ impl<'a> Parser<'a> {
                 end: name_token.span.end,
             },
         })
+    }
+
+    /// Whether the token `offset` places ahead is `kind`.
+    fn nth_is(&self, offset: usize, kind: TokenKind) -> bool {
+        self.tokens
+            .get(self.position + offset)
+            .is_some_and(|t| t.kind == kind)
+    }
+
+    /// Parses what follows `for` up to the body:
+    /// `[type] name in iterable [with [type] name | where condition]..`.
+    fn parse_for_header(&mut self) -> ParseResult<ForHeader> {
+        // A name directly followed by `in` has no type of its own.
+        let untyped = (self.at(TokenKind::Ident) || self.at(TokenKind::Underscore))
+            && self.nth_is(1, TokenKind::In);
+        let ty = if untyped {
+            None
+        } else {
+            Some(self.parse_type()?)
+        };
+        let name_token = self.expect([TokenKind::Ident, TokenKind::Underscore])?;
+        let name = match name_token.kind {
+            TokenKind::Ident => Some(name_token.ident_value()?.to_owned()),
+            _ => None,
+        };
+        self.expect(TokenKind::In)?;
+
+        let first = self.parse_expr(0)?;
+        let iterable = if self.at(TokenKind::To) || self.at(TokenKind::Until) {
+            let inclusive = self.advance().is_some_and(|t| t.kind == TokenKind::To);
+            let end = self.parse_expr(0)?;
+            let step = if self.eat(TokenKind::By) {
+                Some(self.parse_range_step()?)
+            } else {
+                None
+            };
+            ForIterable::Range(RangeExpr {
+                start: Box::new(first),
+                end: Box::new(end),
+                inclusive,
+                step,
+            })
+        } else {
+            ForIterable::Value(Box::new(first))
+        };
+
+        let mut clauses = Vec::new();
+        loop {
+            if self.eat(TokenKind::Where) {
+                clauses.push(ForClause::Where(self.parse_expr(0)?));
+            } else if self.eat(TokenKind::With) {
+                // A name not followed by another name has no type.
+                let untyped = self.at(TokenKind::Ident) && !self.nth_is(1, TokenKind::Ident);
+                let ty = if untyped {
+                    None
+                } else {
+                    Some(self.parse_type()?)
+                };
+                let name_token = self.expect(TokenKind::Ident)?;
+                clauses.push(ForClause::With {
+                    ty,
+                    name: name_token.ident_value()?.to_owned(),
+                    span: name_token.span,
+                });
+            } else {
+                break;
+            }
+        }
+        Ok(ForHeader {
+            ty,
+            name,
+            name_span: name_token.span,
+            iterable,
+            clauses,
+        })
+    }
+
+    /// Parses the literal after `by`: an integer, optionally negated.
+    fn parse_range_step(&mut self) -> ParseResult<RangeStep> {
+        const EXPECTED: &str = "expected an integer literal after `by`";
+        let start = self.peek().map_or(self.eof_span().start, |t| t.span.start);
+        let negative = self.eat(TokenKind::Minus);
+        match self.peek() {
+            Some(token) if token.kind == TokenKind::Int => {
+                self.advance();
+                Ok(RangeStep {
+                    magnitude: token.int_value()?.clone(),
+                    negative,
+                    span: self.span_since(start),
+                })
+            }
+            _ => Err(self.error(EXPECTED)),
+        }
     }
 
     fn parse_loop(&mut self, start: usize) -> ParseResult<Expr> {

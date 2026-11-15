@@ -1048,10 +1048,10 @@ fn field_read_and_write() {
 #[test]
 fn nested_field_places() {
     let src = "struct Point { i32 x; i32 y; }\n\
-               struct Line { Point from; (Point, i32) to; }\n\
+               struct Line { Point from; (Point, i32) end; }\n\
                fn f(Line l, (Point, bool) t)->i32 {\n\
-                   l.from.x = 1; l.to.0.y += 2; l.to.1++; t.0.x = 3;\n\
-                   return l.from.x + l.to.0.y + t.0.x;\n\
+                   l.from.x = 1; l.end.0.y += 2; l.end.1++; t.0.x = 3;\n\
+                   return l.from.x + l.end.0.y + t.0.x;\n\
                }";
     let dump = thir(src);
     assert!(dump.contains("l@b0.0.0 = 1_i32"), "{dump}");

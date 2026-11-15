@@ -208,3 +208,27 @@ fn float_exponent_needs_fraction_digits() {
     // a member.
     assert_eq!(kinds("0.e1"), vec![TokenKind::Float, TokenKind::Ident]);
 }
+
+#[test]
+fn range_and_for_keywords() {
+    let kinds = |src: &str| -> Vec<TokenKind> {
+        lex(src)
+            .expect("lexing should succeed")
+            .iter()
+            .map(|t| t.kind)
+            .collect()
+    };
+    assert_eq!(
+        kinds("in to by with where repeat"),
+        vec![
+            TokenKind::In,
+            TokenKind::To,
+            TokenKind::By,
+            TokenKind::With,
+            TokenKind::Where,
+            TokenKind::Repeat,
+        ]
+    );
+    // Longer names that start with a keyword stay identifiers.
+    assert_eq!(kinds("step into byte within"), vec![TokenKind::Ident; 4]);
+}

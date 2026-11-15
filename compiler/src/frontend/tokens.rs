@@ -46,6 +46,12 @@ pub enum TokenKind {
     Until,
     Loop,
     For,
+    In,
+    To,
+    By,
+    With,
+    Where,
+    Repeat,
     Break,
     Continue,
     Do,
@@ -207,6 +213,18 @@ enum RawKind {
     Until,
     #[token("for")]
     For,
+    #[token("in")]
+    In,
+    #[token("to")]
+    To,
+    #[token("by")]
+    By,
+    #[token("with")]
+    With,
+    #[token("where")]
+    Where,
+    #[token("repeat")]
+    Repeat,
     #[token("break")]
     Break,
     #[token("continue")]
@@ -401,6 +419,12 @@ fn into_token_parts(raw: RawKind) -> (TokenKind, Option<TokenValue>) {
         RawKind::Until => (TokenKind::Until, None),
         RawKind::Loop => (TokenKind::Loop, None),
         RawKind::For => (TokenKind::For, None),
+        RawKind::In => (TokenKind::In, None),
+        RawKind::To => (TokenKind::To, None),
+        RawKind::By => (TokenKind::By, None),
+        RawKind::With => (TokenKind::With, None),
+        RawKind::Where => (TokenKind::Where, None),
+        RawKind::Repeat => (TokenKind::Repeat, None),
         RawKind::Break => (TokenKind::Break, None),
         RawKind::Continue => (TokenKind::Continue, None),
         RawKind::Do => (TokenKind::Do, None),

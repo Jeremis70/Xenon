@@ -127,6 +127,9 @@ pub enum SemanticError {
     BreakOutsideLoop { span: Span },
     #[error("`continue` outside of a loop")]
     ContinueOutsideLoop { span: Span },
+    /// Temporary: a loop form that parses but is not checked yet.
+    #[error("{what} is not supported yet")]
+    NotYetSupported { what: &'static str, span: Span },
     #[error("no `#[entry]` function found")]
     NoEntryPoint,
     #[error("multiple `#[entry]` functions: first at {first_span:?}, duplicate at {span:?}")]
@@ -323,6 +326,7 @@ impl SemanticError {
             | SemanticError::BreakTypeConflict { span, .. }
             | SemanticError::BreakOutsideLoop { span }
             | SemanticError::ContinueOutsideLoop { span }
+            | SemanticError::NotYetSupported { span, .. }
             | SemanticError::MultipleEntryPoints { span, .. }
             | SemanticError::EntryWithParams { span }
             | SemanticError::EntryWrongReturn { span, .. }

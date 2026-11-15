@@ -1,7 +1,7 @@
 use num_bigint::BigInt;
 use xenonc::frontend::ast::{
-    BinOp, Binding, ExprKind, Function, ImplMember, IncDecOp, Pattern, Program, Receiver, Stmt,
-    StmtKind, TypeExpr, TypeExprKind,
+    BinOp, Binding, ExprKind, ForClause, ForHeader, ForIterable, Function, ImplMember, IncDecOp,
+    Pattern, Program, Receiver, Stmt, StmtKind, TypeExpr, TypeExprKind,
 };
 use xenonc::frontend::lexer::lex;
 use xenonc::frontend::parser::Parser;
@@ -1796,4 +1796,162 @@ fn a_shared_name_needs_a_typed_first_name() {
         parse_error("struct A { i32 a, b; }").0,
         "Expected Semicolon, found Comma"
     );
+}
+
+// `for` and `repeat`
+
+/// The statements of the body of the only function of `src`.
+fn body_of(src: &str) -> Vec<Stmt> {
+    let tokens = lex(src).expect("lexing should succeed");
+    let program = Parser::new(&tokens)
+        .parse_program()
+        .expect("parsing should succeed");
+    program.functions[0].body.clone()
+}
+
+/// The header of the `for` loop that is the first statement of `src`.
+fn for_header(src: &str) -> ForHeader {
+    match body_of(src).remove(0).kind {
+        StmtKind::For { header, .. } => header,
+        other => panic!("expected For, got {other:?}"),
+    }
+}
+
+/// Whether `src` fails to parse.
+fn parse_fails(src: &str) -> bool {
+    let tokens = lex(src).expect("lexing should succeed");
+    Parser::new(&tokens).parse_program().is_err()
+}
+
+#[test]
+fn for_header_forms() {
+    let header = for_header("fn f() { for x in xs { } }");
+    assert_eq!(header.ty, None);
+    assert_eq!(header.name.as_deref(), Some("x"));
+    assert!(
+        matches!(&header.iterable, ForIterable::Value(e) if matches!(&e.kind, ExprKind::Ident(n) if n == "xs"))
+    );
+    assert!(header.clauses.is_empty());
+
+    let header = for_header("fn f() { for u8 x in xs { } }");
+    assert_eq!(header.ty, Some(prim(Type::UInt(8))));
+    assert_eq!(header.name.as_deref(), Some("x"));
+
+    let header = for_header("fn f() { for _ in 0 until 3 { } }");
+    assert_eq!(header.ty, None);
+    assert_eq!(header.name, None);
+    match &header.iterable {
+        ForIterable::Range(range) => {
+            assert!(!range.inclusive);
+            assert!(range.step.is_none());
+            assert!(matches!(&range.start.kind, ExprKind::Int(v) if *v == bi(0)));
+            assert!(matches!(&range.end.kind, ExprKind::Int(v) if *v == bi(3)));
+        }
+        other => panic!("expected a range, got {other:?}"),
+    }
+
+    let header = for_header("fn f() { for [2]u8 row in grid { } }");
+    assert!(matches!(
+        header.ty.as_ref().map(|t| &t.kind),
+        Some(TypeExprKind::Array(_, 2))
+    ));
+    assert_eq!(header.name.as_deref(), Some("row"));
+
+    let header = for_header("fn f() { for i in a to b by -2 { } }");
+    match &header.iterable {
+        ForIterable::Range(range) => {
+            assert!(range.inclusive);
+            let step = range.step.as_ref().expect("a step");
+            assert_eq!(step.magnitude, bi(2));
+            assert!(step.negative);
+        }
+        other => panic!("expected a range, got {other:?}"),
+    }
+
+    let header = for_header("fn f() { for i in a + 1 until b * 2 by 4 { } }");
+    match &header.iterable {
+        ForIterable::Range(range) => {
+            assert!(matches!(
+                &range.start.kind,
+                ExprKind::BinOp { op: BinOp::Add, .. }
+            ));
+            assert!(matches!(
+                &range.end.kind,
+                ExprKind::BinOp { op: BinOp::Mul, .. }
+            ));
+            let step = range.step.as_ref().expect("a step");
+            assert_eq!(step.magnitude, bi(4));
+            assert!(!step.negative);
+        }
+        other => panic!("expected a range, got {other:?}"),
+    }
+}
+
+#[test]
+fn for_clauses() {
+    let header = for_header("fn f() { for x in xs with i where x > i with u8 k where k < 3 { } }");
+    assert_eq!(header.clauses.len(), 4);
+    assert!(matches!(&header.clauses[0], ForClause::With { ty: None, name, .. } if name == "i"));
+    assert!(matches!(&header.clauses[1], ForClause::Where(_)));
+    assert!(
+        matches!(&header.clauses[2], ForClause::With { ty: Some(ty), name, .. } if name == "k" && *ty == prim(Type::UInt(8)))
+    );
+    assert!(matches!(&header.clauses[3], ForClause::Where(_)));
+}
+
+#[test]
+fn repeat_statement() {
+    let body = body_of("fn f() { repeat 10 { } }");
+    assert!(matches!(
+        &body[0].kind,
+        StmtKind::Repeat { count, body } if matches!(&count.kind, ExprKind::Int(v) if *v == bi(10)) && body.is_empty()
+    ));
+    let body = body_of("fn f() { repeat n + 1 { g(); } }");
+    assert!(matches!(
+        &body[0].kind,
+        StmtKind::Repeat { count, body } if matches!(&count.kind, ExprKind::BinOp { .. }) && body.len() == 1
+    ));
+}
+
+#[test]
+fn until_keeps_loop_meaning() {
+    let body = body_of("fn f() { until done { } do { } until done for i in 0 until n { } }");
+    assert_eq!(body.len(), 3);
+    for stmt in &body[..2] {
+        assert!(matches!(
+            &stmt.kind,
+            StmtKind::Expr(e) if matches!(&e.kind, ExprKind::CondLoop { inverted: true, .. })
+        ));
+    }
+    assert!(matches!(&body[2].kind, StmtKind::For { .. }));
+}
+
+#[test]
+fn for_header_errors() {
+    for src in [
+        "fn f() { for in xs { } }",
+        "fn f() { for x xs { } }",
+        "fn f() { for i in 0 to 9 by n { } }",
+        "fn f() { for i in 0 to { } }",
+        "fn f() { for x in xs with { } }",
+        "fn f() { repeat { } }",
+    ] {
+        assert!(parse_fails(src), "{src} should not parse");
+    }
+}
+
+#[test]
+fn reserved_words_are_not_names() {
+    for src in [
+        "fn f() { let i32 to = 1; }",
+        "fn f() { let i32 by = 1; }",
+        "fn f() { let i32 in = 1; }",
+        "fn f() { let i32 with = 1; }",
+        "fn f() { let i32 where = 1; }",
+        "fn repeat() { }",
+        "struct S { i32 in; }",
+    ] {
+        assert!(parse_fails(src), "{src} should not parse");
+    }
+    assert!(!parse_fails("fn f() { let i32 step = 1; }"));
 }
