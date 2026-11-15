@@ -104,6 +104,9 @@ pub enum BindingKind {
     NamedReturn,
     /// A local variable declaration.
     Local,
+    /// The variable of a `for` loop or one of its `with` counters. It
+    /// cannot be assigned.
+    LoopName,
 }
 
 /// A sequence of statements forming one lexical scope.

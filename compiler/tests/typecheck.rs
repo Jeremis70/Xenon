@@ -1730,3 +1730,60 @@ fn repeat_count_rules() {
         SemanticError::NegativeRepeatCount { .. }
     ));
 }
+
+/// Whether `src` fails to type-check.
+fn error_is_some(src: &str) -> bool {
+    check(src).is_err()
+}
+
+#[test]
+fn for_range_types() {
+    // The loop variable takes the type of the typed bound.
+    assert!(check("fn f(u8 n) { for i in 0 until n { let u8 a = i; } }").is_ok());
+    assert!(check("fn f(u8 n) { for i in n to 9 { let u8 a = i; } }").is_ok());
+    assert!(check("fn f() { for i16 i in 0 to 9 { let i16 a = i; } }").is_ok());
+    assert!(check("fn f() { for u8 _ in 0 to 9 { } }").is_ok());
+    assert!(matches!(
+        error("fn f() { for i in 0 to 9 { } }"),
+        SemanticError::RangeTypeUnknown { .. }
+    ));
+    assert!(matches!(
+        error("fn f(bool b) { for i in b to b { } }"),
+        SemanticError::NonIntegerRange { .. }
+    ));
+    assert!(matches!(
+        error("fn f() { for f64 i in 0 to 9 { } }"),
+        SemanticError::NonIntegerRange { .. }
+    ));
+    assert!(matches!(
+        error("fn f() { for u8 i in 0 to 9 by 0 { } }"),
+        SemanticError::ZeroRangeStep { .. }
+    ));
+    // Bounds of two different types.
+    assert!(error_is_some("fn f(u8 a, i32 b) { for i in a to b { } }"));
+    // A literal bound that does not fit the loop type.
+    assert!(error_is_some("fn f() { for u8 i in 0 to 300 { } }"));
+}
+
+#[test]
+fn for_loop_names_are_read_only() {
+    for stmt in ["i = 1;", "i += 1;", "i++;", "i, a = 1, 2;"] {
+        let src = format!("fn f() {{ let u8 a = 0; for u8 i in 0 to 9 {{ {stmt} }} }}");
+        assert!(
+            matches!(error(&src), SemanticError::AssignToLoopName { .. }),
+            "{stmt}"
+        );
+    }
+}
+
+#[test]
+fn for_scoping() {
+    // Not visible after the loop, nor in its own bounds.
+    assert!(error_is_some(
+        "fn f() { for u8 i in 0 to 9 { } let u8 a = i; }"
+    ));
+    assert!(error_is_some("fn f() { for u8 i in 0 to i { } }"));
+    assert!(check("fn f(u8 i) { for j in 0 until i { for j in 0 until j { } } }").is_ok());
+    // A bound may read an outer variable the loop variable then shadows.
+    assert!(check("fn f(u8 i) { for i in 0 until i { } }").is_ok());
+}

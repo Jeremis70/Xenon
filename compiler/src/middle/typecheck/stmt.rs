@@ -64,7 +64,7 @@ impl FnCtxt<'_, '_> {
                 return self.check_multi_index_assign(target, value, span, out);
             }
             AstStmt::Assign { target, value } if target.is_place() => {
-                let place = self.check_place(target)?;
+                let place = self.check_assign_target(target)?;
                 let value = self.check_expr_has_type(value, &place.ty)?;
                 StmtKind::Assign { place, value }
             }
@@ -72,12 +72,12 @@ impl FnCtxt<'_, '_> {
                 return self.check_parallel_assign(target, value, span, out);
             }
             AstStmt::CompoundAssign { target, op, value } => {
-                let place = self.check_place(target)?;
+                let place = self.check_assign_target(target)?;
                 let (op, value) = self.check_compound(op, &place, value, span)?;
                 StmtKind::CompoundAssign { op, place, value }
             }
             AstStmt::IncDec { target, op } => {
-                let place = self.check_place(target)?;
+                let place = self.check_assign_target(target)?;
                 if !place.ty.is_integer() && !place.ty.is_float() {
                     return Err(SemanticError::InvalidOperands {
                         op: format!("{op:?}"),
@@ -122,11 +122,8 @@ impl FnCtxt<'_, '_> {
                         .transpose()?,
                 }
             }
-            AstStmt::For { .. } => {
-                return Err(SemanticError::NotYetSupported {
-                    what: "`for`",
-                    span,
-                });
+            AstStmt::For { header, body } => {
+                return self.check_for(header, body, span, out);
             }
             AstStmt::Repeat { count, body } => {
                 return self.check_repeat(count, body, span, out);

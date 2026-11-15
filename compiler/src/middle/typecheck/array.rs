@@ -148,7 +148,7 @@ impl FnCtxt<'_, '_> {
         let Ast::Index { base, indices } = &target.kind else {
             return Err(SemanticError::NotAPlaceExpression { span });
         };
-        let base = self.check_place(base)?;
+        let base = self.check_assign_target(base)?;
         let base_ty = base.ty.clone();
         let pointer = Expr {
             ty: Type::Reference(Box::new(base_ty.clone())),

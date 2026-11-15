@@ -131,6 +131,14 @@ pub enum SemanticError {
     NonIntegerRepeatCount { ty: Type, span: Span },
     #[error("`repeat` count cannot be negative")]
     NegativeRepeatCount { span: Span },
+    #[error("cannot tell the type of this range; write it: `for i32 i in ..`")]
+    RangeTypeUnknown { span: Span },
+    #[error("range bounds must be integers, found `{ty}`")]
+    NonIntegerRange { ty: Type, span: Span },
+    #[error("range step cannot be zero")]
+    ZeroRangeStep { span: Span },
+    #[error("cannot assign to loop variable `{name}`")]
+    AssignToLoopName { name: String, span: Span },
     /// Temporary: a loop form that parses but is not checked yet.
     #[error("{what} is not supported yet")]
     NotYetSupported { what: &'static str, span: Span },
@@ -333,6 +341,10 @@ impl SemanticError {
             | SemanticError::NotYetSupported { span, .. }
             | SemanticError::NonIntegerRepeatCount { span, .. }
             | SemanticError::NegativeRepeatCount { span }
+            | SemanticError::RangeTypeUnknown { span }
+            | SemanticError::NonIntegerRange { span, .. }
+            | SemanticError::ZeroRangeStep { span }
+            | SemanticError::AssignToLoopName { span, .. }
             | SemanticError::MultipleEntryPoints { span, .. }
             | SemanticError::EntryWithParams { span }
             | SemanticError::EntryWrongReturn { span, .. }

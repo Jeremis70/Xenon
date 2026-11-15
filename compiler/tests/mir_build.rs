@@ -612,3 +612,17 @@ fn repeat_continue_reaches_increment() {
         ],
     );
 }
+
+#[test]
+fn for_range_matches_while() {
+    let dump = mir("fn f(u8 n) -> u8 { let u8 s = 0; for i in 0 until n { s += i; } return s; }");
+    // One header testing `counter < end`, as the hand-written `while` has,
+    // and nothing that can trap.
+    assert_eq!(dump.matches("switchInt(").count(), 1, "{dump}");
+    assert_eq!(dump.matches("Lt(").count(), 1, "{dump}");
+    assert!(!dump.contains("assert"), "{dump}");
+    assert_in_order(
+        &dump,
+        &["Lt(", "switchInt(", "Add(", "const 1_u8", "goto -> bb1;"],
+    );
+}

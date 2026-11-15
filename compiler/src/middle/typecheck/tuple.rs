@@ -243,7 +243,7 @@ impl FnCtxt<'_, '_> {
                     .map(|elem| self.check_target(elem))
                     .collect::<SemanticResult<_>>()?,
             )),
-            _ => Ok(Target::Place(self.check_place(target)?)),
+            _ => Ok(Target::Place(self.check_assign_target(target)?)),
         }
     }
 

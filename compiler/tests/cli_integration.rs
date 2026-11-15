@@ -1162,3 +1162,101 @@ fn repeat_runs() {
         assert_eq!(main_exit(body), expected, "{body}");
     }
 }
+
+#[cfg(feature = "llvm-backend")]
+#[test]
+fn for_range_runs() {
+    for (body, expected) in [
+        (
+            "let u8 s = 0; for u8 i in 0 until 5 { s += i; } return s;",
+            10,
+        ),
+        ("let u8 s = 0; for u8 i in 0 to 5 { s += i; } return s;", 15),
+        // Two literal bounds give the direction: 5, 4, 3, 2, 1.
+        (
+            "let u8 s = 0; for u8 i in 5 to 1 { s = s * 2 + i; } return s;",
+            129,
+        ),
+        (
+            "let u8 s = 0; for u8 i in 5 until 1 { s += 1; } return s;",
+            4,
+        ),
+        // Runtime bounds count up: a start past the end is an empty loop.
+        (
+            "let u8 a = 5; let u8 b = 1; let u8 s = 0; for i in a to b { s += 1; } return s;",
+            0,
+        ),
+        (
+            "let u8 a = 5; let u8 b = 1; let u8 s = 0; for i in a to b by -1 { s += 1; } return s;",
+            5,
+        ),
+        // The whole range of a type, without trapping or wrapping.
+        (
+            "let u8 s = 0; for u8 i in 0 to 255 { s = i; } return s;",
+            255,
+        ),
+        (
+            "let u8 s = 0; for u8 i in 255 to 0 { s += 1 if i < 3; } return s;",
+            3,
+        ),
+        (
+            "let u8 s = 0; for i8 i in -128 to 127 { s += 1 if i == 0; } return s;",
+            1,
+        ),
+        (
+            "let u8 s = 0; for u8 i in 255 to 255 { s += 1; } return s;",
+            1,
+        ),
+        (
+            "let u8 s = 0; for u8 i in 0 until 0 { s += 1; } return s;",
+            0,
+        ),
+        ("let u8 s = 0; for u0 i in 0 to 0 { s += 1; } return s;", 1),
+        ("let u8 s = 0; for i1 i in -1 to 0 { s += 1; } return s;", 2),
+        (
+            "let u8 s = 0; for u8 i in 0 to 9 { continue if i % 2 == 0; s += 1; } return s;",
+            5,
+        ),
+        (
+            "let u8 s = 0; for u8 i in 0 to 9 { break if i == 4; s += 1; } return s;",
+            4,
+        ),
+        // The bounds are read once.
+        (
+            "let u8 n = 3; let u8 s = 0; for i in 0 until n { n = 9; s += 1; } return s;",
+            3,
+        ),
+        (
+            "let u8 i = 4; let u8 s = 0; for j in 0 until i { for j in 0 until j { s += 1; } } return s;",
+            6,
+        ),
+        (
+            "let u8 s = 0; for u8 _ in 0 until 7 { s += 1; } return s;",
+            7,
+        ),
+    ] {
+        assert_eq!(main_exit(body), expected, "{body}");
+    }
+}
+
+#[cfg(feature = "llvm-backend")]
+#[test]
+fn for_bounds_evaluated_once_in_order() {
+    let items = "fn first(*u8 log) -> u8 { *log = *log * 10 + 1; return 2; }
+                 fn second(*u8 log) -> u8 { *log = *log * 10 + 2; return 5; }";
+    let body = "let u8 log = 0; let u8 n = 0;
+                for i in first(@log) to second(@log) { n += 1; }
+                return log if n == 4 else 0;";
+    assert_eq!(main_exit_with(items, body), 12);
+}
+
+#[cfg(feature = "llvm-backend")]
+#[test]
+fn for_return_inside() {
+    let items = "fn find(u8 target) -> u8 {
+                     for u8 i in 0 to 9 { for u8 j in 0 to 9 { return i * 10 + j if i * j == target; } }
+                     return 255;
+                 }";
+    assert_eq!(main_exit_with(items, "return find(12);"), 26);
+    assert_eq!(main_exit_with(items, "return find(97);"), 255);
+}
