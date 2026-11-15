@@ -229,6 +229,14 @@ its known result, the inserted guards included: a zero-sized divisor always
 traps, and so does any shift of a zero-sized value. Backends therefore only
 store, copy, pass, and return such values (LLVM uses the empty struct `{}`).
 
+A struct without data is zero-sized whatever its fields, and one definition
+used for many fields can span an enormous tree of them (`S0 {}`, and each
+`Sn` holding two `S(n-1)`). Nothing walks such a tree leaf by leaf:
+`Type::is_zero_sized` decides each struct once, the zero value of a
+zero-sized struct is the single constant `ConstValue::ZeroSized`, equality
+of zero-sized values is `true` without comparing fields, and LLVM lowers
+every zero-sized struct to `{}`.
+
 Operands are snapshotted before inserted checks, ensuring the check and the
 operation use the same values. No backend should invent or omit these semantic
 checks.

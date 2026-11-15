@@ -445,6 +445,12 @@ impl Checker<'_> {
             ConstValue::Address(value) => ty
                 .is_indirect()
                 .then(|| (value, self.target.address_bounds())),
+            ConstValue::ZeroSized => {
+                if !(matches!(ty, Type::Struct(_)) && ty.is_zero_sized(self.program.structs())) {
+                    self.report(VerifyErrorKind::ConstantKindMismatch(ty.clone()));
+                }
+                return;
+            }
             ConstValue::Tuple(_) => {
                 match constant.elems(self.program.structs()) {
                     Some(elems) => elems.iter().for_each(|elem| self.check_constant(elem)),

@@ -910,3 +910,39 @@ fn backend_runs_properties() {
     ));
     assert_eq!(code, 63);
 }
+
+#[cfg(feature = "llvm-backend")]
+#[test]
+fn backend_runs_deep_trees_of_empty_structs() {
+    // `S40` has no data, but its fields written out are a tree of 2^40
+    // leaves. Building, passing, comparing, and reading it must not cost
+    // one step per leaf in the compiler. Each `make` calls the one below
+    // once, so that the program itself runs 40 calls, not 2^40.
+    let mut source = String::from("struct S0 {}\nimpl S0 { fn make() -> S0 { return S0(); } }\n");
+    for level in 1..=40 {
+        let inner = level - 1;
+        source.push_str(&format!(
+            "struct S{level} {{ S{inner} a; S{inner} b; }}\n\
+             impl S{level} {{ fn make() -> S{level} {{ \
+                 let S{inner} half = S{inner}.make(); \
+                 return S{level}(a = half, b = half); }} }}\n"
+        ));
+    }
+    source.push_str(concat!(
+        "struct Tagged { S40 nothing; i32 tag; }\n",
+        "fn same(S40 a, S40 b) -> bool { return a == b; }\n",
+        "#[entry]\n",
+        "fn main() -> u8 {\n",
+        "    let S40 x = S40.make();\n",
+        "    return 1 unless same(x, x);\n",
+        "    let S39 inner = x.b;\n",
+        "    x.a = inner;\n",
+        "    return 2 unless x.a.b == inner.b;\n",
+        "    let Tagged t = Tagged(nothing = x, tag = 7);\n",
+        "    t.nothing.a.a = x.b.b;\n",
+        "    return 3 unless t.tag == 7 and t == Tagged(nothing = S40.make(), tag = 7);\n",
+        "    return 0;\n",
+        "}\n",
+    ));
+    assert_eq!(compile_and_run(&source), 0);
+}

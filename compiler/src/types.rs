@@ -10,6 +10,7 @@ use crate::error::TypeError;
 use crate::index::{IndexVec, newtype_index};
 use crate::source::Span;
 use num_bigint::BigInt;
+use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -208,14 +209,34 @@ impl Type {
     /// `u0`, which only hold `0`, and tuples and structs of such types,
     /// including `()` and structs without fields.
     pub fn is_zero_sized(&self, structs: &StructTable) -> bool {
+        self.is_zero_sized_with(structs, &mut HashMap::new())
+    }
+
+    /// [`Self::is_zero_sized`], deciding each struct once: `known` holds
+    /// the answers so far. A struct used for many fields is one definition,
+    /// however large the tree of fields it spans.
+    fn is_zero_sized_with(
+        &self,
+        structs: &StructTable,
+        known: &mut HashMap<StructId, bool>,
+    ) -> bool {
         match self {
             Type::Int(0) | Type::UInt(0) => true,
-            Type::Tuple(elems) => elems.iter().all(|elem| elem.is_zero_sized(structs)),
-            Type::Struct(struct_ty) => structs.get(struct_ty.id).is_some_and(|def| {
-                def.fields
-                    .iter()
-                    .all(|field| field.ty.is_zero_sized(structs))
-            }),
+            Type::Tuple(elems) => elems
+                .iter()
+                .all(|elem| elem.is_zero_sized_with(structs, known)),
+            Type::Struct(struct_ty) => {
+                if let Some(&zero_sized) = known.get(&struct_ty.id) {
+                    return zero_sized;
+                }
+                let zero_sized = structs.get(struct_ty.id).is_some_and(|def| {
+                    def.fields
+                        .iter()
+                        .all(|field| field.ty.is_zero_sized_with(structs, known))
+                });
+                known.insert(struct_ty.id, zero_sized);
+                zero_sized
+            }
             _ => false,
         }
     }

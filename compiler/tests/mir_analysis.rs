@@ -708,8 +708,9 @@ const COUNTER: &str = "struct Counter { i32 n; }\n\
 fn reference_receiver_on_uninitialized_local_is_an_error() {
     // `c.bump()` passes `@c`: the method reads what it is given.
     let kind = error(&format!(
-        "{COUNTER}fn f() -> Counter c {{ c.bump(); return; }}"
+        "{COUNTER}fn f() -> Counter c {{ c.bump(); c = Counter(n = 0); return; }}"
     ));
+    // `c` is assigned before the `return`, so only the call can be at fault.
     assert!(kind.to_string().contains("`c`"), "{kind:?}");
     let kind = error(&format!(
         "{COUNTER}fn take(&i32 r) {{}}\nfn f() -> i32 x {{ take(@x); x = 1; return; }}"
