@@ -254,7 +254,7 @@ impl FnCtxt<'_, '_> {
     fn check_distinct_targets(
         &self,
         target: &Target,
-        seen: &mut Vec<(BindingId, Vec<u32>)>,
+        seen: &mut Vec<(BindingId, Vec<Option<u32>>)>,
     ) -> SemanticResult<()> {
         match target {
             Target::Discard => Ok(()),
@@ -267,7 +267,9 @@ impl FnCtxt<'_, '_> {
                 };
                 let overlaps = seen.iter().any(|(other, other_path)| {
                     *other == binding
-                        && (other_path.starts_with(&path) || path.starts_with(other_path))
+                        && path.iter().zip(other_path).all(|(index, other_index)| {
+                            matches!((index, other_index), (Some(a), Some(b)) if a == b)
+                        })
                 });
                 if overlaps {
                     return Err(SemanticError::DuplicateAssignTarget {
@@ -281,9 +283,9 @@ impl FnCtxt<'_, '_> {
         }
     }
 
-    /// The source spelling of the element `path` of `binding`: a field of
-    /// a struct by its name, an element of a tuple by its index.
-    fn path_text(&self, binding: BindingId, path: &[u32]) -> String {
+    /// Describes an element path using field names and indices; dynamic
+    /// array indices are shown as `?`.
+    fn path_text(&self, binding: BindingId, path: &[Option<u32>]) -> String {
         let structs = &self.globals.structs.table;
         let mut text = self.bindings[binding]
             .name
@@ -297,6 +299,17 @@ impl FnCtxt<'_, '_> {
             ty = pointee;
         }
         for &index in path {
+            if let Type::Array(elem, _) = ty {
+                match index {
+                    Some(index) => text.push_str(&format!("[{index}]")),
+                    None => text.push_str("[?]"),
+                }
+                ty = elem;
+                continue;
+            }
+            let Some(index) = index else {
+                break;
+            };
             let field = match ty {
                 Type::Struct(struct_ty) => structs
                     .get(struct_ty.id)
@@ -518,7 +531,8 @@ fn is_stable(expr: &Expr) -> bool {
 ///
 /// A variable of type `&T` denotes the one `T` it was bound to, so the
 /// dereference type checking wrapped it in leads to a known place too.
-fn static_path(place: &Expr) -> Option<(BindingId, Vec<u32>)> {
+/// Unknown array indices are retained as `None` to track known ancestors.
+fn static_path(place: &Expr) -> Option<(BindingId, Vec<Option<u32>>)> {
     match &place.kind {
         ExprKind::Binding(binding) => Some((*binding, Vec::new())),
         ExprKind::Deref(reference) => match (&reference.kind, &reference.ty) {
@@ -527,9 +541,25 @@ fn static_path(place: &Expr) -> Option<(BindingId, Vec<u32>)> {
         },
         ExprKind::Field { base, index } => {
             let (binding, mut path) = static_path(base)?;
-            path.push(*index);
+            path.push(Some(*index));
             Some((binding, path))
         }
+        ExprKind::Index { base, index } => {
+            let (binding, mut path) = static_path(base)?;
+            path.push(static_index(index));
+            Some((binding, path))
+        }
+        _ => None,
+    }
+}
+
+fn static_index(expr: &Expr) -> Option<u32> {
+    match &expr.kind {
+        ExprKind::Literal(crate::middle::thir::Literal::Int(value)) => u32::try_from(value).ok(),
+        ExprKind::Cast {
+            kind: crate::middle::ops::CastKind::IntToInt,
+            operand,
+        } => static_index(operand),
         _ => None,
     }
 }

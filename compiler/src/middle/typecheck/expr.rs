@@ -485,13 +485,13 @@ impl FnCtxt<'_, '_> {
 
 /// Whether `expr` takes its type from context: a numeric literal
 /// expression, an address literal, an address-of expression, a tuple
-/// literal containing one of those, or a conditional expression whose
-/// branches both do.
+/// literal containing one of those, an array whose elements all need
+/// context, or a conditional expression whose branches both do.
 pub(super) fn needs_context(expr: &ast::Expr) -> bool {
     match &expr.kind {
         Ast::Address(_) | Ast::AddressOf(_) => true,
         Ast::Tuple(elems) => elems.iter().any(needs_context),
-        Ast::Array(elems) => elems.is_empty() || elems.iter().any(needs_context),
+        Ast::Array(elems) => elems.iter().all(needs_context),
         Ast::IfElse {
             then_branch,
             else_branch,

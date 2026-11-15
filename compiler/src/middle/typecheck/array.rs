@@ -71,6 +71,7 @@ impl FnCtxt<'_, '_> {
         index: &ast::Expr,
         span: Span,
     ) -> SemanticResult<Expr> {
+        let base = auto_deref(base);
         let Type::Array(elem, len) = &base.ty else {
             return Err(SemanticError::IndexOfNonArray { ty: base.ty, span });
         };
