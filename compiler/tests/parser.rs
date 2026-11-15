@@ -982,13 +982,21 @@ fn parse_trailing_condition_after_ternary_guards_the_statement() {
 
 #[test]
 fn parse_nested_trailing_conditions_in_linear_time() {
-    // Every condition is parsed once; reparsing would double the work per level.
-    let mut condition = "true".to_owned();
-    for _ in 0..64 {
-        condition = format!("loop {{ break true if {condition}; break false; }}");
-    }
-    let body = parse_body(&format!("fn f()->i32{{ return 1 if {condition}; }}"));
-    assert!(matches!(body[0].kind, StmtKind::If { .. }));
+    // Keep this recursion stress test independent of the platform's test-thread stack.
+    std::thread::Builder::new()
+        .stack_size(8 * 1024 * 1024)
+        .spawn(|| {
+            // Every condition is parsed once; reparsing would double the work per level.
+            let mut condition = "true".to_owned();
+            for _ in 0..64 {
+                condition = format!("loop {{ break true if {condition}; break false; }}");
+            }
+            let body = parse_body(&format!("fn f()->i32{{ return 1 if {condition}; }}"));
+            assert!(matches!(body[0].kind, StmtKind::If { .. }));
+        })
+        .expect("spawn parser stress-test thread")
+        .join()
+        .expect("parser stress test should pass");
 }
 
 // Tuples, patterns, and multiple results
