@@ -1787,3 +1787,12 @@ fn for_scoping() {
     // A bound may read an outer variable the loop variable then shadows.
     assert!(check("fn f(u8 i) { for i in 0 until i { } }").is_ok());
 }
+
+#[test]
+fn for_step_must_fit() {
+    assert!(matches!(
+        error("fn f() { for u8 i in 0 to 9 by 300 { } }"),
+        SemanticError::LiteralOutOfRange { .. }
+    ));
+    assert!(check("fn f(i32 a, i32 b) { for i in a to b by -7 { } }").is_ok());
+}

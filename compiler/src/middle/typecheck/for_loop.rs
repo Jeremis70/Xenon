@@ -14,10 +14,10 @@ use crate::middle::thir::{
     BindingKind, Block, ConditionPlacement, Expr, ExprKind, LoopCondition, Stmt, StmtKind,
 };
 use crate::source::Span;
-use crate::types::Type;
+use crate::types::{MAX_INT_WIDTH, Type};
 
 use super::expr::needs_context;
-use super::operator::binary;
+use super::operator::{binary, widen};
 use super::{Expectation, FnCtxt, LoopFrame};
 
 impl FnCtxt<'_, '_> {
@@ -137,6 +137,19 @@ impl FnCtxt<'_, '_> {
     /// The loop condition already keeps an `until` counter short of the
     /// end. A `to` counter may sit on the last value of its type, so the
     /// step is only taken when another value follows.
+    ///
+    /// A step `m` larger than one could jump past the end and out of the
+    /// type, so the distance left is tested first (`end - counter` going
+    /// up, `counter - end` going down):
+    ///
+    /// | end      | increment                                          |
+    /// |----------|----------------------------------------------------|
+    /// | `until`  | `if distance <= m { break; } counter += m`         |
+    /// | `to`     | `if distance < m { break; } counter += m`          |
+    ///
+    /// The distance is never negative, because the loop condition held. In
+    /// a signed type it may still not fit (`127 - -128`), so there it is
+    /// computed one bit wider.
     fn range_increment(
         &mut self,
         counter: BindingId,
@@ -145,14 +158,45 @@ impl FnCtxt<'_, '_> {
         direction: &Direction,
         span: Span,
     ) -> SemanticResult<Vec<Stmt>> {
-        if direction.magnitude != BigInt::from(1) {
-            return Err(SemanticError::NotYetSupported {
-                what: "a `by` step other than 1",
-                span,
-            });
-        }
         let mut increment = Vec::with_capacity(2);
-        if range.inclusive {
+        if direction.magnitude != BigInt::from(1) {
+            let step_span = range.step.as_ref().map_or(span, |step| step.span);
+            let ty = self.bindings[counter].ty.clone();
+            // The step is also added to the counter, so it must fit.
+            self.int_literal(direction.magnitude.clone(), ty.clone(), step_span)?;
+            let wide = if ty.is_signed_integer() {
+                match self.target().int_width(&ty) {
+                    Some(width) if width < MAX_INT_WIDTH => Type::Int(width + 1),
+                    _ => {
+                        return Err(SemanticError::RangeStepUnsupported {
+                            ty,
+                            span: step_span,
+                        });
+                    }
+                }
+            } else {
+                ty
+            };
+            let (far, near) = if direction.descending {
+                (counter, end)
+            } else {
+                (end, counter)
+            };
+            let distance = binary(
+                BinOp::Sub,
+                wide.clone(),
+                widen(self.read(far, span), &wide),
+                widen(self.read(near, span), &wide),
+                span,
+            );
+            let step = self.int_literal(direction.magnitude.clone(), wide, step_span)?;
+            let op = if range.inclusive {
+                BinOp::Lt
+            } else {
+                BinOp::Le
+            };
+            increment.push(break_if(binary(op, Type::Bool, distance, step, span), span));
+        } else if range.inclusive {
             increment.push(break_if(self.compare(BinOp::Eq, counter, end, span), span));
         }
         increment.push(self.advance(counter, &direction.magnitude, direction.descending, span));
