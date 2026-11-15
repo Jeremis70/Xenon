@@ -36,6 +36,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   an `impl` block is read as `r.area`, takes no room in the struct, and is
   read-only.
 
+- The names of a `let` list can share one type, written on the first:
+  `let i32 a, b = 0, 1;`. Either every name has its own type or only the
+  first one does; mixing the two is an error.
+
 ### Changed
 
 - `struct`, `impl`, and `self` are keywords.

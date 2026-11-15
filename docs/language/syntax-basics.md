@@ -87,6 +87,29 @@ let i32 a, (bool b, _) = 1, (true, 2);
 let (i32 x, i32 y) = point;            // same as `let i32 x, i32 y = point;`
 ```
 
+When the names of a list all have the same type, it can be written once,
+on the first name:
+
+```xe
+let i32 a, b = 0, 1;                   // both `i32`
+let i32 q, r = divmod(17, 5);
+let i32 a, _, c = triple;              // `_` takes no type either way
+let i32 a, (bool b, c), d = 1, (true, false), 2;   // `c` is `bool`, `d` is `i32`
+```
+
+A list goes one way or the other: either every name has its own type, or
+only the first one does and the others share it. Mixing the two is an
+error, since a reader could not tell which type a lone name takes:
+
+```xe
+let i32 a, bool b = 0, true;           // ok: each name is typed
+let i32 a, bool b, c = 0, true, 1;     // error
+```
+
+A list in parentheses is a list of its own and follows the rule by itself.
+Sharing is only for `let`: parameters, named results, and struct fields
+each spell their type.
+
 All values are evaluated first, left to right, and only then are the names
 declared, so the initializers still see the variables the new names shadow.
 

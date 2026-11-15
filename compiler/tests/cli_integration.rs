@@ -1087,3 +1087,26 @@ fn backend_runs_deep_trees_of_empty_structs() {
     ));
     assert_eq!(compile_and_run(&source), 0);
 }
+
+#[cfg(feature = "llvm-backend")]
+#[test]
+fn backend_runs_shared_type_declarations() {
+    let code = compile_and_run(concat!(
+        "fn pair() -> i32, i32 { return 3, 4; }\n",
+        "#[entry]\n",
+        "fn main() -> u8 {\n",
+        "    let u8 total = 0;\n",
+        "    let i32 a, b = 1, 2;\n",
+        "    total += 1 if a + b == 3;\n",
+        "    let i32 x, y = pair();\n",
+        "    total += 2 if x == 3 and y == 4;\n",
+        "    let u8 small, (i64 big, wide), _, last = 1, (2, 3), 9, 4;\n",
+        "    total += 4 if small + last == 5 and big + wide == 5;\n",
+        "    let [2]u8 row, copy = [1, 2], [3, 4];\n",
+        "    row[0] = 9;\n",
+        "    total += 8 if row == [9, 2] and copy == [3, 4];\n",
+        "    return total;\n",
+        "}\n",
+    ));
+    assert_eq!(code, 15);
+}

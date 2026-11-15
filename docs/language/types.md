@@ -165,7 +165,9 @@ let u32 first, _ = foo();           // `_` ignores a value
 let i32 a, (bool b, u8 c) = 1, (true, 2);
 ```
 
-Every new name spells its type: there is no type inference. See
+There is no type inference: the type of every new name is written out. The
+names of one `let` list may share the type written on the first
+(`let u32 x, y = foo();`). See
 [Syntax Basics](syntax-basics.md#tuples-and-parallel-assignment) for
 destructuring and parallel assignment, and [Functions](functions.md) for
 multiple results.
