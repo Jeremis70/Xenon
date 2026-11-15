@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `for` loops over arrays and integer ranges: `for x in items`,
+  `for i in 0 until n`, `for u8 i in 0 to 255`. `to` includes the end,
+  `until` stops before it, and `by` sets the step. A range's direction is
+  decided at compile time: from `by`, or from two literal bounds; otherwise
+  it counts up and a start past the end is empty.
+- `with` and `where` clauses on `for`: `with name` counts the elements that
+  reach it, `where condition` skips those it rejects.
+- `repeat count { }` runs a body a number of times.
+- `in`, `to`, `by`, `with`, `where` and `repeat` are now keywords.
 - Tuples: tuple types `(T1, T2)`, the unit type `()`, one-element tuples
   `(T,)`, tuple expressions, element access `t.0` (assignable on places),
   and element-wise `==` / `!=`.
