@@ -53,7 +53,9 @@ fn example_program_builds_and_verifies() {
     let src = include_str!("../../tests/main.xe");
     let program = build(src);
     assert_eq!(program.entry(), Some(DefId::new(0)));
-    assert_eq!(program.bodies().len(), 3);
+    // Three free functions, then the members of `impl Rect`: one property
+    // getter and three functions.
+    assert_eq!(program.bodies().len(), 7);
     assert!(program.bodies().all(|body| body.phase() == MirPhase::Built));
 }
 
