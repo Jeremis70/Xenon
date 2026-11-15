@@ -15,6 +15,114 @@ fn check_succeeds_on_tests_main_xe() {
         .success();
 }
 
+#[cfg(feature = "llvm-backend")]
+#[test]
+fn backend_runs_arrays_with_copy_equality_and_nested_places() {
+    let source = "
+        struct Cell { [2]u8 values; }
+        impl Cell { fn bump(&self) { self.values[1] += 1; } }
+        fn make()->[2]u8 { return [3, 4]; }
+        fn get([2]u8 a, u1 i)->u8 { return a[i]; }
+        #[entry] fn main()->u8 {
+            let [2][2]u8 a = [make(), [5, 6]];
+            let [2][2]u8 copy = a;
+            a[0][1]++;
+            if copy != [[3, 4], [5, 6]] { return 1; }
+            if a == copy { return 2; }
+            let Cell c = Cell(values = a[0]);
+            c.bump();
+            let &[2]u8 row = @a[1];
+            row[0] = 7;
+            let *[2][2]u8 pointer = @a;
+            (*pointer)[1][1] = 8;
+            let [0]u8 empty = [];
+            if empty != [] { return 3; }
+            let [2]u0 zeros = [0, 0];
+            zeros[1] = 0;
+            if zeros != [0, 0] { return 4; }
+            let [2]&u8 refs = [@row[0], @row[1]];
+            refs[0] = 9;
+            return get(c.values, 1) + a[1][0] + a[1][1];
+        }";
+    for args in [vec![], vec!["-O", "3"]] {
+        assert_eq!(run_status_with(source, &args).code(), Some(23));
+    }
+}
+
+#[cfg(feature = "llvm-backend")]
+#[test]
+fn arrays_snapshot_assignment_targets_and_broadcast_values_once() {
+    let source = "
+        fn base(&[5]u8 a, &u32 log)->*[5]u8 { log = log * 10 + 1; return @a; }
+        fn index(&u32 log, i32 i)->i32 { log = log * 10 + 2; return i; }
+        fn value(&u32 log)->u8 { log = log * 10 + 3; return 7; }
+        fn change(&i32 i)->u8 { i = 1; return 9; }
+        #[entry] fn main()->u8 {
+            let [5]u8 a = [0, 0, 0, 0, 0];
+            let u32 log = 0;
+            (*base(@a, @log))[index(@log, 0), index(@log, 2), index(@log, 4)] = value(@log);
+            if log != 12223 { return 1; }
+            if a != [7, 0, 7, 0, 7] { return 2; }
+            let i32 i = 0;
+            a[i] = change(@i);
+            if a[0] != 9 or a[1] != 0 { return 3; }
+            a[0, 0] = value(@log);
+            if log != 122233 { return 4; }
+            let [2][2]u8 grid = [[0, 0], [0, 0]];
+            grid[0, 1] = [1, 2];
+            grid[0][0] = 3;
+            if grid != [[3, 2], [1, 2]] { return 5; }
+            return a[0] + a[2] + a[4];
+        }";
+    assert_eq!(compile_and_run(source), 21);
+}
+
+#[cfg(feature = "llvm-backend")]
+#[test]
+fn arrays_trap_on_runtime_bounds_failures() {
+    for (ty, value) in [("i8", "-1"), ("u8", "2"), ("u128", "18446744073709551616")] {
+        for operation in [
+            "return a[i];",
+            "a[i] = 3; return 0;",
+            "a[0, i] = 3; return 0;",
+        ] {
+            let source = format!(
+                "fn access({ty} i)->u8 {{ let [2]u8 a = [1, 2]; {operation} }}
+                 #[entry] fn main()->u8 {{ return access({value}); }}"
+            );
+            let status = run_status(&source);
+            assert!(
+                status.code().is_none(),
+                "{ty}: {operation} should trap: {status:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn arrays_require_initialization_and_report_bounds_in_json() {
+    for target in ["a[0]", "a[0, 1]"] {
+        let diagnostic = single_json_diagnostic(
+            "check",
+            &format!(
+                "#[entry] fn main() {{ }} fn f()->[2]u8 a {{ {target} = 1; a = [1, 2]; return; }}"
+            ),
+        );
+        assert_eq!(diagnostic["code"], "mir-analysis", "{diagnostic}");
+    }
+    let diagnostic = single_json_diagnostic(
+        "check",
+        "#[entry] fn main() { let [2]u8 a = [1, 2]; let i32 i = 1 + 1; a[i] = 0; }",
+    );
+    assert_eq!(diagnostic["code"], "known-panic", "{diagnostic}");
+    assert!(
+        diagnostic["message"]
+            .as_str()
+            .expect("message")
+            .contains("array index out of bounds")
+    );
+}
+
 #[test]
 fn check_emits_runtime_mir_without_codegen() {
     let dir = tempfile::tempdir().expect("tempdir");

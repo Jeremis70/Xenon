@@ -69,6 +69,20 @@ fn llvm_backend_emits_runtime_mir() {
 }
 
 #[test]
+fn llvm_arrays_use_array_types_and_checked_geps() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mir = build_mir_for_source(
+        "fn get([3]u8 a, i32 i)->u8 { return a[i]; }
+         #[entry] fn main()->u8 { let [3]u8 a = [1, 2, 3]; return get(a, 1); }",
+    );
+    let ir = emit_ir(&mir, &dir.path().join("arrays.ll"));
+    assert!(ir.contains("[3 x i8]"), "{ir}");
+    assert!(ir.contains("getelementptr inbounds [3 x i8]"), "{ir}");
+    assert!(ir.contains("icmp slt") && ir.contains("icmp sge"), "{ir}");
+    assert!(ir.contains("llvm.trap"), "{ir}");
+}
+
+#[test]
 fn llvm_optimization_promotes_stack_slots_and_folds_constants() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("optimized.ll");

@@ -12,6 +12,67 @@ use xenonc::types::{FieldDef, StructDef, StructId, StructTable, StructTy, Type};
 
 const SI: SourceInfo = SourceInfo::outermost(Span::ZERO);
 
+#[test]
+fn array_projections_and_aggregates_enforce_mir_types() {
+    let array = Type::Array(Box::new(Type::Int(32)), 2);
+    let errors = verify_with(
+        TargetSpec::new(64),
+        vec![array.clone(), Type::Bool],
+        Type::Int(32),
+        |b| {
+            b.push_assign(
+                START_BLOCK,
+                SI,
+                RETURN_PLACE.into(),
+                Rvalue::Use(copy(Place::from(Local::new(1)).index(Local::new(2)))),
+            );
+            b.terminate(START_BLOCK, SI, TerminatorKind::Return);
+        },
+    );
+    assert!(
+        errors.iter().any(|error| matches!(
+            error,
+            VerifyErrorKind::Typing(TypingError::InvalidIndex(Type::Bool))
+        )),
+        "{errors:?}"
+    );
+    let errors = verify_with(TargetSpec::new(64), vec![array], Type::Int(32), |b| {
+        b.push_assign(
+            START_BLOCK,
+            SI,
+            RETURN_PLACE.into(),
+            Rvalue::Use(copy(Place::from(Local::new(1)).constant_index(2))),
+        );
+        b.terminate(START_BLOCK, SI, TerminatorKind::Return);
+    });
+    assert!(
+        errors.iter().any(|error| matches!(
+            error,
+            VerifyErrorKind::Typing(TypingError::InvalidField { index: 2, .. })
+        )),
+        "{errors:?}"
+    );
+    let errors = verify_stmts(|b| {
+        let temp = b.new_temp(Type::Array(Box::new(Type::Bool), 2), Span::ZERO);
+        b.push_assign(
+            START_BLOCK,
+            SI,
+            temp.into(),
+            Rvalue::Aggregate(
+                AggregateKind::Array(Box::new(Type::Bool), 2),
+                vec![Operand::constant(Constant::bool(true))],
+            ),
+        );
+    });
+    assert!(
+        errors.iter().any(|error| matches!(
+            error,
+            VerifyErrorKind::Typing(TypingError::InvalidAggregate(Type::Array(..)))
+        )),
+        "{errors:?}"
+    );
+}
+
 fn int(value: i64, ty: Type) -> Operand {
     Operand::constant(Constant::int(value, ty))
 }
