@@ -83,6 +83,43 @@ fn llvm_arrays_use_array_types_and_checked_geps() {
 }
 
 #[test]
+fn llvm_array_geps_preserve_large_unsigned_indices() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mir = build_mir_for_source(
+        "fn address(&[2147483649]u8 a, u32 i)->*u8 { return @a[i]; }
+         #[entry] fn main() {}",
+    );
+    let ir = emit_ir(&mir, &dir.path().join("large-index.ll"));
+    let gep = ir
+        .lines()
+        .find(|line| line.contains("getelementptr inbounds [2147483649 x i8]"))
+        .expect("array element GEP");
+    let width = TargetSpec::host().pointer_width();
+    assert!(gep.contains(&format!(", i{width} ")), "{gep}");
+    if width > 32 {
+        assert!(
+            ir.contains("zext i32") && ir.contains(&format!("to i{width}")),
+            "{ir}"
+        );
+    }
+}
+
+#[test]
+fn llvm_array_equality_does_not_expand_maximum_length() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mir = build_mir_for_source(
+        "fn equal(&[4294967295]u8 a, &[4294967295]u8 b)->bool { return a == b; }
+         #[entry] fn main() {}",
+    );
+    let ir = emit_ir(&mir, &dir.path().join("large-array.ll"));
+    assert!(
+        ir.len() < 16000,
+        "large arrays must lower to a bounded loop, not unrolled comparisons"
+    );
+    assert!(ir.contains("icmp ult i32"), "{ir}");
+}
+
+#[test]
 fn llvm_optimization_promotes_stack_slots_and_folds_constants() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("optimized.ll");

@@ -455,6 +455,14 @@ impl Checker<'_> {
                 }
                 return;
             }
+            ConstValue::ArrayZero => {
+                if !(matches!(ty, Type::Array(..))
+                    && Constant::zero(ty, self.program.structs()).is_some())
+                {
+                    self.report(VerifyErrorKind::ConstantKindMismatch(ty.clone()));
+                }
+                return;
+            }
             ConstValue::Tuple(_) => {
                 match constant.elems(self.program.structs()) {
                     Some(elems) => elems.iter().for_each(|elem| self.check_constant(elem)),

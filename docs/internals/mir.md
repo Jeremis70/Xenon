@@ -43,6 +43,8 @@ A `Body` is one function:
   struct, and its operands are the fields in declaration order.
   An array aggregate records its element type and length; every operand
   must have that element type.
+  All-zero arrays use the compact `ConstValue::ArrayZero` constant rather
+  than storing one zero value per element.
 - **Struct definitions** live in the program's `StructTable`
   (`MirProgram::structs`), not in the type: `Type::Struct` only carries the
   `StructId` and the name. Whatever depends on the fields takes the table:
@@ -179,6 +181,9 @@ the index must be non-negative and smaller than the length before the
 projection is used, including for address-of and assignment. These checks
 are unconditional, not controlled by arithmetic overflow mode. LLVM uses
 native array types and guarded element-address GEPs.
+Checked indices are converted to the target pointer width before GEP
+construction; explicit zero extension prevents LLVM from interpreting a
+valid unsigned index as a negative offset.
 
 `analysis::analyze_liveness` is a reusable backward local analysis. Results
 are owned by the caller rather than cached on `Body`, so a MIR mutation cannot
@@ -284,6 +289,10 @@ Lowering rules:
   effects), then compare the elements pairwise with scalar `Eq` and fold
   the results with `BitAnd` (`Not` for `!=`). Every call in the operands
   runs exactly once and before any comparison.
+- **Array `==` / `!=`** use the same operand evaluation rules, then a counted
+  loop over the shared element type. Comparison MIR does not grow with the
+  array length. Nested aggregates compare recursively; the loop guard
+  establishes that its generated index is in bounds.
 - **Falling off the end** of a body ends with `EndOfBody`, which flow
   checking reports as a missing `return`, except in a function returning
   `()`, where it becomes `_0 = const ()` and `return`.

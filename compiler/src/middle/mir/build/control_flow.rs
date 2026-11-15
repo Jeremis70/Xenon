@@ -82,7 +82,7 @@ impl Builder<'_> {
     }
 
     /// Ends `block` with a branch on the `bool` operand `discr`.
-    fn switch_bool(
+    pub(super) fn switch_bool(
         &mut self,
         block: BasicBlock,
         discr: Operand,
