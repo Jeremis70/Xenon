@@ -551,3 +551,129 @@ fn zero_sized_struct_trees_compile_without_being_expanded() {
     // The zero value is one constant, not one per field.
     assert!(ir.contains("store {} zeroinitializer"), "{ir}");
 }
+
+/// The optimized LLVM IR of `source` (without an entry point), compiled as
+/// `-O 3` does: arithmetic wraps and LLVM runs its full pipeline.
+fn optimized_ir(source: &str) -> String {
+    let tokens = lex(source).expect("source should lex");
+    let ast = Parser::new(&tokens)
+        .parse_program()
+        .expect("source should parse");
+    let target = TargetSpec::host();
+    let thir = check_program(&ast, &target).expect("source should type-check");
+    let mut mir = build_mir(&thir).expect("THIR should lower");
+    analyze_program(&mut mir, &target).expect("MIR flow analysis should pass");
+    let policy = RuntimeCheckPolicy {
+        overflow: OverflowMode::Wrapping,
+    };
+    normalize_runtime_checks(&mut mir, &target, policy).expect("runtime checks should normalize");
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("out.ll");
+    let options = CodegenOptions {
+        optimization: 3,
+        relocation_model: RelocationModel::Pic,
+    };
+    let request = OutputRequest {
+        kind: ArtifactKind::LlvmIr,
+        path: path.clone(),
+    };
+    LlvmBackend
+        .emit(&mir, &target, options, &[request])
+        .expect("MIR should emit successfully");
+    std::fs::read_to_string(path).expect("LLVM IR should be written")
+}
+
+/// The body of the function `name` in `ir`, from its `define` line to its
+/// closing brace, with the name replaced by `f` and every value and label
+/// renamed in order of appearance: LLVM numbers the names it invents
+/// across the whole module, so equal code can differ in them.
+fn function_body(ir: &str, name: &str) -> String {
+    let marker = format!("@{name}(");
+    let start = ir
+        .lines()
+        .position(|line| line.starts_with("define") && line.contains(&marker))
+        .unwrap_or_else(|| panic!("`{name}` not found in:\n{ir}"));
+    let body: Vec<&str> = ir
+        .lines()
+        .skip(start)
+        .take_while(|line| *line != "}")
+        .collect();
+    let body = body.join("\n").replace(&marker, "@f(");
+
+    let mut names: Vec<&str> = Vec::new();
+    let mut renamed = String::with_capacity(body.len());
+    let mut rest = body.as_str();
+    while let Some(at) = rest.find('%') {
+        renamed.push_str(&rest[..at]);
+        let name = &rest[at + 1..];
+        let len = name
+            .find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-')))
+            .unwrap_or(name.len());
+        let name = &name[..len];
+        let index = names
+            .iter()
+            .position(|known| *known == name)
+            .unwrap_or_else(|| {
+                names.push(name);
+                names.len() - 1
+            });
+        renamed.push_str(&format!("%v{index}"));
+        rest = &rest[at + 1 + len..];
+    }
+    renamed.push_str(rest);
+    // Labels are defined as `name:` and listed in `; preds = ...` comments,
+    // and loop metadata is numbered across the module too.
+    renamed
+        .lines()
+        .filter(|line| !line.trim_end().ends_with(':') && !line.contains("; preds ="))
+        .map(|line| line.split(", !llvm.loop").next().unwrap_or(line))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// `for` and `repeat` cost nothing: optimized, each loop is the same code as
+/// the `while` loop one would write by hand.
+#[test]
+fn for_loops_are_zero_cost() {
+    for (name, with_for, by_hand) in [
+        (
+            "exclusive range",
+            "let u32 s = 0; for i in 0 until n { s += i * i; } return s;",
+            "let u32 s = 0; let u32 i = 0; while i < n { s += i * i; i += 1; } return s;",
+        ),
+        (
+            "repeat",
+            "let u32 s = 1; repeat n { s = s * 3 + 1; } return s;",
+            "let u32 s = 1; let u32 i = 0; while i < n { s = s * 3 + 1; i += 1; } return s;",
+        ),
+        (
+            "descending range",
+            "let u32 s = 0; for i in n until 0 by -1 { s = s * 3 + i; } return s;",
+            "let u32 s = 0; let u32 i = n; while i > 0 { s = s * 3 + i; i -= 1; } return s;",
+        ),
+    ] {
+        let source =
+            format!("fn a(u32 n) -> u32 {{ {with_for} }}\nfn b(u32 n) -> u32 {{ {by_hand} }}\n");
+        let ir = optimized_ir(&source);
+        assert_eq!(
+            function_body(&ir, "a"),
+            function_body(&ir, "b"),
+            "{name}:\n{ir}"
+        );
+    }
+}
+
+/// Walking an array in place costs the same as indexing it by hand.
+#[test]
+fn for_over_array_is_zero_cost() {
+    let ir = optimized_ir(
+        "fn a(&[64]u32 v) -> u32 { let u32 s = 0; for x in v { s += x; } return s; }\n\
+         fn b(&[64]u32 v) -> u32 {\n\
+             let u32 s = 0; let usize i = 0;\n\
+             while i < 64 { s += v[i]; i += 1; }\n\
+             return s;\n\
+         }\n",
+    );
+    assert_eq!(function_body(&ir, "a"), function_body(&ir, "b"), "{ir}");
+}
