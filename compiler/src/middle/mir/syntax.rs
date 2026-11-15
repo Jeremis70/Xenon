@@ -426,6 +426,10 @@ fn zero_value(ty: &Type, structs: &StructTable) -> Option<ConstValue> {
         ConstValue::Float(0.0)
     } else if matches!(ty, Type::Pointer(_)) {
         ConstValue::Address(BigInt::ZERO)
+    } else if matches!(ty, Type::Struct(_)) && ty.is_zero_sized(structs) {
+        // Not spelled out field by field: the fields of a struct without
+        // data can still form an enormous tree.
+        ConstValue::ZeroSized
     } else if ty.is_aggregate() {
         let elems = structs.field_tys(ty)?;
         ConstValue::Tuple(
@@ -454,6 +458,8 @@ pub enum ConstValue {
     /// The elements of a tuple or the fields of a struct, typed by the
     /// constant's type.
     Tuple(Vec<ConstValue>),
+    /// The only value of a zero-sized struct, whatever its fields.
+    ZeroSized,
 }
 
 // ---------------------------------------------------------------------------
@@ -544,6 +550,7 @@ fn write_const_value(f: &mut fmt::Formatter<'_>, value: &ConstValue, ty: &Type) 
         ConstValue::Int(value) => write!(f, "{value}_{ty}"),
         ConstValue::Float(value) => write!(f, "{value:?}_{ty}"),
         ConstValue::Address(value) => write!(f, "@{value:#x}: {ty}"),
+        ConstValue::ZeroSized => write!(f, "{ty}()"),
         ConstValue::Tuple(values) => {
             // A struct's field types are not at hand here: its name and the
             // bare values have to do.
@@ -574,6 +581,7 @@ fn write_untyped_value(f: &mut fmt::Formatter<'_>, value: &ConstValue) -> fmt::R
         ConstValue::Int(value) => write!(f, "{value}"),
         ConstValue::Float(value) => write!(f, "{value:?}"),
         ConstValue::Address(value) => write!(f, "@{value:#x}"),
+        ConstValue::ZeroSized => f.write_str("()"),
         ConstValue::Tuple(values) => {
             f.write_str("(")?;
             for (index, value) in values.iter().enumerate() {

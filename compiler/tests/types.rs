@@ -111,3 +111,27 @@ fn struct_displays_its_name_and_compares_by_identity() {
     assert_ne!(a, b);
     assert!(a.is_aggregate() && Type::unit().is_aggregate() && !Type::Bool.is_aggregate());
 }
+
+#[test]
+fn zero_sizedness_of_shared_definitions_is_decided_once() {
+    // Each struct holds the previous one twice: a chain of 61 definitions
+    // whose fields, written out, form a tree of 2^60 leaves.
+    let mut structs = StructTable::default();
+    let mut empty = define(&mut structs, "S0", vec![]);
+    let mut sized = define(&mut structs, "T0", vec![Type::Bool]);
+    for level in 1..=60 {
+        empty = define(
+            &mut structs,
+            &format!("S{level}"),
+            vec![empty.clone(), empty.clone()],
+        );
+        sized = define(
+            &mut structs,
+            &format!("T{level}"),
+            vec![empty.clone(), sized.clone(), empty.clone()],
+        );
+    }
+    assert!(empty.is_zero_sized(&structs));
+    assert!(!sized.is_zero_sized(&structs));
+    assert!(Type::Tuple(vec![empty.clone(), empty]).is_zero_sized(&structs));
+}

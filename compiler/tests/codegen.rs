@@ -467,3 +467,36 @@ fn getters_have_get_suffix_symbol() {
     // A property takes no room in the struct.
     assert!(ir.contains("%Rect = type { double, double }"), "{ir}");
 }
+
+/// `struct S0 {}` and `struct Sn { S(n-1) a; S(n-1) b; }` up to `depth`.
+fn doubling_empty_structs(depth: usize) -> String {
+    let mut source = String::from("struct S0 {}\n");
+    for level in 1..=depth {
+        let inner = level - 1;
+        source.push_str(&format!("struct S{level} {{ S{inner} a; S{inner} b; }}\n"));
+    }
+    source
+}
+
+#[test]
+fn zero_sized_struct_trees_compile_without_being_expanded() {
+    // `S60` has no data, but its fields written out are a tree of 2^60
+    // leaves: nothing may walk it leaf by leaf.
+    let source = format!(
+        "{}\
+         fn same(S60 a, S60 b) -> bool {{ return a == b; }}\n\
+         fn different(S60 a, S60 b) -> bool {{ return a != b; }}\n\
+         fn zero(S60 value, bool c) {{ while c {{ break value; }} }}\n\
+         fn copy(S60 value) -> S60 {{ let S60 other = value; return other; }}\n",
+        doubling_empty_structs(60)
+    );
+    let ir = ir_for(&source);
+    // A struct without data is the empty LLVM struct, whatever its fields:
+    // LLVM would otherwise walk them one by one.
+    assert!(ir.contains("define i1 @same({} %0, {} %1)"), "{ir}");
+    assert!(!ir.contains("%S60"), "{ir}");
+    // Two values without data are equal, whatever their fields.
+    assert!(ir.contains("store i1 true, ptr %_0"), "{ir}");
+    // The zero value is one constant, not one per field.
+    assert!(ir.contains("store {} zeroinitializer"), "{ir}");
+}

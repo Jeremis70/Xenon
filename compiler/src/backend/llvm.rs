@@ -207,13 +207,25 @@ impl<'ctx, 'a> MirCodegen<'ctx, 'a> {
 
     /// Declares a named LLVM type for every struct, then gives each its
     /// fields: a field may refer to a struct declared after its own.
+    ///
+    /// A struct without data is the empty LLVM struct instead, like every
+    /// other zero-sized value. Its fields may form an enormous tree, which
+    /// LLVM would walk leaf by leaf to pass or copy a value.
     fn declare_structs(&mut self) -> Result<(), BackendError> {
         let structs = self.structs.clone();
+        let empty = self.context.struct_type(&[], false);
         for (id, def) in structs.iter_enumerated() {
-            let ty = self.context.opaque_struct_type(&def.name);
+            let ty = if structs.ty(id).is_zero_sized(&structs) {
+                empty
+            } else {
+                self.context.opaque_struct_type(&def.name)
+            };
             self.struct_types.insert(id, ty);
         }
         for (id, def) in structs.iter_enumerated() {
+            if self.struct_types[&id] == empty {
+                continue;
+            }
             let fields = def
                 .fields
                 .iter()
@@ -486,6 +498,11 @@ impl<'ctx, 'a> MirCodegen<'ctx, 'a> {
         elems: Vec<BasicValueEnum<'ctx>>,
     ) -> Result<BasicValueEnum<'ctx>, BackendError> {
         let struct_ty = self.llvm_type(ty)?.into_struct_type();
+        // A struct without data has no room for its elements, which have
+        // no data either.
+        if struct_ty.count_fields() == 0 {
+            return Ok(struct_ty.const_zero().into());
+        }
         let mut value: AggregateValueEnum<'ctx> = struct_ty.get_poison().into();
         for (index, elem) in elems.into_iter().enumerate() {
             value = self
@@ -1009,6 +1026,7 @@ impl<'ctx, 'a> MirCodegen<'ctx, 'a> {
                     .map_err(llvm_error("address constant conversion"))?
                     .into()
             }
+            ConstValue::ZeroSized => ty.const_zero(),
             ConstValue::Tuple(_) => {
                 let elems = constant
                     .elems(&self.structs)
@@ -1041,10 +1059,16 @@ impl<'ctx, 'a> MirCodegen<'ctx, 'a> {
                         .ok_or_else(|| invalid_mir("dereference of non-pointer".to_owned()))?;
                 }
                 ProjectionElem::Field(index) => {
-                    pointer = self
-                        .builder
-                        .build_struct_gep(self.llvm_type(ty)?, pointer, *index, "field")
-                        .map_err(llvm_error("tuple element address"))?;
+                    // A field of a struct without data has no data either:
+                    // any address will do, and the struct has none to offer.
+                    let llvm_ty = self.llvm_type(ty)?;
+                    if !(llvm_ty.is_struct_type() && llvm_ty.into_struct_type().count_fields() == 0)
+                    {
+                        pointer = self
+                            .builder
+                            .build_struct_gep(llvm_ty, pointer, *index, "field")
+                            .map_err(llvm_error("tuple element address"))?;
+                    }
                     ty = self
                         .structs
                         .field_ty(ty, *index)

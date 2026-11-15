@@ -257,6 +257,11 @@ impl Builder<'_> {
         span: Span,
     ) -> Operand {
         let source_info = self.source_info(span);
+        // Values without data are always equal. Their fields are not
+        // compared one by one: there can be an enormous tree of them.
+        if ty.is_aggregate() && ty.is_zero_sized(self.structs) {
+            return Operand::constant(Constant::bool(true));
+        }
         let Some(elems) = self.structs.field_tys(ty) else {
             let equal = self.cfg.new_temp(Type::Bool, span);
             let rvalue = Rvalue::binary(BinOp::Eq, Operand::Copy(lhs), Operand::Copy(rhs));
