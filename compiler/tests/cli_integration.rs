@@ -1260,3 +1260,73 @@ fn for_return_inside() {
     assert_eq!(main_exit_with(items, "return find(12);"), 26);
     assert_eq!(main_exit_with(items, "return find(97);"), 255);
 }
+
+#[cfg(feature = "llvm-backend")]
+#[test]
+fn for_stepped_range_runs() {
+    for (body, expected) in [
+        (
+            "let u8 s = 0; for u8 i in 0 until 10 by 4 { s += i; } return s;",
+            12,
+        ),
+        (
+            "let u8 s = 0; for u8 i in 0 to 8 by 4 { s += i; } return s;",
+            12,
+        ),
+        (
+            "let u8 s = 0; for u8 i in 0 until 8 by 4 { s += i; } return s;",
+            4,
+        ),
+        // The step never leaves the type: 250, 253.
+        (
+            "let u8 s = 0; for u8 i in 250 to 255 by 3 { s += 1; } return s;",
+            2,
+        ),
+        (
+            "let u8 s = 0; for u8 i in 0 to 3 by 10 { s += 1; } return s;",
+            1,
+        ),
+        (
+            "let u8 s = 0; for u8 i in 0 to 255 by 255 { s += 1; } return s;",
+            2,
+        ),
+        // 10, 7, 4, 1.
+        (
+            "let u8 s = 0; for u8 i in 10 to 0 by -3 { s = s * 2 + 1; } return s;",
+            15,
+        ),
+        (
+            "let u8 s = 0; for u8 i in 10 until 1 by -3 { s += 1; } return s;",
+            3,
+        ),
+        // -128, -28, 72 and back: the distance between the bounds does not
+        // fit the type.
+        (
+            "let u8 s = 0; for i8 i in -128 to 127 by 100 { s += 1; } return s;",
+            3,
+        ),
+        (
+            "let u8 s = 0; for i8 i in 127 to -128 by -100 { s += 1; } return s;",
+            3,
+        ),
+        (
+            "let u8 s = 0; for i8 i in -128 until 127 by 127 { s += 1; } return s;",
+            3,
+        ),
+        (
+            "let u8 s = 0; for u8 i in 0 to 20 by 5 { continue if i == 10; s += 1; } return s;",
+            4,
+        ),
+        // Runtime bounds count up, so a start past the end is empty.
+        (
+            "let u8 a = 9; let u8 b = 2; let u8 s = 0; for i in a until b by 2 { s += 1; } return s;",
+            0,
+        ),
+        (
+            "let i32 a = -9; let i32 b = 9; let u8 s = 0; for i in a to b by 6 { s += 1; } return s;",
+            4,
+        ),
+    ] {
+        assert_eq!(main_exit(body), expected, "{body}");
+    }
+}

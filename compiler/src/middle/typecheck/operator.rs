@@ -251,7 +251,7 @@ fn common_float_type(lhs: &Type, rhs: &Type) -> Option<Type> {
 
 /// Converts `expr` to the numeric type `ty` with an explicit cast, if its
 /// type differs.
-fn widen(expr: Expr, ty: &Type) -> Expr {
+pub(super) fn widen(expr: Expr, ty: &Type) -> Expr {
     if &expr.ty == ty {
         return expr;
     }
