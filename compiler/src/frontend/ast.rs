@@ -180,6 +180,100 @@ pub enum StmtKind {
     },
     Break(Option<Box<Expr>>),
     Continue,
+    /// `for <header> { .. }`: runs the body once per element.
+    For {
+        header: ForHeader,
+        body: Vec<Stmt>,
+    },
+    /// `repeat <count> { .. }`: runs the body `count` times.
+    Repeat {
+        count: Box<Expr>,
+        body: Vec<Stmt>,
+    },
+}
+
+/// What a `for` loop walks and the names it introduces:
+/// `[type] name in iterable [with ..] [where ..]`.
+#[derive(Debug, Clone)]
+pub struct ForHeader {
+    /// The written type of the loop variable, if any.
+    pub ty: Option<TypeExpr>,
+    /// The loop variable; `None` for `_`.
+    pub name: Option<String>,
+    /// The source range of the loop variable's name.
+    pub name_span: Span,
+    pub iterable: ForIterable,
+    /// The `with` and `where` clauses, in source order.
+    pub clauses: Vec<ForClause>,
+}
+
+impl PartialEq for ForHeader {
+    fn eq(&self, other: &Self) -> bool {
+        self.ty == other.ty
+            && self.name == other.name
+            && self.iterable == other.iterable
+            && self.clauses == other.clauses
+    }
+}
+
+/// What a `for` loop walks.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ForIterable {
+    /// `start to end` or `start until end`, with an optional `by` step.
+    Range(RangeExpr),
+    /// Any other expression, such as an array.
+    Value(Box<Expr>),
+}
+
+/// An integer range in a `for` header.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RangeExpr {
+    pub start: Box<Expr>,
+    pub end: Box<Expr>,
+    /// `true` for `to`, which includes `end`; `false` for `until`.
+    pub inclusive: bool,
+    pub step: Option<RangeStep>,
+}
+
+/// The literal after `by`: `by 4` or `by -1`.
+#[derive(Debug, Clone)]
+pub struct RangeStep {
+    /// The absolute value of the step.
+    pub magnitude: BigInt,
+    /// Whether the step was written with a `-`.
+    pub negative: bool,
+    pub span: Span,
+}
+
+impl PartialEq for RangeStep {
+    fn eq(&self, other: &Self) -> bool {
+        self.magnitude == other.magnitude && self.negative == other.negative
+    }
+}
+
+/// A clause after the iterable of a `for` loop.
+#[derive(Debug, Clone)]
+pub enum ForClause {
+    /// `with [type] name`: counts the elements that reach the clause.
+    With {
+        ty: Option<TypeExpr>,
+        name: String,
+        span: Span,
+    },
+    /// `where condition`: skips the elements the condition rejects.
+    Where(Expr),
+}
+
+impl PartialEq for ForClause {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (ForClause::With { ty: a, name: x, .. }, ForClause::With { ty: b, name: y, .. }) => {
+                a == b && x == y
+            }
+            (ForClause::Where(a), ForClause::Where(b)) => a == b,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

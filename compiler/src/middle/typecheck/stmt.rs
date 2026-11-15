@@ -118,6 +118,18 @@ impl FnCtxt<'_, '_> {
                         .transpose()?,
                 }
             }
+            AstStmt::For { .. } => {
+                return Err(SemanticError::NotYetSupported {
+                    what: "`for`",
+                    span,
+                });
+            }
+            AstStmt::Repeat { .. } => {
+                return Err(SemanticError::NotYetSupported {
+                    what: "`repeat`",
+                    span,
+                });
+            }
             AstStmt::Break(value) => StmtKind::Break(self.check_break(value.as_deref(), span)?),
             AstStmt::Continue => {
                 if self.loops.is_empty() {
