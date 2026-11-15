@@ -39,6 +39,7 @@ mod array;
 mod cast;
 mod entry;
 mod expr;
+mod for_loop;
 mod items;
 mod literal;
 mod operator;

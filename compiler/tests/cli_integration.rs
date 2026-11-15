@@ -1110,3 +1110,55 @@ fn backend_runs_shared_type_declarations() {
     ));
     assert_eq!(code, 15);
 }
+
+/// The exit code of a program whose entry function has the body `body`,
+/// which must be the same with and without optimization.
+#[cfg(feature = "llvm-backend")]
+#[track_caller]
+fn main_exit(body: &str) -> i32 {
+    main_exit_with("", body)
+}
+
+/// [`main_exit`] for a program that also has the items `items`.
+#[cfg(feature = "llvm-backend")]
+#[track_caller]
+fn main_exit_with(items: &str, body: &str) -> i32 {
+    let source = format!("{items}\n#[entry] fn main() -> u8 {{ {body} }}");
+    let plain = compile_and_run(&source);
+    let optimized = run_status_with(&source, &["-O", "3"])
+        .code()
+        .expect("process exited with a code");
+    assert_eq!(plain, optimized, "-O 3 changes the result of: {body}");
+    plain
+}
+
+#[cfg(feature = "llvm-backend")]
+#[test]
+fn repeat_runs() {
+    for (body, expected) in [
+        ("let u8 s = 0; repeat 10 { s += 1; } return s;", 10),
+        ("let u8 s = 0; repeat 0 { s += 1; } return s;", 0),
+        (
+            "let i32 n = -5; let u8 s = 0; repeat n { s += 1; } return s;",
+            0,
+        ),
+        (
+            "let u8 s = 0; let u8 k = 0; repeat 6 { k += 1; continue if k > 4; s += 1; } return s;",
+            4,
+        ),
+        (
+            "let u8 s = 0; repeat 9 { s += 1; break if s == 3; } return s;",
+            3,
+        ),
+        (
+            "let u8 n = 3; let u8 s = 0; repeat n { n = 9; s += 1; } return s;",
+            3,
+        ),
+        (
+            "let u8 s = 0; repeat 3 { repeat 4 { s += 1; } } return s;",
+            12,
+        ),
+    ] {
+        assert_eq!(main_exit(body), expected, "{body}");
+    }
+}

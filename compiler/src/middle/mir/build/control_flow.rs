@@ -14,7 +14,10 @@
 //! ```
 //!
 //! `continue` jumps to `body`, `header`, and `latch` respectively; `until`
-//! loops swap the switch targets. Exit and latch blocks are only created
+//! loops swap the switch targets. A `while` loop with an increment (what
+//! `for` and `repeat` become) ends its body with `goto latch`, where the
+//! latch runs the increment and goes back to the header; `continue` jumps
+//! to that latch. Exit and latch blocks are only created
 //! when something jumps to them, so a loop that is never left diverges.
 
 use crate::middle::thir::{Block, ConditionPlacement, Expr, LoopCondition};
@@ -24,6 +27,14 @@ use crate::types::Type;
 use super::super::{BasicBlock, Operand, Place, RETURN_PLACE, SwitchTargets, TerminatorKind};
 use super::scope::{LoopJump, LoopScope};
 use super::{Builder, Flow, LowerErrorKind, LowerResult, zero_rvalue};
+
+/// The pieces of a THIR loop.
+pub(super) struct LoopParts<'thir> {
+    pub(super) condition: Option<&'thir LoopCondition>,
+    /// Run after each iteration and on `continue`.
+    pub(super) increment: Option<&'thir Block>,
+    pub(super) body: &'thir Block,
+}
 
 impl Builder<'_> {
     /// Lowers an `if` statement.
@@ -134,10 +145,14 @@ impl Builder<'_> {
         block: BasicBlock,
         destination: Place,
         ty: &Type,
-        condition: Option<&LoopCondition>,
-        body: &Block,
+        parts: LoopParts<'_>,
         span: Span,
     ) -> LowerResult<()> {
+        let LoopParts {
+            condition,
+            increment,
+            body,
+        } = parts;
         let source_info = self.source_info(span);
         let zero = zero_rvalue(ty, self.structs)?;
         self.cfg
@@ -157,8 +172,29 @@ impl Builder<'_> {
                 let body_start = self.cfg.new_block();
                 let exit = self.cfg.new_block();
                 self.switch_loop(test_end, discr, condition, body_start, exit, span);
-                self.push_loop(destination, Some(start), Some(exit));
-                self.lower_loop_body(body_start, start, body)?
+                match increment {
+                    None => {
+                        self.push_loop(destination, Some(start), Some(exit));
+                        self.lower_loop_body(body_start, start, body)?
+                    }
+                    Some(increment) => {
+                        // The latch running the increment is the continue
+                        // target, created if anything reaches it.
+                        self.push_loop(destination, None, Some(exit));
+                        if let Flow::Continue(end, ()) = self.lower_block(body_start, body)? {
+                            let (_, latch) = self.loop_target(LoopJump::Continue)?;
+                            self.cfg.goto(end, source_info, latch);
+                        }
+                        // Lowered inside the loop, so that a `break` in the
+                        // increment leaves this loop.
+                        if let Some(latch) = self.innermost_loop()?.continue_block
+                            && let Flow::Continue(end, ()) = self.lower_block(latch, increment)?
+                        {
+                            self.cfg.goto(end, source_info, start);
+                        }
+                        self.pop_loop()?
+                    }
+                }
             }
             Some(condition) => {
                 // `start` is the body; the latch testing the condition is

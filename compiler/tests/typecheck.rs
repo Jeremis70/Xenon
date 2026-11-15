@@ -1715,3 +1715,18 @@ fn shared_let_names_have_the_first_type() {
         "{error}"
     );
 }
+
+// ── `repeat` and `for` ────────────────────────────────────────────────────────
+
+#[test]
+fn repeat_count_rules() {
+    assert!(check("fn f(i32 n) { repeat n { } repeat 3 { } }").is_ok());
+    assert!(matches!(
+        error("fn f() { repeat true { } }"),
+        SemanticError::NonIntegerRepeatCount { .. }
+    ));
+    assert!(matches!(
+        error("fn f() { repeat -1 { } }"),
+        SemanticError::NegativeRepeatCount { .. }
+    ));
+}
