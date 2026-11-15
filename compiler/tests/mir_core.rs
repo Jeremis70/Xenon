@@ -11,6 +11,40 @@ use xenonc::types::Type;
 
 const SI: SourceInfo = SourceInfo::outermost(Span::ZERO);
 
+#[test]
+fn array_index_visitors_report_index_locals_as_reads() {
+    struct Reads(Vec<(Local, PlaceContext)>);
+    impl Visitor for Reads {
+        fn visit_local(&mut self, local: &Local, context: PlaceContext, _: Location) {
+            self.0.push((*local, context));
+        }
+    }
+    let array = Local::new(1);
+    let index = Local::new(2);
+    let mut reads = Reads(Vec::new());
+    reads.visit_place(
+        &Place::from(array).index(index),
+        PlaceContext::MutatingUse(MutatingUseContext::Store),
+        Location {
+            block: START_BLOCK,
+            statement_index: 0,
+        },
+    );
+    assert_eq!(
+        reads.0,
+        vec![
+            (
+                array,
+                PlaceContext::MutatingUse(MutatingUseContext::Projection)
+            ),
+            (
+                index,
+                PlaceContext::NonMutatingUse(NonMutatingUseContext::Copy)
+            ),
+        ]
+    );
+}
+
 fn i32_const(value: i64) -> Operand {
     Operand::constant(Constant::int(value, Type::Int(32)))
 }

@@ -13,6 +13,71 @@ use xenonc::types::{MAX_INT_WIDTH, Type};
 
 const TARGET: TargetSpec = TargetSpec::new(64);
 
+#[test]
+fn arrays_typecheck_nested_literals_places_and_references() {
+    let dump = thir(
+        "struct Cell { [2]u8 values; }
+         fn make()->[2]u8 { return [1, 2]; }
+         fn f()->u8 {
+             let [2][2]u8 grid = [make(), [3, 4]];
+             grid[0][1] += 1;
+             let &[2]u8 row = @grid[0];
+             row[0] = 5;
+             let [0]bool empty = [];
+             let [2]&u8 refs = [@row[0], @row[1]];
+             refs[1] = 6;
+             let Cell cell = Cell(values = row);
+             return cell.values[1];
+         }",
+    );
+    assert!(dump.contains("[2][2]u8"), "{dump}");
+    assert!(dump.contains("[0]bool"), "{dump}");
+}
+
+#[test]
+fn arrays_reject_invalid_shapes_and_indices() {
+    assert!(matches!(
+        error("fn f() { let [2]u8 a = [1]; }"),
+        SemanticError::ArrayLengthMismatch {
+            expected: 2,
+            found: 1,
+            ..
+        }
+    ));
+    assert!(matches!(
+        error("fn f() { let [2]u8 a = [1, true]; }"),
+        SemanticError::TypeMismatch { .. }
+    ));
+    for index in ["2", "-1"] {
+        assert!(matches!(
+            error(&format!(
+                "fn f() {{ let [2]u8 a = [1, 2]; a[{index}] = 0; }}"
+            )),
+            SemanticError::ArrayIndexOutOfBounds { .. }
+        ));
+    }
+    assert!(matches!(
+        error("fn f() { let [2]u8 a = [1, 2]; a[true] = 0; }"),
+        SemanticError::InvalidArrayIndex { .. }
+    ));
+    assert!(matches!(
+        error("fn f() { let u8 a = 1; a[0] = 0; }"),
+        SemanticError::IndexOfNonArray { .. }
+    ));
+    assert!(matches!(
+        error("fn f() { let [2]u8 a = [1, 2]; let u8 b = a[0, 1]; }"),
+        SemanticError::MultiIndexAsValue { .. }
+    ));
+    assert!(matches!(
+        error("struct Recursive { [1]Recursive values; }"),
+        SemanticError::RecursiveStruct { .. }
+    ));
+    assert!(matches!(
+        error("struct Invalid { [1]&u8 values; }"),
+        SemanticError::ReferenceField { .. }
+    ));
+}
+
 /// Parses, folds, and type-checks `src`, as the pipeline does.
 fn check(src: &str) -> Result<ThirProgram, SemanticError> {
     let tokens = lex(src).expect("lexing should succeed");

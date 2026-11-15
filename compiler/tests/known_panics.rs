@@ -16,6 +16,25 @@ use xenonc::types::{StructTable, Type};
 
 const TARGET: TargetSpec = TargetSpec::new(64);
 
+#[test]
+fn arrays_report_propagated_and_computed_out_of_bounds_indices() {
+    for index in ["let i32 i = 2;", "let i32 i = 1 + 1;", "let i32 i = -1;"] {
+        assert_eq!(
+            known_panics(&format!(
+                "fn f()->u8 {{ let [2]u8 a = [1, 2]; {index} return a[i]; }}"
+            )),
+            vec![AssertKind::BoundsCheck]
+        );
+    }
+    assert_eq!(
+        known_panics("fn f(i32 i)->u8 { let [0]u8 a = []; return a[i]; }"),
+        vec![AssertKind::BoundsCheck]
+    );
+    assert!(known_panics(
+        "fn f()->u8 { let [2]u8 a = [1, 2]; if false { let i32 i = 2; return a[i]; } return a[0]; }"
+    ).is_empty());
+}
+
 // ---------------------------------------------------------------------------
 // Constant evaluation
 // ---------------------------------------------------------------------------
@@ -295,6 +314,11 @@ fn half_float_casts_round_to_their_format() {
         assert!(
             matches!(narrow(value, Type::Float16), EvalResult::Value(_)),
             "{value}"
+        );
+        assert_eq!(
+            known_panics("fn f() { let [2]u8 a = [1, 2]; let i32 i = 2; a[0, i] = 1 / 0; }"),
+            vec![AssertKind::BoundsCheck],
+            "the value must not be evaluated after a failed bounds check"
         );
     }
     // 2049 needs 12 significand bits; 65520 rounds up to infinity.
