@@ -127,6 +127,10 @@ pub enum SemanticError {
     BreakOutsideLoop { span: Span },
     #[error("`continue` outside of a loop")]
     ContinueOutsideLoop { span: Span },
+    #[error("`repeat` count must be an integer, found `{ty}`")]
+    NonIntegerRepeatCount { ty: Type, span: Span },
+    #[error("`repeat` count cannot be negative")]
+    NegativeRepeatCount { span: Span },
     /// Temporary: a loop form that parses but is not checked yet.
     #[error("{what} is not supported yet")]
     NotYetSupported { what: &'static str, span: Span },
@@ -327,6 +331,8 @@ impl SemanticError {
             | SemanticError::BreakOutsideLoop { span }
             | SemanticError::ContinueOutsideLoop { span }
             | SemanticError::NotYetSupported { span, .. }
+            | SemanticError::NonIntegerRepeatCount { span, .. }
+            | SemanticError::NegativeRepeatCount { span }
             | SemanticError::MultipleEntryPoints { span, .. }
             | SemanticError::EntryWithParams { span }
             | SemanticError::EntryWrongReturn { span, .. }

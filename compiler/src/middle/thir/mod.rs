@@ -256,8 +256,13 @@ pub enum ExprKind {
     ///
     /// The loop's value is the value of the `break` that left it, or zero
     /// when it exits through its condition or a value-less `break`.
+    ///
+    /// `increment` runs after each iteration and on `continue`, before the
+    /// condition is tested again; a `break` inside it leaves the loop. It
+    /// is only present on a loop whose condition is tested before the body.
     Loop {
         condition: Option<Box<LoopCondition>>,
+        increment: Option<Block>,
         body: Block,
     },
 }

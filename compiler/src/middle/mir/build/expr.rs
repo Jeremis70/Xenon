@@ -10,6 +10,7 @@ use crate::types::Type;
 use super::super::{
     AggregateKind, AssertKind, BasicBlock, Constant, Local, Operand, Place, Rvalue, TerminatorKind,
 };
+use super::control_flow::LoopParts;
 use super::{Builder, Flow, LowerErrorKind, LowerResult};
 
 impl Builder<'_> {
@@ -496,12 +497,19 @@ impl Builder<'_> {
                 else_expr,
                 expr.span,
             ),
-            ExprKind::Loop { condition, body } => self.lower_loop(
+            ExprKind::Loop {
+                condition,
+                increment,
+                body,
+            } => self.lower_loop(
                 block,
                 destination,
                 &expr.ty,
-                condition.as_deref(),
-                body,
+                LoopParts {
+                    condition: condition.as_deref(),
+                    increment: increment.as_ref(),
+                    body,
+                },
                 expr.span,
             ),
             _ => {

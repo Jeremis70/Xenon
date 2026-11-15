@@ -114,10 +114,17 @@ pub fn walk_expr<'thir, V: Visitor<'thir>>(visitor: &mut V, expr: &'thir Expr) {
             visitor.visit_expr(then_expr);
             visitor.visit_expr(else_expr);
         }
-        ExprKind::Loop { condition, body } => match condition {
+        ExprKind::Loop {
+            condition,
+            increment,
+            body,
+        } => match condition {
             Some(condition) if condition.placement == super::ConditionPlacement::Before => {
                 visitor.visit_expr(&condition.expr);
                 visitor.visit_block(body);
+                if let Some(increment) = increment {
+                    visitor.visit_block(increment);
+                }
             }
             Some(condition) => {
                 visitor.visit_block(body);

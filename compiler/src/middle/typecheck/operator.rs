@@ -270,7 +270,7 @@ fn widen(expr: Expr, ty: &Type) -> Expr {
     }
 }
 
-fn binary(op: BinOp, ty: Type, lhs: Expr, rhs: Expr, span: Span) -> Expr {
+pub(super) fn binary(op: BinOp, ty: Type, lhs: Expr, rhs: Expr, span: Span) -> Expr {
     Expr {
         kind: ExprKind::Binary {
             op,

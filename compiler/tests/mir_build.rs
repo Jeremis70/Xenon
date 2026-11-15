@@ -589,3 +589,26 @@ fn struct_fields_lower_to_field_projections() {
         ],
     );
 }
+
+// ── `repeat` and `for` ────────────────────────────────────────────────────────
+
+#[test]
+fn repeat_continue_reaches_increment() {
+    let dump = mir("fn f(u8 n) { repeat n { continue; } }");
+    // The header tests the counter; the body's `continue` goes to the latch,
+    // which adds one and returns to the header.
+    assert_in_order(
+        &dump,
+        &[
+            "bb1: {",
+            "Lt(",
+            "switchInt(",
+            "bb2: {",
+            "goto -> bb4;",
+            "bb4: {",
+            "Add(",
+            "const 1_u8",
+            "goto -> bb1;",
+        ],
+    );
+}

@@ -37,7 +37,11 @@ impl FnCtxt<'_, '_> {
     ///
     /// Most statements become one THIR statement; destructuring and
     /// parallel assignment become several (see the `tuple` module).
-    fn check_stmt(&mut self, stmt: &ast::Stmt, out: &mut Vec<Stmt>) -> SemanticResult<()> {
+    pub(super) fn check_stmt(
+        &mut self,
+        stmt: &ast::Stmt,
+        out: &mut Vec<Stmt>,
+    ) -> SemanticResult<()> {
         let span = stmt.span;
         let kind = match &stmt.kind {
             AstStmt::VarDecl(binding) => {
@@ -124,11 +128,8 @@ impl FnCtxt<'_, '_> {
                     span,
                 });
             }
-            AstStmt::Repeat { .. } => {
-                return Err(SemanticError::NotYetSupported {
-                    what: "`repeat`",
-                    span,
-                });
+            AstStmt::Repeat { count, body } => {
+                return self.check_repeat(count, body, span, out);
             }
             AstStmt::Break(value) => StmtKind::Break(self.check_break(value.as_deref(), span)?),
             AstStmt::Continue => {
@@ -268,7 +269,11 @@ impl FnCtxt<'_, '_> {
             return Err(SemanticError::ReferenceLoop { ty, span });
         }
         Ok(Expr {
-            kind: ExprKind::Loop { condition, body },
+            kind: ExprKind::Loop {
+                condition,
+                increment: None,
+                body,
+            },
             ty,
             span,
         })

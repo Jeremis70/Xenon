@@ -271,7 +271,20 @@ impl Printer<'_> {
                 self.expr(else_expr)?;
                 self.out.write_str(" })")
             }
-            ExprKind::Loop { condition, body } => self.loop_expr(expr, condition.as_deref(), body),
+            ExprKind::Loop {
+                condition,
+                increment,
+                body,
+            } => {
+                self.loop_expr(expr, condition.as_deref(), body)?;
+                match increment {
+                    Some(increment) => {
+                        self.out.write_str(" step ")?;
+                        self.block(increment)
+                    }
+                    None => Ok(()),
+                }
+            }
         }
     }
 

@@ -126,6 +126,12 @@ AST ──typecheck::check_program──▶ THIR ──mir::build_mir──▶ M
 - **Loops.** The first `break` fixes a loop's type. A loop with no `break`
   takes the type its context expects, or `i64` if there is none. Every
   `break` in the same loop must agree. Reference-valued loops are rejected.
+- **`for` and `repeat`.** Neither has a THIR node. Both become hidden
+  temporaries followed by a `Loop` with a condition tested before the body
+  and an `increment` block. The increment runs after each iteration and on
+  `continue`, before the condition is tested again, and a `break` inside it
+  leaves the loop. Loops written with `while`, `until`, `do` and `loop` have
+  no increment.
 - **Scopes.** A declaration is visible from the next statement until the
   end of its block.
 - **Constant expressions are not folded.** `200 + 100` is an addition of two
