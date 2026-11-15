@@ -9,8 +9,8 @@ loop (see [Control Flow](control-flow.md)); it is not a value yet, so it
 cannot be stored or passed around.
 
 ```xe
-for i in 0 to 10 { ... }          // 0, 1, .. 10: `to` includes the end
-for i in 0 until 10 { ... }       // 0, 1, .. 9: `until` stops before it
+for i32 i in 0 to 10 { ... }      // 0, 1, .. 10: `to` includes the end
+for i32 i in 0 until 10 { ... }   // 0, 1, .. 9: `until` stops before it
 for i in 0 until n by 4 { ... }   // 0, 4, 8, ..
 for i in a to b by -1 { ... }     // counts down
 ```

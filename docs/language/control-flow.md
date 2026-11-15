@@ -23,7 +23,7 @@ range (see [Ranges and Slices](ranges-and-slices.md)).
 for x in bytes { ... }            // x has the element type
 for i in 0 until n { ... }        // i has the type of n
 for u8 i in 0 to 255 { ... }      // both bounds are literals: write the type
-for _ in 0 until 3 { ... }        // no loop variable
+for u8 _ in 0 until 3 { ... }     // no loop variable
 ```
 
 The type of the loop variable may be left out. It is the element type of
