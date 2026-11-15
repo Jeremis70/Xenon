@@ -1702,3 +1702,16 @@ fn backend_prefixes_cannot_name_structs() {
     // Only as a struct name: members are prefixed with it.
     check("fn llvm() {}\nstruct A { i32 llvm; }\nimpl A { fn trap() {} }").expect("should check");
 }
+
+#[test]
+fn shared_let_names_have_the_first_type() {
+    let dump = thir("fn f()->i64 { let i64 a, b = 1, 2; return a + b; }");
+    assert!(dump.contains("let a@b0: i64 = 1_i64"), "{dump}");
+    assert!(dump.contains("let b@b1: i64 = 2_i64"), "{dump}");
+    // A value of another type is a mismatch, as with a spelled-out type.
+    let error = error("fn f() { let i32 a, b = 1, true; }");
+    assert!(
+        matches!(error, SemanticError::TypeMismatch { .. }),
+        "{error}"
+    );
+}

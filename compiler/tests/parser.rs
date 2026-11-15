@@ -1,7 +1,7 @@
 use num_bigint::BigInt;
 use xenonc::frontend::ast::{
-    BinOp, Binding, ExprKind, Function, ImplMember, IncDecOp, Program, Receiver, Stmt, StmtKind,
-    TypeExpr, TypeExprKind,
+    BinOp, Binding, ExprKind, Function, ImplMember, IncDecOp, Pattern, Program, Receiver, Stmt,
+    StmtKind, TypeExpr, TypeExprKind,
 };
 use xenonc::frontend::lexer::lex;
 use xenonc::frontend::parser::Parser;
@@ -1083,7 +1083,6 @@ fn parse_parallel_assignment() {
 
 #[test]
 fn parse_destructuring_let() {
-    use xenonc::frontend::ast::Pattern;
     let body = parse_body("fn f(){ let i32 a, (bool b, _) = g(); }");
     let StmtKind::Destructure { pattern, .. } = &body[0].kind else {
         panic!("expected Destructure, got {:?}", body[0].kind);
@@ -1129,9 +1128,10 @@ fn parse_pattern_backtracking_reports_one_error() {
     );
     assert_eq!(span, Span { start: 23, end: 24 });
     // A pattern element without a type.
-    let (message, span) = parse_error("fn f(){ let (i32 a, b) = p; }");
+    // A name that cannot share a type, since none comes first.
+    let (message, span) = parse_error("fn f(){ let (_, b) = p; }");
     assert_eq!(message, "expected a type before `b`");
-    assert_eq!(span, Span { start: 20, end: 21 });
+    assert_eq!(span, Span { start: 16, end: 17 });
 }
 
 #[test]
@@ -1664,4 +1664,136 @@ fn member_named_like_an_exponent_after_a_tuple_index() {
     // An exponent still follows fraction digits.
     assert!(matches!(returned("fn f(){ return 1.5e3; }"), ExprKind::Float(v) if v == 1500.0));
     assert!(matches!(returned("fn f(){ return 2.; }"), ExprKind::Float(v) if v == 2.0));
+}
+
+// Shared types in `let` lists
+
+/// The pattern of the destructuring `let` that is the first statement.
+fn let_pattern(src: &str) -> Pattern {
+    match parse_body(src).remove(0).kind {
+        StmtKind::Destructure { pattern, .. } => pattern,
+        other => panic!("expected a destructuring let, got {other:?}"),
+    }
+}
+
+/// The name and type of every variable `pattern` declares, in order, with
+/// `_` for a discarded value.
+fn declared(pattern: &Pattern, out: &mut Vec<String>) {
+    match pattern {
+        Pattern::Binding(b) => out.push(format!("{} {}", b.ty, b.name.as_deref().unwrap_or("?"))),
+        Pattern::Wildcard(_) => out.push("_".to_owned()),
+        Pattern::Tuple(items, _) => items.iter().for_each(|item| declared(item, out)),
+    }
+}
+
+fn declarations(src: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    declared(&let_pattern(src), &mut out);
+    out
+}
+
+#[test]
+fn let_names_share_the_first_type() {
+    assert_eq!(
+        declarations("fn f(){ let i32 a, b = 0, 1; }"),
+        ["i32 a", "i32 b"]
+    );
+    assert_eq!(
+        declarations("fn f(){ let *Rect p, q, r = x, y, z; }"),
+        ["*Rect p", "*Rect q", "*Rect r"]
+    );
+    assert_eq!(
+        declarations("fn f(){ let [2][2]u8 a, b = x, y; }"),
+        ["[2][2]u8 a", "[2][2]u8 b"]
+    );
+    // `_` discards a value and takes no type either way.
+    assert_eq!(
+        declarations("fn f(){ let i32 a, _, c = t; }"),
+        ["i32 a", "_", "i32 c"]
+    );
+    // Every name typed still works, also with a type the others repeat.
+    assert_eq!(
+        declarations("fn f(){ let i32 a, bool b, i32 c = t; }"),
+        ["i32 a", "bool b", "i32 c"]
+    );
+}
+
+#[test]
+fn nested_let_lists_share_within_themselves() {
+    assert_eq!(
+        declarations("fn f(){ let (i32 a, b) = p; }"),
+        ["i32 a", "i32 b"]
+    );
+    // The inner list has its own first type; the outer names share `i32`.
+    assert_eq!(
+        declarations("fn f(){ let i32 a, (bool b, c), d = t; }"),
+        ["i32 a", "bool b", "bool c", "i32 d"]
+    );
+    assert_eq!(
+        declarations("fn f(){ let i32 a, (bool b, u8 c) = t; }"),
+        ["i32 a", "bool b", "u8 c"]
+    );
+}
+
+#[test]
+fn shared_name_span_is_the_name() {
+    let src = "fn f(){ let i32 a, bcd = 0, 1; }";
+    let Pattern::Tuple(items, _) = let_pattern(src) else {
+        panic!("expected a list");
+    };
+    let Pattern::Binding(second) = &items[1] else {
+        panic!("expected a binding");
+    };
+    assert_eq!(&src[second.span.start..second.span.end], "bcd");
+    assert_eq!(&src[second.ty.span.start..second.ty.span.end], "i32");
+}
+
+#[test]
+fn let_lists_do_not_mix_shared_and_own_types() {
+    let message =
+        "either every name has its own type, or only the first one does and the others share it";
+    for src in [
+        "fn f(){ let i32 a, bool b, c = t; }",
+        "fn f(){ let i32 a, b, bool c = t; }",
+        "fn f(){ let (i32 a, b, bool c) = t; }",
+        "fn f(){ let i32 a, _, b, bool c = t; }",
+    ] {
+        assert_eq!(parse_error(src).0, message, "{src}");
+    }
+    let src = "fn f(){ let i32 a, bool b, c = t; }";
+    let (_, span) = parse_error(src);
+    assert_eq!(&src[span.start..span.end], "c");
+    let src = "fn f(){ let i32 a, b, bool c = t; }";
+    let (_, span) = parse_error(src);
+    assert_eq!(&src[span.start..span.end], "bool c");
+}
+
+#[test]
+fn a_shared_name_needs_a_typed_first_name() {
+    for (src, name) in [
+        ("fn f(){ let x = 5; }", "x"),
+        ("fn f(){ let a, i32 b = 0, 1; }", "a"),
+        ("fn f(){ let _, b = t; }", "b"),
+        ("fn f(){ let (i32 a, i32 b), c = t; }", "c"),
+    ] {
+        assert_eq!(
+            parse_error(src).0,
+            format!("expected a type before `{name}`"),
+            "{src}"
+        );
+    }
+    // Sharing is for `let` lists only.
+    assert_eq!(
+        parse_error("fn f(i32 a, b) {}").0,
+        "expected a type before `b`"
+    );
+    assert!(
+        lex("fn f() -> i32 q, r { return; }")
+            .map(|tokens| Parser::new(&tokens).parse_program().is_err())
+            .expect("lexing should succeed")
+    );
+    assert_eq!(
+        parse_error("struct A { i32 a, b; }").0,
+        "Expected Semicolon, found Comma"
+    );
 }

@@ -34,6 +34,31 @@ struct ExprList {
     is_list: bool,
 }
 
+/// How the names of one `let` list get their types, as seen so far.
+struct ListTypes {
+    /// The type of the first pattern, if it declares a variable: the type
+    /// later lone names share.
+    first: Option<TypeExpr>,
+    /// Whether a later name took the type of the first.
+    shared: bool,
+    /// Whether a later name has a type of its own.
+    own: bool,
+}
+
+impl ListTypes {
+    /// The state after `first`, the first pattern of a list.
+    fn new(first: &Pattern) -> Self {
+        Self {
+            first: match first {
+                Pattern::Binding(binding) => Some(binding.ty.clone()),
+                Pattern::Tuple(..) | Pattern::Wildcard(_) => None,
+            },
+            shared: false,
+            own: false,
+        }
+    }
+}
+
 pub struct Parser<'a> {
     tokens: &'a [Token],
     position: usize,
@@ -797,6 +822,7 @@ impl<'a> Parser<'a> {
             return Ok(first);
         }
         let start = first.span().start;
+        let mut types = ListTypes::new(&first);
         let mut items = vec![first];
         while self.eat(TokenKind::Comma) {
             if self.at(TokenKind::Eq) {
@@ -805,9 +831,60 @@ impl<'a> Parser<'a> {
                     self.prev_span(),
                 ));
             }
-            items.push(self.parse_pattern()?);
+            items.push(self.parse_list_pattern(&mut types)?);
         }
         Ok(Pattern::Tuple(items, self.span_since(start)))
+    }
+
+    /// Parses a pattern of a list after its first: any pattern, or a lone
+    /// name that takes the type of the first, as `b` does in
+    /// `let i32 a, b = 0, 1;`.
+    ///
+    /// A list goes one way or the other: every name has its own type, or
+    /// only the first one does. `_` and nested patterns fit both.
+    fn parse_list_pattern(&mut self, types: &mut ListTypes) -> ParseResult<Pattern> {
+        const MIXED: &str = "either every name has its own type, or only the first one does \
+                             and the others share it";
+        // A name directly followed by what ends a pattern has no type of
+        // its own. Anywhere else a lone name would be read as a type.
+        let lone_name = self.peek().filter(|t| {
+            t.kind == TokenKind::Ident
+                && self.tokens.get(self.position + 1).is_none_or(|next| {
+                    matches!(
+                        next.kind,
+                        TokenKind::Comma | TokenKind::Eq | TokenKind::RParen
+                    )
+                })
+        });
+        let Some(name_token) = lone_name else {
+            let pattern = self.parse_pattern()?;
+            if let Pattern::Binding(binding) = &pattern {
+                if types.shared {
+                    return Err(ParseError::new(MIXED, binding.span));
+                }
+                types.own = true;
+            }
+            return Ok(pattern);
+        };
+        let name = name_token.ident_value()?;
+        // Without a typed first name there is no type to share.
+        let Some(ty) = &types.first else {
+            return Err(ParseError::new(
+                format!("expected a type before `{name}`"),
+                name_token.span,
+            ));
+        };
+        if types.own {
+            return Err(ParseError::new(MIXED, name_token.span));
+        }
+        types.shared = true;
+        self.advance();
+        Ok(Pattern::Binding(Binding {
+            name: Some(name.to_string()),
+            ty: ty.clone(),
+            default: None,
+            span: name_token.span,
+        }))
     }
 
     /// Parses one pattern: `_`, `<type> <name>`, or `( patterns )`.
@@ -864,9 +941,10 @@ impl<'a> Parser<'a> {
             return Ok(first);
         }
         self.expect([TokenKind::Comma, TokenKind::RParen])?;
+        let mut types = ListTypes::new(&first);
         let mut items = vec![first];
         while !self.at(TokenKind::RParen) {
-            items.push(self.parse_pattern()?);
+            items.push(self.parse_list_pattern(&mut types)?);
             if !self.eat(TokenKind::Comma) {
                 break;
             }
