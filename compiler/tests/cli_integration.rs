@@ -1330,3 +1330,62 @@ fn for_stepped_range_runs() {
         assert_eq!(main_exit(body), expected, "{body}");
     }
 }
+
+#[cfg(feature = "llvm-backend")]
+#[test]
+fn for_array_runs() {
+    let items = "fn make(*u8 log) -> [3]u8 { *log += 1; return [1, 2, 3]; }
+                 fn sum(&[3]u8 r) -> u8 { let u8 s = 0; for x in r { s += x; } return s; }";
+    for (body, expected) in [
+        (
+            "let [4]u8 a = [1,2,3,4]; let u8 s = 0; for x in a { s += x; } return s;",
+            10,
+        ),
+        (
+            "let [0]u8 a = []; let u8 s = 7; for x in a { s += 1; } return s;",
+            7,
+        ),
+        // Not a place: evaluated once into a temporary.
+        (
+            "let u8 s = 0; for u8 x in [5,6,7] { s += x; } return s;",
+            18,
+        ),
+        (
+            "let u8 log = 0; let u8 s = 0; for x in make(@log) { s += x; } return s * 10 + log;",
+            61,
+        ),
+        // Walked in place: a write is seen by the iterations after it.
+        (
+            "let [3]u8 a = [1,1,1]; let u8 s = 0; let usize k = 0;
+             for x in a { a[k + 1] = 5 if k < 2; s += x; k += 1; } return s;",
+            11,
+        ),
+        (
+            "let [2][2]u8 g = [[1,2],[3,4]]; let u8 s = 0;
+             for row in g { for x in row { s += x; } } return s;",
+            10,
+        ),
+        // Which array is walked is decided once, before the loop.
+        (
+            "let [2][2]u8 g = [[1,2],[3,4]]; let usize r = 0; let u8 s = 0;
+             for x in g[r] { r = 1; s += x; } return s;",
+            3,
+        ),
+        (
+            "let [3]u8 a = [1,2,3]; let [3]u8 b = [9,9,9]; let *[3]u8 p = @a; let u8 s = 0;
+             for x in *p { p = @b; s += x; } return s;",
+            6,
+        ),
+        ("let [3]u8 a = [1,2,3]; return sum(@a);", 6),
+        (
+            "let [4]u8 a = [1,2,3,4]; let u8 s = 0; for x in a { break if x == 3; s += x; } return s;",
+            3,
+        ),
+        (
+            "let [4]u8 a = [1,2,3,4]; let u8 s = 0; for x in a { continue if x == 3; s += x; } return s;",
+            7,
+        ),
+    ] {
+        assert_eq!(main_exit_with(items, body), expected, "{body}");
+    }
+}
