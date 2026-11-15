@@ -1822,3 +1822,35 @@ fn for_array_rules() {
     // The array itself stays assignable while it is walked.
     assert!(check("fn f([4]u8 a) { for x in a { a[0] = x; } }").is_ok());
 }
+
+#[test]
+fn for_clause_rules() {
+    assert!(check("fn f([4]u8 a) { for x in a with i { let usize j = i; } }").is_ok());
+    assert!(
+        check("fn f([4]u8 a) { for x in a with u8 i where x > i with k { let usize j = k; } }")
+            .is_ok()
+    );
+    assert!(check("fn f() { for u8 x in 0 to 9 where x % 2 == 0 with n { } }").is_ok());
+    assert!(check("fn f([0]u8 a) { for x in a with i where i > 0 { } }").is_ok());
+    // A `where` sees the names before it, not those after.
+    assert!(matches!(
+        error("fn f([4]u8 a) { for x in a where k > 0 with k { } }"),
+        SemanticError::UndefinedVariable { .. }
+    ));
+    assert!(matches!(
+        error("fn f([4]u8 a) { for x in a where x { } }"),
+        SemanticError::ConditionNotBool { .. }
+    ));
+    assert!(matches!(
+        error("fn f([4]u8 a) { for x in a with bool i { } }"),
+        SemanticError::NonIntegerCounter { .. }
+    ));
+    assert!(matches!(
+        error("fn f([4]u8 a) { for x in a with i { i += 1; } }"),
+        SemanticError::AssignToLoopName { .. }
+    ));
+    // Counters are not visible after the loop.
+    assert!(error_is_some(
+        "fn f([4]u8 a) { for x in a with i { } let usize j = i; }"
+    ));
+}

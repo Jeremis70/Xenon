@@ -30,12 +30,6 @@ impl FnCtxt<'_, '_> {
         span: Span,
         out: &mut Vec<Stmt>,
     ) -> SemanticResult<()> {
-        if !header.clauses.is_empty() {
-            return Err(SemanticError::NotYetSupported {
-                what: "`with` and `where`",
-                span,
-            });
-        }
         match &header.iterable {
             ast::ForIterable::Range(range) => self.check_for_range(header, range, body, span, out),
             ast::ForIterable::Value(value) => self.check_for_array(header, value, body, span, out),
@@ -78,7 +72,7 @@ impl FnCtxt<'_, '_> {
         let stmt = self.counted_loop(condition, increment, body, span, |this, stmts| {
             let value = this.read(counter, header.name_span);
             this.declare_loop_variable(header, ty, value, stmts);
-            Ok(())
+            this.check_clauses(header, out, stmts)
         })?;
         out.push(stmt);
         Ok(())
@@ -171,7 +165,7 @@ impl FnCtxt<'_, '_> {
                     let name = header.name.clone();
                     this.declare_named(name, elem, BindingKind::LoopName, header.name_span);
                 }
-                Ok(())
+                this.check_clauses(header, &mut Vec::new(), &mut Vec::new())
             })?;
             return Ok(());
         }
@@ -193,7 +187,7 @@ impl FnCtxt<'_, '_> {
                 span: header.name_span,
             };
             this.declare_loop_variable(header, elem, element, stmts);
-            Ok(())
+            this.check_clauses(header, out, stmts)
         })?;
         out.push(stmt);
         Ok(())
@@ -338,6 +332,99 @@ impl FnCtxt<'_, '_> {
             },
             span,
         });
+    }
+
+    /// Checks the `with` and `where` clauses of `header`, in order.
+    ///
+    /// `stmts` is the body of the loop, where the loop variable is already
+    /// declared; `before` receives what must run once, before the loop.
+    ///
+    /// - `with [T] name` keeps a hidden counter, starting at zero. Each
+    ///   element that reaches the clause copies it into `name`, then adds
+    ///   one: `let name = counter as T; counter += 1;`.
+    /// - `where condition` skips the element when the condition is false:
+    ///   `if condition { } else { continue; }`.
+    ///
+    /// A clause only sees the names declared before it, and a skipped
+    /// element never reaches the counters after the `where`.
+    fn check_clauses(
+        &mut self,
+        header: &ast::ForHeader,
+        before: &mut Vec<Stmt>,
+        stmts: &mut Vec<Stmt>,
+    ) -> SemanticResult<()> {
+        for clause in &header.clauses {
+            match clause {
+                ast::ForClause::With { ty, name, span } => {
+                    let span = *span;
+                    let ty = match ty {
+                        Some(written) => {
+                            let ty = self.globals.resolve(written)?;
+                            if !ty.is_integer() {
+                                return Err(SemanticError::NonIntegerCounter {
+                                    ty,
+                                    span: written.span,
+                                });
+                            }
+                            ty
+                        }
+                        None => Type::USize,
+                    };
+                    let zero = self.int_literal(BigInt::ZERO, self.counter_type(&ty), span)?;
+                    let counter = self.let_temp(zero, before);
+                    // An exact-or-panic conversion: counting one element
+                    // more than `ty` holds traps here.
+                    let init = widen(self.read(counter, span), &ty);
+                    let binding =
+                        self.declare_named(Some(name.clone()), ty, BindingKind::LoopName, span);
+                    stmts.push(Stmt {
+                        kind: StmtKind::Let {
+                            binding,
+                            init: Some(init),
+                        },
+                        span,
+                    });
+                    stmts.push(self.advance(counter, &BigInt::from(1), false, span));
+                }
+                ast::ForClause::Where(condition) => {
+                    let span = condition.span;
+                    let skip = Stmt {
+                        kind: StmtKind::Continue,
+                        span,
+                    };
+                    stmts.push(Stmt {
+                        kind: StmtKind::If {
+                            condition: self.check_condition(condition)?,
+                            then_block: Block {
+                                stmts: Vec::new(),
+                                span,
+                            },
+                            else_block: Some(Block {
+                                stmts: vec![skip],
+                                span,
+                            }),
+                        },
+                        span,
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The type of the hidden counter behind a `with` counter of type `ty`.
+    ///
+    /// The hidden counter is one ahead of the last value handed out, so it
+    /// is one bit wider than `ty`: it can then count every value of `ty`
+    /// without overflowing. A type as wide as a pointer cannot run out, as
+    /// no loop has that many elements.
+    fn counter_type(&self, ty: &Type) -> Type {
+        let pointer_width = self.target().pointer_width();
+        match ty {
+            Type::Int(width) if *width < pointer_width => Type::Int(width + 1),
+            Type::UInt(width) if *width < pointer_width => Type::UInt(width + 1),
+            _ => ty.clone(),
+        }
     }
 
     /// Checks the target of an assignment, which cannot be a loop variable
