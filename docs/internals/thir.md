@@ -36,6 +36,7 @@ AST ──typecheck::check_program──▶ THIR ──mir::build_mir──▶ M
 | `middle/typecheck/operator.rs` | Unary, binary, compound, shift, and comparison operators. |
 | `middle/typecheck/stmt.rs` | Blocks, statements, `break`, and loops. |
 | `middle/typecheck/tuple.rs` | Tuple expressions, `.N`, destructuring `let`, parallel assignment, and bare `return`. |
+| `middle/typecheck/array.rs` | Fixed-size array literals, integer indexing, and multi-index assignment. |
 | `middle/typecheck/items.rs` | Collection of structs (names, fields, recursion check) and of every function: free functions, `impl` members, and property getters. |
 | `middle/typecheck/structs.rs` | Struct construction, member access `.name`, and method calls. |
 
@@ -74,6 +75,14 @@ AST ──typecheck::check_program──▶ THIR ──mir::build_mir──▶ M
   whose values are kept in source order, each with the index of its field.
   A field read is the same `Field { base, index }` as a tuple element, with
   the field's declaration index. Structs compare like tuples.
+- **Arrays.** `[N]T` resolves to `Type::Array(T, N)`. Literals are `Array`
+  nodes with exactly `N` elements of `T`. `Index { base, index }` is a place
+  when its base is one. Indices are widened losslessly enough to represent
+  the length before MIR compares their bounds. Literal out-of-bounds
+  indices are rejected here; other known failures are diagnosed on MIR.
+  Multi-index assignment is desugared into temporary addresses for the base
+  and each selected element, then one value temporary and left-to-right
+  stores. Bounds checks precede evaluation of the value.
 - **Methods and properties** leave no trace of their own. Each is an
   ordinary THIR function named `Rect.scale` or `Rect.area.get`, whose first
   parameter `self` is the receiver: a `Rect` for `self`, a `&Rect` for

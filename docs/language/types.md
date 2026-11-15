@@ -193,6 +193,61 @@ followed by digits, so `item`, `user`, and `u` are ordinary names.
 See [Structs and Enums](structs-and-enums.md) for fields, methods, and
 computed properties.
 
+## Arrays
+
+An array type is `[N]T`: `N` is a non-negative integer literal (at most
+4294967295), and `T` is the element type. The length is part of the type.
+Declarations spell the type before the name:
+
+```xe
+let [5]u8 values = [10, 20, 30, 40, 50];
+let [2][3]i32 grid = [[1, 2, 3], [4, 5, 6]];
+let [0]bool empty = [];
+```
+
+Array literals must have exactly the declared number of elements, all of
+the element type. Numeric literals take that type from context. Arrays
+can be parameters, results, tuple elements, and struct fields.
+
+Indexing is zero-based and accepts any integer type. An element of a place
+is readable, assignable, and addressable:
+
+```xe
+let u8 first = values[0];
+values[1] += 1;
+let &u8 element = @values[2];
+grid[1][0] = 7;
+```
+
+Pointers require an explicit dereference (`(*p)[i]`); references to arrays
+are transparent (`r[i]`). An element of reference type also automatically
+denotes its referent. Array assignment, argument passing, and returns copy
+the value, like structs; copying pointer or reference elements copies their
+addresses, not their referents.
+
+`==` and `!=` compare arrays of exactly the same type element by element,
+including nested aggregates. Both operands are evaluated completely, left
+to right, before comparison. Arrays containing references cannot be compared.
+There is no array ordering.
+
+A constant index outside `0 <= i < N` is a compile error. The known-panics
+pass also rejects out-of-bounds indices it can prove through constant
+expressions or single-assignment locals. Other indices receive a runtime
+bounds check before any memory access, independent of optimization and
+overflow mode. Empty arrays have no valid index.
+
+Multiple indices are supported only in a plain assignment:
+
+```xe
+values[0, 2, 4] = 1;
+```
+
+The array's location is evaluated once, then every index is evaluated and
+bounds-checked left to right. The right-hand side is evaluated once, after
+all checks succeed, and copied into each selected element left to right.
+Repeated indices are allowed. Multi-index reads, compound assignments,
+slices, `last`, ranges inside brackets, and growable arrays are not supported.
+
 ## Related pages
 
 - [Structs and Enums](structs-and-enums.md)
