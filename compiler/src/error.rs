@@ -147,11 +147,10 @@ pub enum SemanticError {
         found: Type,
         span: Span,
     },
+    #[error("a `with` counter must be an integer, found `{ty}`")]
+    NonIntegerCounter { ty: Type, span: Span },
     #[error("cannot assign to loop variable `{name}`")]
     AssignToLoopName { name: String, span: Span },
-    /// Temporary: a loop form that parses but is not checked yet.
-    #[error("{what} is not supported yet")]
-    NotYetSupported { what: &'static str, span: Span },
     #[error("no `#[entry]` function found")]
     NoEntryPoint,
     #[error("multiple `#[entry]` functions: first at {first_span:?}, duplicate at {span:?}")]
@@ -348,12 +347,12 @@ impl SemanticError {
             | SemanticError::BreakTypeConflict { span, .. }
             | SemanticError::BreakOutsideLoop { span }
             | SemanticError::ContinueOutsideLoop { span }
-            | SemanticError::NotYetSupported { span, .. }
             | SemanticError::NonIntegerRepeatCount { span, .. }
             | SemanticError::NegativeRepeatCount { span }
             | SemanticError::RangeTypeUnknown { span }
             | SemanticError::NonIntegerRange { span, .. }
             | SemanticError::ZeroRangeStep { span }
+            | SemanticError::NonIntegerCounter { span, .. }
             | SemanticError::NotIterable { span, .. }
             | SemanticError::LoopVariableType { span, .. }
             | SemanticError::RangeStepUnsupported { span, .. }

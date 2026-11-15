@@ -1389,3 +1389,76 @@ fn for_array_runs() {
         assert_eq!(main_exit_with(items, body), expected, "{body}");
     }
 }
+
+#[cfg(feature = "llvm-backend")]
+#[test]
+fn for_clauses_run() {
+    for (body, expected) in [
+        (
+            "let usize s = 0; for x in a with i { s += i; } return s as u8;",
+            15,
+        ),
+        (
+            "let u8 s = 0; for x in a where x == 8 { s += 1; } return s;",
+            3,
+        ),
+        // `i` counts every element, `k` those that passed the `where`:
+        // (1, 0), (3, 1), (5, 2).
+        (
+            "let usize s = 0; for x in a with i where x == 8 with k { s += i * 10 + k; } return s as u8;",
+            93,
+        ),
+        (
+            "let usize s = 0; for x in a where x == 8 with k where k > 0 with j { s += j + 1; } return s as u8;",
+            3,
+        ),
+        // `continue` still counts the element.
+        (
+            "let usize s = 0; for x in a with i { continue if x == 8; s += i; } return s as u8;",
+            6,
+        ),
+        (
+            "let u8 s = 0; for x in a with i where i % 2 == 0 { break if x == 1; s += x; } return s;",
+            8,
+        ),
+        (
+            "let usize s = 0; for u8 v in 10 to 0 by -5 with n { s = s * 10 + n; } return s as u8;",
+            12,
+        ),
+        (
+            "let u8 s = 0; for x in a with i { a[i] = 0; } for x in a { s += x; } return s;",
+            0,
+        ),
+        (
+            "let u8 s = 0; for x in a with u8 i with i8 j { s += i + j as u8; } return s;",
+            30,
+        ),
+    ] {
+        let body = format!("let [6]u8 a = [3,8,5,8,1,8]; {body}");
+        assert_eq!(main_exit(&body), expected, "{body}");
+    }
+}
+
+#[cfg(feature = "llvm-backend")]
+#[test]
+fn with_counter_overflow() {
+    // A `u8` counter holds 256 elements.
+    assert_eq!(
+        main_exit("let u8 s = 0; for u16 v in 0 until 256 with u8 i { s = i; } return s;"),
+        255
+    );
+    // The 257th does not fit, with and without optimization.
+    let source = "#[entry] fn main() -> u8 { for u16 v in 0 until 257 with u8 i { } return 0; }";
+    for args in [&[][..], &["-O", "3"][..]] {
+        let status = run_status_with(source, args);
+        let trapped = if cfg!(windows) {
+            status.code() == Some(0xC000_001D_u32 as i32)
+        } else {
+            status.code().is_none()
+        };
+        assert!(
+            trapped,
+            "{args:?}: counting past a `u8` should trap: {status:?}"
+        );
+    }
+}
