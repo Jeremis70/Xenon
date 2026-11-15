@@ -20,7 +20,8 @@ struct Rect {
 - Two structs are different types even when their fields are the same.
 - A struct may be used before it is declared: the order of declarations in
   a program does not matter.
-- A struct cannot share its name with a function or a built-in type.
+- A struct cannot share its name with a function or a built-in type, and
+  cannot be named `_xe` or `llvm`, which the compiler uses itself.
 
 ### Building a struct
 

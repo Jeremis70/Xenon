@@ -1631,3 +1631,29 @@ fn malformed_properties_are_rejected() {
         assert!(Parser::new(&tokens).parse_program().is_err(), "{src}");
     }
 }
+
+#[test]
+fn member_named_like_an_exponent_after_a_tuple_index() {
+    // `0.e1` is not a float with an exponent: it is `.0` then `.e1`.
+    for (src, expected) in [
+        ("fn f(){ return t.0.e1; }", "e1"),
+        ("fn f(){ return t.0.E2; }", "E2"),
+        ("fn f(){ return t.0.e1x; }", "e1x"),
+    ] {
+        let expr = returned(src);
+        let ExprKind::Member { base, name, .. } = &expr else {
+            panic!("{src}: expected Member, got {expr:?}");
+        };
+        assert_eq!(name, expected);
+        assert!(
+            matches!(&base.kind, ExprKind::Field { index: 0, .. }),
+            "{src}"
+        );
+    }
+    let body = parse_body("fn f(){ t.0.e2 = 5; t.1.e3(); }");
+    assert!(matches!(&body[0].kind, StmtKind::Assign { .. }));
+    assert!(matches!(&body[1].kind, StmtKind::Expr(_)));
+    // An exponent still follows fraction digits.
+    assert!(matches!(returned("fn f(){ return 1.5e3; }"), ExprKind::Float(v) if v == 1500.0));
+    assert!(matches!(returned("fn f(){ return 2.; }"), ExprKind::Float(v) if v == 2.0));
+}

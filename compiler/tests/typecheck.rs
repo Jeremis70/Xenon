@@ -1534,3 +1534,45 @@ fn property_shares_the_member_namespace() {
         assert!(expected(&error), "{src}: {error:?}");
     }
 }
+
+#[test]
+fn overlapping_targets_are_found_through_a_reference() {
+    // A `&T` variable denotes what it refers to, so its elements have
+    // known paths, as in a `&self` method.
+    for src in [
+        "struct A { i32 x; i32 w; }\nimpl A { fn f(&self) { self.x, self.x = 1, 2; } }",
+        "struct A { i32 x; }\nstruct B { A a; }\n\
+         impl B { fn f(&self) { self.a.x, self.a = 1, A(x = 5); } }",
+        "fn f(&(i32, i32) t) { t.0, t.0 = 1, 2; }",
+        "fn f(&(i32, i32) t) { t, t.1 = (1, 2), 3; }",
+    ] {
+        let error = error(src);
+        assert!(
+            matches!(error, SemanticError::DuplicateAssignTarget { .. }),
+            "{src}: {error:?}"
+        );
+    }
+    assert_eq!(
+        error("struct A { i32 x; }\nimpl A { fn f(&self) { self.x, self.x = 1, 2; } }").to_string(),
+        "`self.x` is assigned more than once in this assignment"
+    );
+    // Distinct fields, and places behind an explicit pointer, still pass.
+    check(
+        "struct A { i32 x; i32 w; }\nimpl A { fn f(&self) { self.x, self.w = self.w, self.x; } }\n\
+         fn g(*A p, *A q) { (*p).x, (*q).x = 1, 2; }",
+    )
+    .expect("should check");
+}
+
+#[test]
+fn backend_prefixes_cannot_name_structs() {
+    for name in ["_xe", "llvm"] {
+        let error = error(&format!("struct {name} {{}}"));
+        assert!(
+            matches!(&error, SemanticError::ReservedName { name: found, .. } if found == name),
+            "{name}: {error:?}"
+        );
+    }
+    // Only as a struct name: members are prefixed with it.
+    check("fn llvm() {}\nstruct A { i32 llvm; }\nimpl A { fn trap() {} }").expect("should check");
+}

@@ -515,9 +515,16 @@ fn is_stable(expr: &Expr) -> bool {
 }
 
 /// The variable and element path of a place not reached through a pointer.
+///
+/// A variable of type `&T` denotes the one `T` it was bound to, so the
+/// dereference type checking wrapped it in leads to a known place too.
 fn static_path(place: &Expr) -> Option<(BindingId, Vec<u32>)> {
     match &place.kind {
         ExprKind::Binding(binding) => Some((*binding, Vec::new())),
+        ExprKind::Deref(reference) => match (&reference.kind, &reference.ty) {
+            (ExprKind::Binding(binding), Type::Reference(_)) => Some((*binding, Vec::new())),
+            _ => None,
+        },
         ExprKind::Field { base, index } => {
             let (binding, mut path) = static_path(base)?;
             path.push(*index);
