@@ -91,10 +91,13 @@ fn arrays_trap_on_runtime_bounds_failures() {
                  #[entry] fn main()->u8 {{ return access({value}); }}"
             );
             let status = run_status(&source);
-            assert!(
-                status.code().is_none(),
-                "{ty}: {operation} should trap: {status:?}"
-            );
+            let trapped = if cfg!(windows) {
+                // Windows reports LLVM's trap as STATUS_ILLEGAL_INSTRUCTION.
+                status.code() == Some(0xC000_001D_u32 as i32)
+            } else {
+                status.code().is_none()
+            };
+            assert!(trapped, "{ty}: {operation} should trap: {status:?}");
         }
     }
 }
