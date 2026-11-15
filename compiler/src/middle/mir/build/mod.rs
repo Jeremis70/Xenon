@@ -2,8 +2,8 @@
 //!
 //! THIR is fully resolved and typed, so construction never reports user
 //! errors: every [`LowerError`] is a compiler bug. The output is in
-//! [`MirPhase::Built`](super::MirPhase::Built) and contains no runtime
-//! checks; flow checking and check insertion are later passes.
+//! [`MirPhase::Built`](super::MirPhase::Built) with array bounds checks;
+//! flow checking and arithmetic check insertion are later passes.
 //!
 //! # Strategy
 //!
@@ -108,6 +108,8 @@ pub enum LowerErrorKind {
 
     #[error("struct expression of type `{0}` does not give each field once")]
     MalformedStruct(Type),
+    #[error("array expression has non-array type `{0}`")]
+    MalformedArray(Type),
 
     #[error("type `{0}` has no zero value")]
     NoZeroValue(Type),

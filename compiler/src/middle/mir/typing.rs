@@ -46,6 +46,10 @@ pub enum TypingError {
 
     #[error("`{ty}` has no element {index}")]
     InvalidField { ty: Type, index: u32 },
+    #[error("cannot index `{0}`")]
+    IndexOfNonArray(Type),
+    #[error("array index must be integer, found `{0}`")]
+    InvalidIndex(Type),
 
     #[error("aggregate does not match the definition of `{0}`")]
     InvalidAggregate(Type),
@@ -97,6 +101,30 @@ pub fn place_ty<'a>(
                         index: *index,
                     })?
             }
+            ProjectionElem::Index(index) => {
+                let index_ty = &decls
+                    .local_decls()
+                    .get(*index)
+                    .ok_or(TypingError::UnknownLocal(*index))?
+                    .ty;
+                if !index_ty.is_integer() {
+                    return Err(TypingError::InvalidIndex(index_ty.clone()));
+                }
+                match ty {
+                    Type::Array(elem, _) => elem,
+                    _ => return Err(TypingError::IndexOfNonArray(ty.clone())),
+                }
+            }
+            ProjectionElem::ConstantIndex(index) => match ty {
+                Type::Array(elem, len) if index < len => elem,
+                Type::Array(..) => {
+                    return Err(TypingError::InvalidField {
+                        ty: ty.clone(),
+                        index: *index,
+                    });
+                }
+                _ => return Err(TypingError::IndexOfNonArray(ty.clone())),
+            },
         };
     }
     Ok(ty)
@@ -162,6 +190,18 @@ pub fn rvalue_ty(
                 .map(|operand| operand_ty(operand, decls, structs).cloned())
                 .collect::<Result<_, _>>()?,
         )),
+        Rvalue::Aggregate(AggregateKind::Array(elem, len), operands) => {
+            let ty = Type::Array(elem.clone(), *len);
+            if operands.len() != *len as usize {
+                return Err(TypingError::InvalidAggregate(ty));
+            }
+            for operand in operands {
+                if operand_ty(operand, decls, structs)? != elem.as_ref() {
+                    return Err(TypingError::InvalidAggregate(ty));
+                }
+            }
+            Ok(ty)
+        }
         Rvalue::Aggregate(AggregateKind::Struct(struct_ty), operands) => {
             let ty = Type::Struct(struct_ty.clone());
             let fields = structs.get(struct_ty.id).map(|def| def.fields.as_slice());

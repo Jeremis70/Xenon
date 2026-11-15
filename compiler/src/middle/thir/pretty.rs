@@ -171,6 +171,12 @@ impl Printer<'_> {
                 self.expr(base)?;
                 write!(self.out, ".{index}")
             }
+            ExprKind::Index { base, index } => {
+                self.expr(base)?;
+                self.out.write_str("[")?;
+                self.expr(index)?;
+                self.out.write_str("]")
+            }
             ExprKind::Struct { fields } => {
                 let def = match &expr.ty {
                     Type::Struct(struct_ty) => self.program.structs.get(struct_ty.id),
@@ -189,16 +195,22 @@ impl Printer<'_> {
                 }
                 self.out.write_str(")")
             }
-            ExprKind::Tuple(elems) => {
-                self.out.write_str("(")?;
+            ExprKind::Tuple(elems) | ExprKind::Array(elems) => {
+                let array = matches!(expr.kind, ExprKind::Array(_));
+                self.out.write_str(if array { "[" } else { "(" })?;
                 for (index, elem) in elems.iter().enumerate() {
                     if index > 0 {
                         self.out.write_str(", ")?;
                     }
                     self.expr(elem)?;
                 }
-                self.out
-                    .write_str(if elems.len() == 1 { ",)" } else { ")" })
+                self.out.write_str(if array {
+                    "]"
+                } else if elems.len() == 1 {
+                    ",)"
+                } else {
+                    ")"
+                })
             }
             ExprKind::AddressOf { kind, place } => {
                 self.out.write_str(match kind {

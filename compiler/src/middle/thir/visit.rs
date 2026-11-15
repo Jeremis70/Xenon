@@ -91,7 +91,11 @@ pub fn walk_expr<'thir, V: Visitor<'thir>>(visitor: &mut V, expr: &'thir Expr) {
             visitor.visit_expr(lhs);
             visitor.visit_expr(rhs);
         }
-        ExprKind::Call { args, .. } | ExprKind::Tuple(args) => {
+        ExprKind::Index { base, index } => {
+            visitor.visit_expr(base);
+            visitor.visit_expr(index);
+        }
+        ExprKind::Call { args, .. } | ExprKind::Tuple(args) | ExprKind::Array(args) => {
             for arg in args {
                 visitor.visit_expr(arg);
             }

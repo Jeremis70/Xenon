@@ -485,7 +485,7 @@ fn field(base: Expr, index: u32, span: Span) -> SemanticResult<Expr> {
 }
 
 /// Wraps an expression of type `&T` in the dereference that denotes its `T`.
-fn auto_deref(expr: Expr) -> Expr {
+pub(super) fn auto_deref(expr: Expr) -> Expr {
     match &expr.ty {
         Type::Reference(pointee) => Expr {
             ty: (**pointee).clone(),
@@ -496,7 +496,7 @@ fn auto_deref(expr: Expr) -> Expr {
     }
 }
 
-fn binding_expr(binding: BindingId, ty: Type, span: Span) -> Expr {
+pub(super) fn binding_expr(binding: BindingId, ty: Type, span: Span) -> Expr {
     Expr {
         kind: ExprKind::Binding(binding),
         ty,

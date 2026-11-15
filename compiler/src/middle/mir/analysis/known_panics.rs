@@ -23,7 +23,7 @@ use crate::middle::ids::DefId;
 use crate::middle::mir::body::{BasicBlock, Body, Local, Location, MirPhase, START_BLOCK};
 use crate::middle::mir::interpret::{EvalResult, eval_rvalue, known_operand};
 use crate::middle::mir::program::MirProgram;
-use crate::middle::mir::syntax::{AssertKind, Constant, StatementKind};
+use crate::middle::mir::syntax::{AssertKind, ConstValue, Constant, StatementKind, TerminatorKind};
 use crate::middle::mir::traversal::reverse_postorder;
 use crate::middle::mir::typing::TypingError;
 use crate::middle::mir::visit::{MutatingUseContext, PlaceContext, Visitor};
@@ -147,6 +147,20 @@ fn check_body(
         let value_of = |operand: &_| {
             known_operand(operand, body, structs, |local| known[local].clone()).map(|c| c.value)
         };
+        if let TerminatorKind::Assert {
+            cond,
+            expected,
+            kind,
+            ..
+        } = &data.terminator.kind
+            && value_of(cond) == Some(ConstValue::Bool(!*expected))
+        {
+            found.push((
+                data.terminator_location(block),
+                data.terminator.source_info.span,
+                *kind,
+            ));
+        }
         for successor in executable_successors_with(&data.terminator.kind, value_of) {
             mark_live(&mut live, successor);
         }

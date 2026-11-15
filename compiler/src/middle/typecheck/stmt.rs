@@ -55,6 +55,10 @@ impl FnCtxt<'_, '_> {
                 return self.check_destructure(pattern, init, span, out);
             }
             AstStmt::Expr(expr) => StmtKind::Expr(self.check_expr(expr, None)?),
+            AstStmt::Assign { target, value } if matches!(&target.kind, Ast::Index { indices, .. } if indices.len() > 1) =>
+            {
+                return self.check_multi_index_assign(target, value, span, out);
+            }
             AstStmt::Assign { target, value } if target.is_place() => {
                 let place = self.check_place(target)?;
                 let value = self.check_expr_has_type(value, &place.ty)?;

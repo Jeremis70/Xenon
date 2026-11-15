@@ -36,6 +36,26 @@ pub enum TypeError {
 }
 #[derive(Debug, thiserror::Error)]
 pub enum SemanticError {
+    #[error("array literal expects {expected} element(s), found {found}")]
+    ArrayLengthMismatch {
+        expected: u32,
+        found: usize,
+        span: Span,
+    },
+    #[error("empty array literal requires an array type")]
+    EmptyArrayWithoutType { span: Span },
+    #[error("cannot index non-array type `{ty}`")]
+    IndexOfNonArray { ty: Type, span: Span },
+    #[error("array index must be an integer, found `{ty}`")]
+    InvalidArrayIndex { ty: Type, span: Span },
+    #[error("array index {index} is out of bounds for length {len}")]
+    ArrayIndexOutOfBounds {
+        index: num_bigint::BigInt,
+        len: u32,
+        span: Span,
+    },
+    #[error("multiple indices are only allowed as the target of a plain assignment")]
+    MultiIndexAsValue { span: Span },
     #[error("constant {value} is out of range for type `{ty}` in binding `{name}` (span {}..{})", span.start, span.end)]
     ConstantOutOfRange {
         name: String,
@@ -276,6 +296,12 @@ impl SemanticError {
     pub fn span(&self) -> Option<Span> {
         match self {
             SemanticError::ConstantOutOfRange { span, .. }
+            | SemanticError::ArrayLengthMismatch { span, .. }
+            | SemanticError::EmptyArrayWithoutType { span }
+            | SemanticError::IndexOfNonArray { span, .. }
+            | SemanticError::InvalidArrayIndex { span, .. }
+            | SemanticError::ArrayIndexOutOfBounds { span, .. }
+            | SemanticError::MultiIndexAsValue { span }
             | SemanticError::TupleArityMismatch { span, .. }
             | SemanticError::TupleIndexOutOfRange { span, .. }
             | SemanticError::NotATuple { span, .. }

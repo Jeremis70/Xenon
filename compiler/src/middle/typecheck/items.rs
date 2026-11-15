@@ -303,6 +303,7 @@ impl<'a> StructItems<'a> {
     /// `visited` holds the structs already searched.
     fn contains(&self, ty: &Type, target: StructId, visited: &mut Vec<StructId>) -> bool {
         match ty {
+            Type::Array(elem, _) => self.contains(elem, target, visited),
             Type::Tuple(elems) => elems
                 .iter()
                 .any(|elem| self.contains(elem, target, visited)),
@@ -326,6 +327,7 @@ impl<'a> StructItems<'a> {
             Kind::Primitive(ty) => ty.clone(),
             Kind::Pointer(inner) => Type::Pointer(Box::new(self.resolve(inner)?)),
             Kind::Reference(inner) => Type::Reference(Box::new(self.resolve(inner)?)),
+            Kind::Array(elem, len) => Type::Array(Box::new(self.resolve(elem)?), *len),
             Kind::Tuple(elems) => Type::Tuple(
                 elems
                     .iter()

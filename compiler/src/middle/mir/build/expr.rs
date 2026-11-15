@@ -8,7 +8,7 @@ use crate::source::Span;
 use crate::types::Type;
 
 use super::super::{
-    AggregateKind, BasicBlock, Constant, Local, Operand, Place, Rvalue, TerminatorKind,
+    AggregateKind, AssertKind, BasicBlock, Constant, Local, Operand, Place, Rvalue, TerminatorKind,
 };
 use super::{Builder, Flow, LowerErrorKind, LowerResult};
 
@@ -35,6 +35,7 @@ impl Builder<'_> {
                 let (block, base) = unpack!(self.as_place(block, base));
                 Ok(Flow::Continue(block, base.field(*index)))
             }
+            ExprKind::Index { base, index } => self.index_place(block, base, index, expr.span),
             _ => {
                 let (block, temp) = unpack!(self.as_temp(block, expr));
                 Ok(Flow::Continue(block, temp.into()))
@@ -57,6 +58,7 @@ impl Builder<'_> {
                 let (block, base) = unpack!(self.as_stable_place(block, base));
                 Ok(Flow::Continue(block, base.field(*index)))
             }
+            ExprKind::Index { base, index } => self.index_place(block, base, index, expr.span),
             _ => self.as_place(block, expr),
         }
     }
@@ -69,7 +71,10 @@ impl Builder<'_> {
                 block,
                 Operand::constant(constant(literal, expr)),
             )),
-            ExprKind::Binding(_) | ExprKind::Deref(_) | ExprKind::Field { .. } => {
+            ExprKind::Binding(_)
+            | ExprKind::Deref(_)
+            | ExprKind::Field { .. }
+            | ExprKind::Index { .. } => {
                 let (block, place) = unpack!(self.as_place(block, expr));
                 Ok(Flow::Continue(block, Operand::Copy(place)))
             }
@@ -126,13 +131,24 @@ impl Builder<'_> {
             ExprKind::Literal(_)
             | ExprKind::Binding(_)
             | ExprKind::Deref(_)
-            | ExprKind::Field { .. } => {
+            | ExprKind::Field { .. }
+            | ExprKind::Index { .. } => {
                 let (block, operand) = unpack!(self.as_operand(block, expr));
                 (block, Rvalue::Use(operand))
             }
             ExprKind::Tuple(elems) => {
                 let (block, operands) = unpack!(self.as_operands(block, elems));
                 (block, Rvalue::Aggregate(AggregateKind::Tuple, operands))
+            }
+            ExprKind::Array(elems) => {
+                let (block, operands) = unpack!(self.as_operands(block, elems));
+                let Type::Array(elem, len) = &expr.ty else {
+                    return Err(LowerErrorKind::MalformedArray(expr.ty.clone()));
+                };
+                (
+                    block,
+                    Rvalue::Aggregate(AggregateKind::Array(elem.clone(), *len), operands),
+                )
             }
             ExprKind::Struct { fields } => {
                 // Evaluated as written, stored as declared.
@@ -198,7 +214,71 @@ impl Builder<'_> {
         Ok(Flow::Continue(block, Rvalue::binary(op, lhs, rhs)))
     }
 
-    /// Lowers `lhs == rhs` or `lhs != rhs` on two tuples of the same type.
+    fn index_place(
+        &mut self,
+        block: BasicBlock,
+        base: &Expr,
+        index: &Expr,
+        span: Span,
+    ) -> LowerResult<Place> {
+        let Type::Array(_, len) = &base.ty else {
+            return Err(LowerErrorKind::MalformedArray(base.ty.clone()));
+        };
+        let (block, base) = unpack!(self.as_stable_place(block, base));
+        let (block, local) = unpack!(self.as_temp(block, index));
+        let operand = Operand::Copy(local.into());
+        let source_info = self.source_info(span);
+        let upper = self.cfg.new_temp(Type::Bool, span);
+        self.cfg.push_assign(
+            block,
+            source_info,
+            upper.into(),
+            Rvalue::binary(
+                BinOp::Lt,
+                operand.clone(),
+                Operand::constant(Constant::int(*len, index.ty.clone())),
+            ),
+        );
+        let mut valid = Operand::Copy(upper.into());
+        if index.ty.is_signed_integer() {
+            let lower = self.cfg.new_temp(Type::Bool, span);
+            self.cfg.push_assign(
+                block,
+                source_info,
+                lower.into(),
+                Rvalue::binary(
+                    BinOp::Ge,
+                    operand,
+                    Operand::constant(Constant::int(0, index.ty.clone())),
+                ),
+            );
+            let both = self.cfg.new_temp(Type::Bool, span);
+            self.cfg.push_assign(
+                block,
+                source_info,
+                both.into(),
+                Rvalue::binary(BinOp::BitAnd, valid, Operand::Copy(lower.into())),
+            );
+            valid = Operand::Copy(both.into());
+        }
+        if *len == 0 {
+            valid = Operand::constant(Constant::bool(false));
+        }
+        let next = self.cfg.new_block();
+        self.cfg.terminate(
+            block,
+            source_info,
+            TerminatorKind::Assert {
+                cond: valid,
+                expected: true,
+                kind: AssertKind::BoundsCheck,
+                target: next,
+            },
+        );
+        Ok(Flow::Continue(next, base.index(local)))
+    }
+
+    /// Lowers `lhs == rhs` or `lhs != rhs` on aggregates of the same type.
     ///
     /// Both sides are evaluated completely, left to right, before any
     /// element is compared: every call in them runs exactly once and in
@@ -226,7 +306,7 @@ impl Builder<'_> {
         ))
     }
 
-    /// A place holding the fully evaluated tuple or struct `expr`: the place itself
+    /// A place holding the fully evaluated aggregate `expr`: the place itself
     /// if it is one and no later evaluation can change it (`snapshot` is
     /// false), otherwise a temporary.
     ///
@@ -247,7 +327,7 @@ impl Builder<'_> {
     }
 
     /// Compares the values of type `ty` at `lhs` and `rhs`, element by
-    /// element for tuples and structs, and returns the `bool` result.
+    /// element for tuples, structs, and arrays, and returns the `bool` result.
     fn elements_equal(
         &mut self,
         block: BasicBlock,
@@ -272,10 +352,17 @@ impl Builder<'_> {
         let mut all_equal: Option<Operand> = None;
         for (index, elem_ty) in elems.iter().enumerate() {
             let index = index as u32;
+            let element = |place: Place| {
+                if matches!(ty, Type::Array(..)) {
+                    place.constant_index(index)
+                } else {
+                    place.field(index)
+                }
+            };
             let equal = self.elements_equal(
                 block,
-                lhs.clone().field(index),
-                rhs.clone().field(index),
+                element(lhs.clone()),
+                element(rhs.clone()),
                 elem_ty,
                 span,
             );
