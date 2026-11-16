@@ -1854,3 +1854,41 @@ fn for_clause_rules() {
         "fn f([4]u8 a) { for x in a with i { } let usize j = i; }"
     ));
 }
+
+#[test]
+fn negative_step_may_be_the_signed_minimum() {
+    // `-128` fits `i8`, although its magnitude does not.
+    assert!(check("fn f() { for i8 i in 127 to -128 by -128 { } }").is_ok());
+    // Going up, or in an unsigned type, the magnitude must fit.
+    assert!(matches!(
+        error("fn f() { for i8 i in -128 to 127 by 128 { } }"),
+        SemanticError::LiteralOutOfRange { .. }
+    ));
+    assert!(matches!(
+        error("fn f() { for u8 i in 255 to 0 by -256 { } }"),
+        SemanticError::LiteralOutOfRange { .. }
+    ));
+}
+
+#[test]
+fn with_counters_count_one_past_their_type() {
+    // The hidden counter holds one more than the largest value handed out.
+    // From 64 bits up an unsigned counter counts in its own type, which
+    // would need 2^64 elements to run out.
+    for (clause, hidden) in [
+        ("with i0 n", "0_u1"),
+        ("with u0 n", "0_u1"),
+        ("with i8 n", "0_u9"),
+        ("with u32 n", "0_u33"),
+        ("with isize n", "0_u64"),
+        ("with i128 n", "0_u128"),
+        ("with n", "0_usize"),
+        ("with u64 n", "0_u64"),
+    ] {
+        let dump = thir(&format!("fn f([3]u8 a) {{ for x in a {clause} {{ }} }}"));
+        assert!(
+            dump.contains(hidden),
+            "{clause}: expected {hidden} in\n{dump}"
+        );
+    }
+}

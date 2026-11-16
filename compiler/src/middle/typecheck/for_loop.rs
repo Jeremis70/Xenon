@@ -270,8 +270,15 @@ impl FnCtxt<'_, '_> {
         if direction.magnitude != BigInt::from(1) {
             let step_span = range.step.as_ref().map_or(span, |step| step.span);
             let ty = self.bindings[counter].ty.clone();
-            // The step is also added to the counter, so it must fit.
-            self.int_literal(direction.magnitude.clone(), ty.clone(), step_span)?;
+            // The step is also added to the counter, so it must fit, as
+            // written: `by -128` fits `i8`, although `128` does not. In an
+            // unsigned type the sign only gives the direction.
+            let negated = -&direction.magnitude;
+            let fits_negated =
+                direction.descending && self.int_literal(negated, ty.clone(), step_span).is_ok();
+            if !fits_negated {
+                self.int_literal(direction.magnitude.clone(), ty.clone(), step_span)?;
+            }
             let wide = if ty.is_signed_integer() {
                 match self.target().int_width(&ty) {
                     Some(width) if width < MAX_INT_WIDTH => Type::Int(width + 1),
@@ -414,16 +421,26 @@ impl FnCtxt<'_, '_> {
 
     /// The type of the hidden counter behind a `with` counter of type `ty`.
     ///
-    /// The hidden counter is one ahead of the last value handed out, so it
-    /// is one bit wider than `ty`: it can then count every value of `ty`
-    /// without overflowing. A type as wide as a pointer cannot run out, as
-    /// no loop has that many elements.
+    /// The hidden counter is one ahead of the last value handed out, and
+    /// never negative, so it is unsigned and holds one past the largest
+    /// value of `ty`: `u1` for `i0`, `u9` for `i8` or `u8`. Only the
+    /// conversion to `ty` can then fail, on the element after the last one
+    /// `ty` holds.
+    ///
+    /// From 64 bits up, reaching the end of `ty` takes at least 2^63
+    /// elements. A signed `ty` then counts in the unsigned type of its
+    /// width, which still holds one past its largest value. An unsigned
+    /// `ty` counts in itself: it would only run out after 2^64 elements,
+    /// which no loop reaches, and a wider counter would slow every loop
+    /// that has one.
     fn counter_type(&self, ty: &Type) -> Type {
-        let pointer_width = self.target().pointer_width();
-        match ty {
-            Type::Int(width) if *width < pointer_width => Type::Int(width + 1),
-            Type::UInt(width) if *width < pointer_width => Type::UInt(width + 1),
-            _ => ty.clone(),
+        let width = self.target().int_width(ty).unwrap_or(0);
+        if width < 64 {
+            Type::UInt(width + 1)
+        } else if ty.is_unsigned_integer() {
+            ty.clone()
+        } else {
+            Type::UInt(width)
         }
     }
 
