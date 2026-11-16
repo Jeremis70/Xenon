@@ -585,7 +585,7 @@ fn optimized_ir(source: &str) -> String {
 }
 
 /// The body of the function `name` in `ir`, from its `define` line to its
-/// closing brace, with the name replaced by `f` and every value and label
+/// closing brace, with the name replaced by `f` and every value and block
 /// renamed in order of appearance: LLVM numbers the names it invents
 /// across the whole module, so equal code can differ in them.
 fn function_body(ir: &str, name: &str) -> String {
@@ -599,7 +599,25 @@ fn function_body(ir: &str, name: &str) -> String {
         .skip(start)
         .take_while(|line| *line != "}")
         .collect();
-    let body = body.join("\n").replace(&marker, "@f(");
+    // A block is defined as `name:`, maybe followed by a `; preds = ..`
+    // comment, and referred to as `%name`. Spelling definitions like
+    // references renames both alike, so a branch still leads to the same
+    // block after renaming.
+    let body = body
+        .iter()
+        .map(|line| match line.split_once(':') {
+            Some((label, rest))
+                if !label.is_empty()
+                    && !label.starts_with(' ')
+                    && (rest.trim().is_empty() || rest.trim_start().starts_with("; preds")) =>
+            {
+                format!("%{label}:")
+            }
+            _ => (*line).to_owned(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        .replace(&marker, "@f(");
 
     let mut names: Vec<&str> = Vec::new();
     let mut renamed = String::with_capacity(body.len());
@@ -622,11 +640,9 @@ fn function_body(ir: &str, name: &str) -> String {
         rest = &rest[at + 1 + len..];
     }
     renamed.push_str(rest);
-    // Labels are defined as `name:` and listed in `; preds = ...` comments,
-    // and loop metadata is numbered across the module too.
+    // Loop metadata is numbered across the module too.
     renamed
         .lines()
-        .filter(|line| !line.trim_end().ends_with(':') && !line.contains("; preds ="))
         .map(|line| line.split(", !llvm.loop").next().unwrap_or(line))
         .collect::<Vec<_>>()
         .join("\n")
@@ -672,6 +688,63 @@ fn for_over_array_is_zero_cost() {
          fn b(&[64]u32 v) -> u32 {\n\
              let u32 s = 0; let usize i = 0;\n\
              while i < 64 { s += v[i]; i += 1; }\n\
+             return s;\n\
+         }\n",
+    );
+    assert_eq!(function_body(&ir, "a"), function_body(&ir, "b"), "{ir}");
+}
+
+/// Comparing bodies must keep track of which block a branch goes to.
+#[test]
+fn function_body_tells_branch_targets_apart() {
+    let ir = "define i32 @a(i1 %c) {
+entry:
+  br i1 %c, label %one, label %zero
+
+one:                                              ; preds = %entry
+  ret i32 1
+
+zero:                                             ; preds = %entry
+  ret i32 0
+}
+
+define i32 @b(i1 %c) {
+entry:
+  br i1 %c, label %zero, label %one
+
+one:                                              ; preds = %entry
+  ret i32 1
+
+zero:                                             ; preds = %entry
+  ret i32 0
+}
+";
+    assert_ne!(function_body(ir, "a"), function_body(ir, "b"));
+}
+
+/// A `usize` counter costs nothing over a hand-written one, which hands out
+/// its value and advances before the body runs, as `with` does.
+#[test]
+fn with_counter_is_zero_cost() {
+    let ir = optimized_ir(
+        "fn a(u64 b, u64 n) -> usize { let usize s = 0; for u64 v in b until n with i { s = s * 31 + i; } return s; }\n\
+         fn b(u64 b, u64 n) -> usize {\n\
+             let usize s = 0; let usize i = 0; let u64 v = b;\n\
+             while v < n { let usize k = i; i += 1; s = s * 31 + k; v += 1; }\n\
+             return s;\n\
+         }\n",
+    );
+    assert_eq!(function_body(&ir, "a"), function_body(&ir, "b"), "{ir}");
+}
+
+/// A `usize` counter over an array costs nothing over a hand-written index.
+#[test]
+fn with_counter_over_array_is_zero_cost() {
+    let ir = optimized_ir(
+        "fn a(&[64]u32 v) -> usize { let usize s = 0; for x in v with i { s += i * x as usize; } return s; }\n\
+         fn b(&[64]u32 v) -> usize {\n\
+             let usize s = 0; let usize i = 0;\n\
+             while i < 64 { s += i * v[i] as usize; i += 1; }\n\
              return s;\n\
          }\n",
     );

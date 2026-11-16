@@ -752,10 +752,10 @@ impl<'a> Parser<'a> {
         };
         self.expect(TokenKind::In)?;
 
-        let first = self.parse_expr(0)?;
+        let first = self.parse_expression()?;
         let iterable = if self.at(TokenKind::To) || self.at(TokenKind::Until) {
             let inclusive = self.advance().is_some_and(|t| t.kind == TokenKind::To);
-            let end = self.parse_expr(0)?;
+            let end = self.parse_expression()?;
             let step = if self.eat(TokenKind::By) {
                 Some(self.parse_range_step()?)
             } else {
@@ -774,7 +774,7 @@ impl<'a> Parser<'a> {
         let mut clauses = Vec::new();
         loop {
             if self.eat(TokenKind::Where) {
-                clauses.push(ForClause::Where(self.parse_expr(0)?));
+                clauses.push(ForClause::Where(self.parse_expression()?));
             } else if self.eat(TokenKind::With) {
                 // A name not followed by another name has no type.
                 let untyped = self.at(TokenKind::Ident) && !self.nth_is(1, TokenKind::Ident);

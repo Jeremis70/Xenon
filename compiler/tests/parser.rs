@@ -1955,3 +1955,28 @@ fn reserved_words_are_not_names() {
     }
     assert!(!parse_fails("fn f() { let i32 step = 1; }"));
 }
+
+#[test]
+fn for_header_accepts_conditional_expressions() {
+    // The iterable, the end of a range and a `where` condition are full
+    // expressions, as a `while` condition is.
+    let header = for_header("fn f() { for x in a if c else b { } }");
+    assert!(
+        matches!(&header.iterable, ForIterable::Value(e) if matches!(e.kind, ExprKind::IfElse { .. }))
+    );
+    let header = for_header("fn f() { for i in 0 until n if c else m by 2 { } }");
+    match &header.iterable {
+        ForIterable::Range(range) => {
+            assert!(matches!(range.end.kind, ExprKind::IfElse { .. }));
+            assert!(range.step.is_some());
+        }
+        other => panic!("expected a range, got {other:?}"),
+    }
+    let header = for_header("fn f() { for x in xs where x > 1 if c else false with i { } }");
+    assert!(
+        matches!(&header.clauses[0], ForClause::Where(e) if matches!(e.kind, ExprKind::IfElse { .. }))
+    );
+    assert!(matches!(&header.clauses[1], ForClause::With { .. }));
+    // An `if` without `else` is not a header.
+    assert!(parse_fails("fn f() { for x in xs if c { } }"));
+}

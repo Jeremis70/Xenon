@@ -1462,3 +1462,52 @@ fn with_counter_overflow() {
         );
     }
 }
+
+#[cfg(feature = "llvm-backend")]
+#[test]
+fn signed_minimum_step_runs() {
+    for (body, expected) in [
+        // 127, -1.
+        (
+            "let u8 s = 0; for i8 i in 127 to -128 by -128 { s = s * 10 + 1 if i == 127; s = s * 10 + 2 if i == -1; } return s;",
+            12,
+        ),
+        // 0, -128.
+        (
+            "let u8 s = 0; for i8 i in 0 to -128 by -128 { s += 1; } return s;",
+            2,
+        ),
+        (
+            "let u8 s = 0; for i8 i in 0 until -128 by -128 { s += 1; } return s;",
+            1,
+        ),
+    ] {
+        assert_eq!(main_exit(body), expected, "{body}");
+    }
+}
+
+#[cfg(feature = "llvm-backend")]
+#[test]
+fn tiny_with_counters() {
+    // An `i0` or `u0` counter has room for exactly one element.
+    for counter in ["i0", "u0"] {
+        let body =
+            format!("let u8 s = 0; for u8 x in 0 until 1 with {counter} n {{ s += 1; }} return s;");
+        assert_eq!(main_exit(&body), 1, "{counter}");
+        let source = format!(
+            "#[entry] fn main() -> u8 {{ for u8 x in 0 until 2 with {counter} n {{ }} return 0; }}"
+        );
+        for args in [&[][..], &["-O", "3"][..]] {
+            let status = run_status_with(&source, args);
+            let trapped = if cfg!(windows) {
+                status.code() == Some(0xC000_001D_u32 as i32)
+            } else {
+                status.code().is_none()
+            };
+            assert!(
+                trapped,
+                "{counter} {args:?}: a second element should trap: {status:?}"
+            );
+        }
+    }
+}
